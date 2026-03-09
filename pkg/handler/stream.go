@@ -17,7 +17,8 @@ func NewStreamHandler(streamRepo *repository.StreamRepository) *StreamHandler {
 	return &StreamHandler{streamRepo: streamRepo}
 }
 
-// List returns all streams, optionally filtered by account_id query parameter.
+// List returns streams. Uses lightweight summaries by default.
+// Add ?full=true for full stream details, or ?account_id= to filter.
 func (h *StreamHandler) List(w http.ResponseWriter, r *http.Request) {
 	accountIDStr := r.URL.Query().Get("account_id")
 	if accountIDStr != "" {
@@ -37,16 +38,27 @@ func (h *StreamHandler) List(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	streams, err := h.streamRepo.List(r.Context())
+	if r.URL.Query().Get("full") == "true" {
+		streams, err := h.streamRepo.List(r.Context())
+		if err != nil {
+			respondError(w, http.StatusInternalServerError, "failed to list streams")
+			return
+		}
+		respondJSON(w, http.StatusOK, streams)
+		return
+	}
+
+	// Default: lightweight summaries (id, name, group, account_id only)
+	summaries, err := h.streamRepo.ListSummaries(r.Context())
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, "failed to list streams")
 		return
 	}
 
-	respondJSON(w, http.StatusOK, streams)
+	respondJSON(w, http.StatusOK, summaries)
 }
 
-// Get returns a stream by ID.
+// Get returns a stream by ID (full details).
 func (h *StreamHandler) Get(w http.ResponseWriter, r *http.Request) {
 	id, err := urlParamInt64(r, "id")
 	if err != nil {

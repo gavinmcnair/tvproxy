@@ -86,6 +86,7 @@ func (r *StreamRepository) List(ctx context.Context) ([]models.Stream, error) {
 	return streams, nil
 }
 
+
 func (r *StreamRepository) ListByAccountID(ctx context.Context, accountID int64) ([]models.Stream, error) {
 	rows, err := r.db.QueryContext(ctx,
 		`SELECT id, m3u_account_id, name, url, "group", logo, tvg_id, tvg_name, content_hash, is_active, created_at, updated_at
@@ -110,6 +111,38 @@ func (r *StreamRepository) ListByAccountID(ctx context.Context, accountID int64)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterating streams: %w", err)
+	}
+	return streams, nil
+}
+
+// StreamSummary is a lightweight struct for list views.
+type StreamSummary struct {
+	ID           int64  `json:"id"`
+	M3UAccountID int64  `json:"m3u_account_id"`
+	Name         string `json:"name"`
+	Group        string `json:"group"`
+}
+
+// ListSummaries returns only id, name, group, and account_id for all streams.
+func (r *StreamRepository) ListSummaries(ctx context.Context) ([]StreamSummary, error) {
+	rows, err := r.db.QueryContext(ctx,
+		`SELECT id, m3u_account_id, name, "group" FROM streams ORDER BY name`,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("listing stream summaries: %w", err)
+	}
+	defer rows.Close()
+
+	var streams []StreamSummary
+	for rows.Next() {
+		var s StreamSummary
+		if err := rows.Scan(&s.ID, &s.M3UAccountID, &s.Name, &s.Group); err != nil {
+			return nil, fmt.Errorf("scanning stream summary: %w", err)
+		}
+		streams = append(streams, s)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterating stream summaries: %w", err)
 	}
 	return streams, nil
 }

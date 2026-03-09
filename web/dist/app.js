@@ -309,20 +309,22 @@
     container.appendChild(h('div', { className: 'loading-page' }, h('div', { className: 'spinner' }), 'Loading...'));
 
     try {
-      const [accounts, streams, channels, groups, epgSources, devices] = await Promise.all([
+      const [accounts, channels, groups, epgSources, devices] = await Promise.all([
         api.get('/api/m3u/accounts').catch(() => []),
-        api.get('/api/streams').catch(() => []),
         api.get('/api/channels').catch(() => []),
         api.get('/api/channel-groups').catch(() => []),
         api.get('/api/epg/sources').catch(() => []),
         api.get('/api/hdhr/devices').catch(() => []),
       ]);
 
+      // Stream count from account totals to avoid loading all streams
+      const streamCount = accounts.reduce((sum, a) => sum + (a.stream_count || 0), 0);
+
       container.innerHTML = '';
 
       const cards = [
         { label: 'M3U Accounts', value: accounts.length, icon: '\u2630' },
-        { label: 'Streams', value: streams.length, icon: '\u25b6' },
+        { label: 'Streams', value: streamCount, icon: '\u25b6' },
         { label: 'Channels', value: channels.length, icon: '\ud83d\udcfa' },
         { label: 'Channel Groups', value: groups.length, icon: '\ud83d\udcc2' },
         { label: 'EPG Sources', value: epgSources.length, icon: '\ud83d\udcc5' },
@@ -366,23 +368,50 @@
   }
 
   // ─── Generic CRUD Page Builder ────────────────────────────────────────
+  // Loads all data once into memory, then does client-side search/filter/pagination.
+  // Only renders the visible page slice to the DOM.
   function buildCrudPage(config) {
+    const perPage = config.perPage || 50;
+
     return async function(container) {
       container.innerHTML = '';
       container.appendChild(h('div', { className: 'loading-page' }, h('div', { className: 'spinner' }), 'Loading...'));
 
-      let items;
+      let allItems;
       try {
-        items = await api.get(config.apiPath);
+        allItems = await api.get(config.apiPath);
       } catch (err) {
         container.innerHTML = '';
         container.appendChild(h('p', { style: 'color: var(--danger)' }, 'Failed to load: ' + err.message));
         return;
       }
 
-      function renderTable() {
+      let searchTerm = '';
+      let currentPage = 1;
+      let searchTimer = null;
+
+      function getFiltered() {
+        if (!searchTerm) return allItems;
+        const q = searchTerm.toLowerCase();
+        const searchKeys = config.searchKeys || config.columns.map(c => c.key);
+        return allItems.filter(item =>
+          searchKeys.some(key => {
+            const val = item[key];
+            return val != null && String(val).toLowerCase().includes(q);
+          })
+        );
+      }
+
+      function renderView() {
         container.innerHTML = '';
 
+        const filtered = getFiltered();
+        const totalPages = Math.max(1, Math.ceil(filtered.length / perPage));
+        if (currentPage > totalPages) currentPage = totalPages;
+        const start = (currentPage - 1) * perPage;
+        const pageItems = filtered.slice(start, start + perPage);
+
+        // Header with search + actions
         const headerActions = [];
         if (config.create) {
           headerActions.push(
@@ -397,10 +426,32 @@
           });
         }
 
-        const table = h('div', { className: 'table-container' },
+        const searchInput = h('input', {
+          type: 'text',
+          placeholder: 'Search...',
+          style: 'padding: 6px 10px; background: var(--bg-input); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text-primary); font-size: 13px; width: 220px; outline: none;',
+        });
+        searchInput.value = searchTerm;
+        searchInput.addEventListener('input', () => {
+          clearTimeout(searchTimer);
+          searchTimer = setTimeout(() => {
+            searchTerm = searchInput.value;
+            currentPage = 1;
+            renderView();
+          }, 200);
+        });
+
+        const countText = searchTerm
+          ? filtered.length + ' of ' + allItems.length
+          : String(allItems.length);
+
+        const tableEl = h('div', { className: 'table-container' },
           h('div', { className: 'table-header' },
-            h('h3', null, config.title + ' (' + items.length + ')'),
-            h('div', { className: 'btn-group' }, ...headerActions),
+            h('h3', null, config.title + ' (' + countText + ')'),
+            h('div', { className: 'btn-group', style: 'align-items: center;' },
+              searchInput,
+              ...headerActions,
+            ),
           ),
           h('table', null,
             h('thead', null,
@@ -410,9 +461,9 @@
               ),
             ),
             h('tbody', null,
-              items.length === 0
-                ? h('tr', { className: 'empty-row' }, h('td', { colspan: String(config.columns.length + 1) }, 'No items found'))
-                : items.map(item => h('tr', null,
+              pageItems.length === 0
+                ? h('tr', { className: 'empty-row' }, h('td', { colspan: String(config.columns.length + 1) }, searchTerm ? 'No matching items' : 'No items found'))
+                : pageItems.map(item => h('tr', null,
                     ...config.columns.map(col => {
                       const val = col.render ? col.render(item) : item[col.key];
                       return h('td', null, val != null ? (typeof val === 'string' || typeof val === 'number' ? String(val) : val) : '-');
@@ -429,13 +480,72 @@
           ),
         );
 
-        container.appendChild(table);
+        container.appendChild(tableEl);
+
+        // Pagination controls
+        if (totalPages > 1) {
+          const paginationEl = h('div', {
+            style: 'display: flex; align-items: center; justify-content: center; gap: 8px; padding: 16px; color: var(--text-secondary); font-size: 14px;',
+          });
+
+          const prevBtn = h('button', {
+            className: 'btn btn-secondary btn-sm',
+            onClick: () => { currentPage--; renderView(); },
+          }, 'Prev');
+          if (currentPage <= 1) prevBtn.disabled = true;
+
+          const nextBtn = h('button', {
+            className: 'btn btn-secondary btn-sm',
+            onClick: () => { currentPage++; renderView(); },
+          }, 'Next');
+          if (currentPage >= totalPages) nextBtn.disabled = true;
+
+          // Page number buttons (show max 7 around current)
+          const pageButtons = [];
+          let startPage = Math.max(1, currentPage - 3);
+          let endPage = Math.min(totalPages, startPage + 6);
+          if (endPage - startPage < 6) startPage = Math.max(1, endPage - 6);
+
+          if (startPage > 1) {
+            pageButtons.push(h('button', { className: 'btn btn-secondary btn-sm', onClick: () => { currentPage = 1; renderView(); } }, '1'));
+            if (startPage > 2) pageButtons.push(h('span', { style: 'color: var(--text-muted)' }, '...'));
+          }
+
+          for (let i = startPage; i <= endPage; i++) {
+            const pg = i;
+            pageButtons.push(h('button', {
+              className: 'btn btn-sm ' + (pg === currentPage ? 'btn-primary' : 'btn-secondary'),
+              onClick: () => { currentPage = pg; renderView(); },
+            }, String(pg)));
+          }
+
+          if (endPage < totalPages) {
+            if (endPage < totalPages - 1) pageButtons.push(h('span', { style: 'color: var(--text-muted)' }, '...'));
+            pageButtons.push(h('button', { className: 'btn btn-secondary btn-sm', onClick: () => { currentPage = totalPages; renderView(); } }, String(totalPages)));
+          }
+
+          paginationEl.appendChild(prevBtn);
+          pageButtons.forEach(b => paginationEl.appendChild(b));
+          paginationEl.appendChild(nextBtn);
+          paginationEl.appendChild(h('span', { style: 'margin-left: 12px; color: var(--text-muted); font-size: 12px;' },
+            'Page ' + currentPage + ' of ' + totalPages +
+            ' (' + (start + 1) + '-' + Math.min(start + perPage, filtered.length) + ')'));
+
+          container.appendChild(paginationEl);
+        }
+
+        // Re-focus search after render
+        const newSearch = container.querySelector('input[placeholder="Search..."]');
+        if (newSearch && document.activeElement && document.activeElement.placeholder === 'Search...') {
+          newSearch.focus();
+          newSearch.selectionStart = newSearch.selectionEnd = newSearch.value.length;
+        }
       }
 
       async function reloadData() {
         try {
-          items = await api.get(config.apiPath);
-          renderTable();
+          allItems = await api.get(config.apiPath);
+          renderView();
         } catch (err) {
           toast.error('Failed to reload: ' + err.message);
         }
@@ -527,7 +637,7 @@
         }
       }
 
-      renderTable();
+      renderView();
     };
   }
 
@@ -582,6 +692,7 @@
       title: 'Streams',
       singular: 'Stream',
       apiPath: '/api/streams',
+      perPage: 100,
       create: false,
       update: false,
       delete: true,
@@ -589,11 +700,8 @@
         { key: 'name', label: 'Name' },
         { key: 'group', label: 'Group', render: item => item.group || '-' },
         { key: 'm3u_account_id', label: 'Account ID' },
-        { key: 'url', label: 'URL', render: item => {
-          const url = item.url || '';
-          return url.length > 60 ? url.substring(0, 60) + '...' : url;
-        }},
       ],
+      searchKeys: ['name', 'group'],
       fields: [],
     }),
 
