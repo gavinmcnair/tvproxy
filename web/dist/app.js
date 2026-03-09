@@ -132,6 +132,24 @@
     info(msg) { this.show(msg, 'info'); },
   };
 
+  // ─── Data Caches ──────────────────────────────────────────────────────
+  let _epgDataCache = null;
+  let _logosCache = null;
+
+  async function getEpgData() {
+    if (!_epgDataCache) {
+      try { _epgDataCache = await api.get('/api/epg/data'); } catch { _epgDataCache = []; }
+    }
+    return _epgDataCache;
+  }
+
+  async function getLogos() {
+    try { _logosCache = await api.get('/api/logos'); } catch { _logosCache = []; }
+    return _logosCache;
+  }
+
+  function invalidateLogosCache() { _logosCache = null; }
+
   // ─── Router ───────────────────────────────────────────────────────────
   function navigate(page) {
     state.currentPage = page;
@@ -630,6 +648,130 @@
             ta.value = isEdit ? (item[field.key] || '') : (field.default || '');
             inputs[field.key] = ta;
             formEl.appendChild(h('div', { className: 'form-group' }, h('label', { for: 'field-' + field.key }, field.label), ta));
+          } else if (field.type === 'autocomplete') {
+            const wrapper = h('div', { className: 'autocomplete-wrapper' });
+            const inp = h('input', {
+              type: 'text',
+              id: 'field-' + field.key,
+              placeholder: field.placeholder || '',
+            });
+            inp.value = isEdit ? (item[field.key] || '') : '';
+            const dropdown = h('div', { className: 'autocomplete-dropdown' });
+            dropdown.style.display = 'none';
+
+            let acOptions = null;
+            let selectedIdx = -1;
+
+            async function ensureOptions() {
+              if (acOptions === null && field.loadOptions) {
+                acOptions = await field.loadOptions();
+              }
+              return acOptions || [];
+            }
+
+            function renderDropdown(query) {
+              dropdown.innerHTML = '';
+              if (!acOptions) { dropdown.style.display = 'none'; return; }
+              const q = (query || '').toLowerCase();
+              const matches = [];
+              for (let i = 0; i < acOptions.length && matches.length < 30; i++) {
+                const opt = acOptions[i];
+                const v = (opt[field.valueKey] || '').toLowerCase();
+                const d = (opt[field.displayKey] || '').toLowerCase();
+                if (!q || v.indexOf(q) !== -1 || d.indexOf(q) !== -1) {
+                  matches.push(opt);
+                }
+              }
+              if (matches.length === 0) { dropdown.style.display = 'none'; return; }
+              selectedIdx = -1;
+              for (let i = 0; i < matches.length; i++) {
+                const opt = matches[i];
+                const row = h('div', { className: 'autocomplete-item' });
+                if (opt.icon || opt.url) {
+                  row.appendChild(h('img', { src: opt.icon || opt.url, className: 'autocomplete-icon' }));
+                }
+                const text = h('div', { className: 'autocomplete-text' });
+                text.appendChild(h('div', { className: 'autocomplete-name' }, opt[field.displayKey] || ''));
+                if (field.valueKey !== field.displayKey) {
+                  text.appendChild(h('div', { className: 'autocomplete-id' }, opt[field.valueKey] || ''));
+                }
+                row.appendChild(text);
+                row.addEventListener('click', () => {
+                  inp.value = opt[field.valueKey] || '';
+                  dropdown.style.display = 'none';
+                  if (field.onSelect) field.onSelect(opt, inputs);
+                });
+                dropdown.appendChild(row);
+              }
+              dropdown.style.display = 'block';
+            }
+
+            inp.addEventListener('focus', async () => {
+              await ensureOptions();
+              renderDropdown(inp.value);
+            });
+            inp.addEventListener('input', () => { renderDropdown(inp.value); });
+
+            inp.addEventListener('keydown', (e) => {
+              const items = dropdown.querySelectorAll('.autocomplete-item');
+              if (!items.length) return;
+              if (e.key === 'ArrowDown') {
+                e.preventDefault();
+                selectedIdx = Math.min(selectedIdx + 1, items.length - 1);
+                items.forEach((el, i) => el.classList.toggle('selected', i === selectedIdx));
+                items[selectedIdx].scrollIntoView({ block: 'nearest' });
+              } else if (e.key === 'ArrowUp') {
+                e.preventDefault();
+                selectedIdx = Math.max(selectedIdx - 1, 0);
+                items.forEach((el, i) => el.classList.toggle('selected', i === selectedIdx));
+                items[selectedIdx].scrollIntoView({ block: 'nearest' });
+              } else if (e.key === 'Enter' && selectedIdx >= 0) {
+                e.preventDefault();
+                items[selectedIdx].click();
+              } else if (e.key === 'Escape') {
+                dropdown.style.display = 'none';
+              }
+            });
+
+            // Close dropdown on outside click
+            setTimeout(() => {
+              document.addEventListener('click', function acClose(e) {
+                if (!wrapper.contains(e.target)) {
+                  dropdown.style.display = 'none';
+                }
+              });
+            }, 0);
+
+            wrapper.appendChild(inp);
+            wrapper.appendChild(dropdown);
+            inputs[field.key] = inp;
+            formEl.appendChild(h('div', { className: 'form-group' },
+              h('label', { for: 'field-' + field.key }, field.label),
+              wrapper,
+              field.help ? h('div', { className: 'help-text' }, field.help) : null,
+            ));
+          } else if (field.type === 'async-select') {
+            const sel = h('select', { id: 'field-' + field.key });
+            sel.appendChild(h('option', { value: '' }, field.emptyLabel || '-- None --'));
+            const currentVal = isEdit ? item[field.key] : null;
+            if (field.loadOptions) {
+              field.loadOptions().then(options => {
+                for (const opt of (options || [])) {
+                  const optEl = h('option', { value: String(opt[field.valueKey || 'id']) },
+                    opt[field.displayKey || 'name']);
+                  if (currentVal != null && String(currentVal) === String(opt[field.valueKey || 'id'])) {
+                    optEl.selected = true;
+                  }
+                  sel.appendChild(optEl);
+                }
+              }).catch(() => {});
+            }
+            inputs[field.key] = sel;
+            formEl.appendChild(h('div', { className: 'form-group' },
+              h('label', { for: 'field-' + field.key }, field.label),
+              sel,
+              field.help ? h('div', { className: 'help-text' }, field.help) : null,
+            ));
           } else {
             const inp = h('input', {
               type: field.type || 'text',
@@ -646,10 +788,13 @@
           }
         });
 
+        if (config.postFormSetup) config.postFormSetup(inputs, isEdit, item);
+
         showModal(
           isEdit ? 'Edit ' + config.singular : 'Add ' + config.singular,
           formEl,
           async () => {
+            if (config.preSave) await config.preSave(inputs);
             const body = {};
             fields.forEach(field => {
               if (field.readOnly && isEdit) return;
@@ -658,6 +803,8 @@
                 body[field.key] = el.checked;
               } else if (field.type === 'number') {
                 body[field.key] = el.value ? Number(el.value) : 0;
+              } else if (field.type === 'async-select') {
+                body[field.key] = el.value ? Number(el.value) : null;
               } else {
                 body[field.key] = el.value;
               }
@@ -766,19 +913,110 @@
       columns: [
         { key: 'channel_number', label: '#' },
         { key: 'name', label: 'Name' },
-        { key: 'channel_group_id', label: 'Group ID' },
+        { key: 'tvg_id', label: 'EPG ID', render: item => item.tvg_id || '-' },
+        { key: 'logo', label: 'Logo', render: item =>
+          item.logo ? h('img', { src: item.logo, style: 'height:24px;width:24px;object-fit:contain;border-radius:2px;' }) : '-'
+        },
         { key: 'is_enabled', label: 'Status', render: item =>
           h('span', { className: 'badge ' + (item.is_enabled ? 'badge-success' : 'badge-danger') }, item.is_enabled ? 'Enabled' : 'Disabled')
         },
       ],
       fields: [
         { key: 'name', label: 'Channel Name', placeholder: 'BBC One' },
-        { key: 'channel_number', label: 'Channel Number', type: 'number', default: 0 },
-        { key: 'logo', label: 'Logo URL', placeholder: 'https://...' },
-        { key: 'tvg_id', label: 'EPG Channel ID', placeholder: 'BBC.uk' },
-        { key: 'channel_group_id', label: 'Group ID', type: 'number', default: 0, help: 'Channel group ID (0 for none)' },
+        { key: 'channel_number', label: 'Channel Number', type: 'number', default: 0, help: 'Leave as 0 for auto-assign' },
+        {
+          key: 'tvg_id', label: 'EPG Channel ID', type: 'autocomplete',
+          placeholder: 'Search EPG channels...',
+          help: 'Type to search EPG channels. Auto-matches when you enter a channel name above.',
+          loadOptions: getEpgData,
+          valueKey: 'channel_id',
+          displayKey: 'name',
+          onSelect: (epg, inputs) => {
+            if (epg.icon && inputs.logo && !inputs.logo.value) {
+              inputs.logo.value = epg.icon;
+            }
+          },
+        },
+        {
+          key: 'logo', label: 'Logo', type: 'autocomplete',
+          placeholder: 'Search logos or paste URL...',
+          help: 'Search saved logos by name, or paste a URL directly.',
+          loadOptions: getLogos,
+          valueKey: 'url',
+          displayKey: 'name',
+        },
+        {
+          key: 'channel_group_id', label: 'Channel Group', type: 'async-select',
+          emptyLabel: '-- No Group --',
+          loadOptions: () => api.get('/api/channel-groups'),
+          valueKey: 'id', displayKey: 'name',
+          help: 'Organize channels into groups (e.g., Sports, Entertainment)',
+        },
+        {
+          key: 'channel_profile_id', label: 'Channel Profile', type: 'async-select',
+          emptyLabel: '-- No Profile --',
+          loadOptions: () => api.get('/api/channel-profiles'),
+          valueKey: 'id', displayKey: 'name',
+          help: 'Assign a profile to control which HDHR devices expose this channel',
+        },
         { key: 'is_enabled', label: 'Enabled', type: 'checkbox', default: true },
       ],
+      postFormSetup: (inputs, isEdit, item) => {
+        // Auto-match EPG when channel name is entered
+        if (inputs.name) {
+          inputs.name.addEventListener('blur', async () => {
+            const nameVal = inputs.name.value.trim();
+            if (!nameVal) return;
+            // Only auto-match if tvg_id is empty
+            if (inputs.tvg_id && inputs.tvg_id.value) return;
+
+            const epgData = await getEpgData();
+            if (!epgData.length) return;
+
+            // Normalize name for matching: lowercase, remove common suffixes
+            const normalized = nameVal.toLowerCase().replace(/\s*(hd|sd|fhd|uhd|\+1|_hd|_sd)\s*$/i, '').trim();
+
+            let bestMatch = null;
+            let bestScore = 0;
+            for (let i = 0; i < epgData.length; i++) {
+              const epgName = (epgData[i].name || '').toLowerCase();
+              const epgNorm = epgName.replace(/\s*(hd|sd|fhd|uhd|\+1|_hd|_sd)\s*$/i, '').trim();
+              let score = 0;
+              if (epgNorm === normalized) score = 100;
+              else if (epgName === nameVal.toLowerCase()) score = 95;
+              else if (epgNorm.startsWith(normalized) && epgNorm.length - normalized.length < 5) score = 75;
+              else if (normalized.startsWith(epgNorm) && normalized.length - epgNorm.length < 5) score = 70;
+              if (score > bestScore) {
+                bestScore = score;
+                bestMatch = epgData[i];
+              }
+            }
+
+            if (bestMatch && bestScore >= 70) {
+              inputs.tvg_id.value = bestMatch.channel_id;
+              if (bestMatch.icon && inputs.logo && !inputs.logo.value) {
+                inputs.logo.value = bestMatch.icon;
+              }
+              toast.info('Auto-matched EPG: ' + bestMatch.name + ' (' + bestMatch.channel_id + ')');
+            }
+          });
+        }
+      },
+      preSave: async (inputs) => {
+        // If logo URL is set and looks like an icon URL (from EPG), save it to logos
+        const logoUrl = inputs.logo ? inputs.logo.value.trim() : '';
+        const channelName = inputs.name ? inputs.name.value.trim() : '';
+        if (logoUrl && logoUrl.startsWith('http')) {
+          try {
+            const logos = await getLogos();
+            const exists = logos.some(l => l.url === logoUrl);
+            if (!exists && channelName) {
+              await api.post('/api/logos', { name: channelName, url: logoUrl });
+              invalidateLogosCache();
+            }
+          } catch { /* ignore logo save errors */ }
+        }
+      },
     }),
 
     'channel-groups': buildCrudPage({
@@ -836,6 +1074,7 @@
           handler: async () => {
             try {
               await api.post('/api/epg/sources/' + item.id + '/refresh');
+              _epgDataCache = null; // invalidate EPG cache after refresh
               toast.success('EPG refresh started for ' + item.name);
               setTimeout(reload, 2000);
             } catch (err) {
@@ -854,12 +1093,19 @@
       update: true,
       columns: [
         { key: 'name', label: 'Name' },
-        { key: 'command', label: 'Command', render: item => item.command || '-' },
+        { key: 'command', label: 'Command', render: item => item.command || 'Direct' },
+        { key: 'args', label: 'Arguments', render: item => {
+          const args = item.args || '';
+          return args.length > 60 ? args.substring(0, 60) + '...' : (args || '-');
+        }},
+        { key: 'is_default', label: 'Default', render: item =>
+          item.is_default ? h('span', { className: 'badge badge-success' }, 'Default') : ''
+        },
       ],
       fields: [
         { key: 'name', label: 'Profile Name', placeholder: 'Direct Proxy' },
-        { key: 'command', label: 'Command', placeholder: 'ffmpeg -i {input} ...', help: 'Transcoding command template. Use {input} and {output} placeholders.' },
-        { key: 'args', label: 'Arguments', type: 'textarea', placeholder: '-c copy' },
+        { key: 'command', label: 'Command', placeholder: 'ffmpeg', help: 'The executable to run (e.g., ffmpeg). Leave empty for direct pass-through.' },
+        { key: 'args', label: 'Arguments', type: 'textarea', placeholder: '-hide_banner -loglevel error -i {input} -c copy -f mpegts pipe:1', help: 'Use {input} for the stream URL placeholder.' },
       ],
     }),
 
@@ -873,12 +1119,21 @@
         { key: 'name', label: 'Name' },
         { key: 'device_id', label: 'Device ID' },
         { key: 'tuner_count', label: 'Tuners' },
+        { key: 'is_enabled', label: 'Status', render: item =>
+          h('span', { className: 'badge ' + (item.is_enabled ? 'badge-success' : 'badge-danger') }, item.is_enabled ? 'Enabled' : 'Disabled')
+        },
       ],
       fields: [
         { key: 'name', label: 'Device Name', placeholder: 'TVProxy HDHR' },
         { key: 'device_id', label: 'Device ID', placeholder: '12345678', help: '8-character hex device ID' },
         { key: 'tuner_count', label: 'Tuner Count', type: 'number', default: 2 },
-        { key: 'channel_profile_id', label: 'Channel Profile ID', type: 'number', default: 0 },
+        {
+          key: 'channel_profile_id', label: 'Channel Profile', type: 'async-select',
+          emptyLabel: '-- All Channels --',
+          loadOptions: () => api.get('/api/channel-profiles'),
+          valueKey: 'id', displayKey: 'name',
+          help: 'Only expose channels with this profile. Leave empty for all channels.',
+        },
       ],
     }),
 

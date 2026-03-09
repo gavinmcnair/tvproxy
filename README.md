@@ -1,5 +1,7 @@
 # TVProxy
 
+> **Work in Progress** - TVProxy is under active development. Features may be incomplete or change without notice.
+
 IPTV stream management and proxy server written in Go. Consolidates IPTV sources (M3U/Xtream Codes), manages channels and EPG data, proxies streams, and emulates HDHomeRun devices for Plex/Emby/Jellyfin integration.
 
 ## Features
@@ -37,6 +39,7 @@ All configuration is via environment variables:
 | `TVPROXY_DB_PATH` | `tvproxy.db` | SQLite database path |
 | `TVPROXY_JWT_SECRET` | `change-me-in-production` | JWT signing secret |
 | `TVPROXY_API_KEY` | _(empty)_ | Optional API key for X-API-Key header auth |
+| `TVPROXY_BASE_URL` | _(auto-detected)_ | Base URL for SSDP discovery and HDHR links (e.g. `http://192.168.1.100:8080`) |
 | `TVPROXY_LOG_LEVEL` | `info` | Log level (debug, info, warn, error) |
 | `TVPROXY_LOG_JSON` | `false` | JSON log output |
 | `TVPROXY_M3U_REFRESH_INTERVAL` | `24h` | M3U auto-refresh interval |
@@ -47,6 +50,22 @@ All configuration is via environment variables:
 ```bash
 docker build -t tvproxy .
 docker run -p 8080:8080 -v tvproxy-data:/data tvproxy
+```
+
+For hardware-accelerated transcoding (Intel Arc/QSV or NVIDIA), pass through the GPU devices:
+
+```bash
+# Intel Arc / QSV
+docker run -p 8080:8080 -v tvproxy-data:/data --device /dev/dri:/dev/dri tvproxy
+
+# NVIDIA (requires nvidia-container-toolkit)
+docker run -p 8080:8080 -v tvproxy-data:/data --gpus all tvproxy
+```
+
+Or use the provided `docker-compose.yml`:
+
+```bash
+docker compose up -d
 ```
 
 ## API Endpoints
@@ -138,3 +157,12 @@ TVProxy follows a clean layered architecture:
 - **`pkg/xmltv/`** - XMLTV/EPG parser
 - **`pkg/xtream/`** - Xtream Codes API client
 - **`web/`** - Embedded web frontend
+
+## Acknowledgements
+
+TVProxy is inspired by and builds upon ideas from these excellent projects:
+
+- **[Threadfin](https://github.com/Threadfin/Threadfin)** - HDHomeRun emulation and SSDP discovery approach. Thank you to the Threadfin maintainers for their work on making IPTV streams accessible to media servers.
+- **[Dispatcharr](https://github.com/Dispatcharr/Dispatcharr)** - The original IPTV management platform that TVProxy is modelled after. Thank you to the Dispatcharr team for the feature design and workflow that inspired this project.
+
+We are grateful to the maintainers and contributors of both projects for their work in the IPTV community.

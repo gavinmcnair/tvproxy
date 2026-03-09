@@ -39,6 +39,7 @@ type LineupEntry struct {
 type DeviceXML struct {
 	XMLName     xml.Name       `xml:"root"`
 	XMLNS       string         `xml:"xmlns,attr"`
+	URLBase     string         `xml:"URLBase"`
 	SpecVersion specVersion    `xml:"specVersion"`
 	Device      deviceXMLInner `xml:"device"`
 }
@@ -168,7 +169,7 @@ func (s *HDHRService) GetDiscoverData(ctx context.Context, baseURL string) (*Dis
 		DeviceID:        device.DeviceID,
 		DeviceAuth:      device.DeviceAuth,
 		BaseURL:         baseURL,
-		LineupURL:       baseURL + "/lineup.json",
+		LineupURL:       baseURL + "/hdhr/lineup.json",
 		TunerCount:      device.TunerCount,
 	}, nil
 }
@@ -188,7 +189,7 @@ func (s *HDHRService) GetLineup(ctx context.Context, baseURL string) ([]LineupEn
 		lineup = append(lineup, LineupEntry{
 			GuideNumber: strconv.Itoa(ch.ChannelNumber),
 			GuideName:   ch.Name,
-			URL:         fmt.Sprintf("%s/api/stream/%d", baseURL, ch.ID),
+			URL:         fmt.Sprintf("%s/proxy/stream/%d", baseURL, ch.ID),
 		})
 	}
 
@@ -218,7 +219,8 @@ func (s *HDHRService) GetDeviceXML(ctx context.Context, baseURL string) (*Device
 	}
 
 	return &DeviceXML{
-		XMLNS: "urn:schemas-upnp-org:device-1-0",
+		XMLNS:   "urn:schemas-upnp-org:device-1-0",
+		URLBase: baseURL,
 		SpecVersion: specVersion{
 			Major: 1,
 			Minor: 0,

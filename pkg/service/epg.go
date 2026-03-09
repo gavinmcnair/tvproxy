@@ -136,30 +136,34 @@ func (s *EPGService) RefreshSource(ctx context.Context, sourceID int64) error {
 		return fmt.Errorf("deleting existing epg data: %w", err)
 	}
 
-	// Store new EPG channel data and build a channel ID to EPGData ID map
-	channelIDMap := make(map[string]int64, len(tv.Channels))
+	// Store new EPG channel data via bulk insert
+	epgDataItems := make([]models.EPGData, 0, len(tv.Channels))
 	for _, ch := range tv.Channels {
-		epgData := &models.EPGData{
+		epgDataItems = append(epgDataItems, models.EPGData{
 			EPGSourceID: sourceID,
 			ChannelID:   ch.ID,
 			Name:        ch.DisplayName,
 			Icon:        ch.Icon,
-		}
-		if err := s.epgDataRepo.Create(ctx, epgData); err != nil {
-			s.log.Error().Err(err).Str("channel_id", ch.ID).Msg("failed to create epg data")
-			continue
-		}
-		channelIDMap[ch.ID] = epgData.ID
+		})
+	}
+	if err := s.epgDataRepo.BulkCreate(ctx, epgDataItems); err != nil {
+		return fmt.Errorf("bulk creating epg data: %w", err)
 	}
 
-	// Store program data
-	programCount := 0
+	// Build channel ID to EPGData ID map from the bulk-created items
+	channelIDMap := make(map[string]int64, len(epgDataItems))
+	for _, d := range epgDataItems {
+		channelIDMap[d.ChannelID] = d.ID
+	}
+
+	// Build program data slice and bulk insert in batches
+	programs := make([]models.ProgramData, 0, len(tv.Programmes))
 	for _, prog := range tv.Programmes {
 		epgDataID, ok := channelIDMap[prog.Channel]
 		if !ok {
 			continue
 		}
-		programData := &models.ProgramData{
+		programs = append(programs, models.ProgramData{
 			EPGDataID:   epgDataID,
 			Title:       prog.Title,
 			Description: prog.Description,
@@ -168,12 +172,23 @@ func (s *EPGService) RefreshSource(ctx context.Context, sourceID int64) error {
 			Category:    prog.Category,
 			EpisodeNum:  prog.EpisodeNum,
 			Icon:        prog.Icon,
+		})
+	}
+
+	// Insert programs in batches of 5000 to avoid holding a giant transaction
+	const batchSize = 5000
+	programCount := 0
+	for i := 0; i < len(programs); i += batchSize {
+		end := i + batchSize
+		if end > len(programs) {
+			end = len(programs)
 		}
-		if err := s.programDataRepo.Create(ctx, programData); err != nil {
-			s.log.Error().Err(err).Str("title", prog.Title).Msg("failed to create program data")
-			continue
+		batch := programs[i:end]
+		if err := s.programDataRepo.BulkCreate(ctx, batch); err != nil {
+			return fmt.Errorf("bulk creating program data (batch %d-%d): %w", i, end, err)
 		}
-		programCount++
+		programCount += len(batch)
+		s.log.Debug().Int("inserted", programCount).Int("total", len(programs)).Msg("program data bulk insert progress")
 	}
 
 	// Update source metadata

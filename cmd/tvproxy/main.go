@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"io/fs"
 	"net/http"
 	"os"
@@ -262,6 +263,14 @@ func main() {
 	wm := worker.NewManager(log)
 	wm.Add("m3u_refresh", worker.NewM3URefreshWorker(m3uService, cfg.M3URefreshInterval, log))
 	wm.Add("epg_refresh", worker.NewEPGRefreshWorker(epgService, cfg.EPGRefreshInterval, log))
+
+	// SSDP discovery worker
+	baseURL := cfg.BaseURL
+	if baseURL == "" {
+		baseURL = fmt.Sprintf("http://%s:%d", cfg.Host, cfg.Port)
+	}
+	wm.Add("ssdp", worker.NewSSDPWorker(hdhrDeviceRepo, baseURL, log))
+
 	wm.Start(ctx)
 
 	// HTTP Server

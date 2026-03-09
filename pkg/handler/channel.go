@@ -2,6 +2,7 @@ package handler
 
 import (
 	"net/http"
+	"strings"
 
 	"github.com/gavinmcnair/tvproxy/pkg/models"
 	"github.com/gavinmcnair/tvproxy/pkg/service"
@@ -60,7 +61,11 @@ func (h *ChannelHandler) Create(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.channelService.CreateChannel(r.Context(), channel); err != nil {
-		respondError(w, http.StatusInternalServerError, "failed to create channel")
+		if strings.Contains(err.Error(), "UNIQUE") || strings.Contains(err.Error(), "unique") {
+			respondError(w, http.StatusConflict, "channel number already exists")
+		} else {
+			respondError(w, http.StatusInternalServerError, "failed to create channel")
+		}
 		return
 	}
 

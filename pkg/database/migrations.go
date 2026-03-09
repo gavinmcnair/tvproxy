@@ -212,4 +212,18 @@ var migrations = []migration{
 		name: "insert_default_stream_profile",
 		sql: `INSERT INTO stream_profiles (name, is_default) VALUES ('Direct (No Transcoding)', 1)`,
 	},
+	{
+		name: "insert_stream_profiles_v2",
+		sql: `INSERT INTO stream_profiles (name, command, args) VALUES
+			('SAT>IP Direct', 'ffmpeg', '-hide_banner -loglevel fatal -i {input} -c copy -bsf:v dump_extra -f mpegts pipe:1 -rw_timeout 5000000'),
+			('M3U Direct', 'ffmpeg', '-hide_banner -loglevel error -analyzeduration 1000000 -probesize 1000000 -i {input} -map 0:v -map 0:a:0 -c:v copy -c:a aac -b:a 192k -ac 2 -c:s copy -f mpegts -fflags +genpts -movflags +faststart -copyts pipe:1'),
+			('SAT>IP Intel QSV', 'ffmpeg', '-hide_banner -loglevel fatal -hwaccel qsv -hwaccel_output_format qsv -i {input} -c:v h264_qsv -preset fast -c:a copy -bsf:v dump_extra -f mpegts pipe:1 -rw_timeout 5000000'),
+			('SAT>IP NVIDIA NVENC', 'ffmpeg', '-hide_banner -loglevel fatal -hwaccel cuda -hwaccel_output_format cuda -i {input} -c:v h264_nvenc -preset p4 -c:a copy -bsf:v dump_extra -f mpegts pipe:1 -rw_timeout 5000000'),
+			('M3U Intel QSV', 'ffmpeg', '-hide_banner -loglevel error -hwaccel qsv -hwaccel_output_format qsv -analyzeduration 1000000 -probesize 1000000 -i {input} -map 0:v -map 0:a:0 -c:v h264_qsv -preset fast -c:a aac -b:a 192k -ac 2 -c:s copy -f mpegts -fflags +genpts -movflags +faststart -copyts pipe:1'),
+			('M3U NVIDIA NVENC', 'ffmpeg', '-hide_banner -loglevel error -hwaccel cuda -hwaccel_output_format cuda -analyzeduration 1000000 -probesize 1000000 -i {input} -map 0:v -map 0:a:0 -c:v h264_nvenc -preset p4 -c:a aac -b:a 192k -ac 2 -c:s copy -f mpegts -fflags +genpts -movflags +faststart -copyts pipe:1'),
+			('SAT>IP AV1 Intel QSV', 'ffmpeg', '-hide_banner -loglevel fatal -hwaccel qsv -hwaccel_output_format qsv -i {input} -c:v av1_qsv -preset fast -c:a copy -bsf:v dump_extra -f mpegts pipe:1 -rw_timeout 5000000'),
+			('SAT>IP AV1 NVIDIA NVENC', 'ffmpeg', '-hide_banner -loglevel fatal -hwaccel cuda -hwaccel_output_format cuda -i {input} -c:v av1_nvenc -preset p4 -c:a copy -bsf:v dump_extra -f mpegts pipe:1 -rw_timeout 5000000'),
+			('M3U AV1 Intel QSV', 'ffmpeg', '-hide_banner -loglevel error -hwaccel qsv -hwaccel_output_format qsv -analyzeduration 1000000 -probesize 1000000 -i {input} -map 0:v -map 0:a:0 -c:v av1_qsv -preset fast -c:a aac -b:a 192k -ac 2 -c:s copy -f mpegts -fflags +genpts -movflags +faststart -copyts pipe:1'),
+			('M3U AV1 NVIDIA NVENC', 'ffmpeg', '-hide_banner -loglevel error -hwaccel cuda -hwaccel_output_format cuda -analyzeduration 1000000 -probesize 1000000 -i {input} -map 0:v -map 0:a:0 -c:v av1_nvenc -preset p4 -c:a aac -b:a 192k -ac 2 -c:s copy -f mpegts -fflags +genpts -movflags +faststart -copyts pipe:1')`,
+	},
 }

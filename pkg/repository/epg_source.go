@@ -96,9 +96,9 @@ func (r *EPGSourceRepository) List(ctx context.Context) ([]models.EPGSource, err
 func (r *EPGSourceRepository) Update(ctx context.Context, source *models.EPGSource) error {
 	now := time.Now()
 	_, err := r.db.ExecContext(ctx,
-		`UPDATE epg_sources SET name = ?, url = ?, is_enabled = ?, updated_at = ?
+		`UPDATE epg_sources SET name = ?, url = ?, is_enabled = ?, last_refreshed = ?, channel_count = ?, program_count = ?, updated_at = ?
 		WHERE id = ?`,
-		source.Name, source.URL, source.IsEnabled, now, source.ID,
+		source.Name, source.URL, source.IsEnabled, source.LastRefreshed, source.ChannelCount, source.ProgramCount, now, source.ID,
 	)
 	if err != nil {
 		return fmt.Errorf("updating epg source: %w", err)

@@ -26,6 +26,9 @@ type Config struct {
 	LogLevel string
 	LogJSON  bool
 
+	// Base URL (for SSDP discovery and HDHR links)
+	BaseURL string
+
 	// Workers
 	M3URefreshInterval time.Duration
 	EPGRefreshInterval time.Duration
@@ -40,6 +43,7 @@ func Load() *Config {
 		AccessTokenExpiry:  envDuration("TVPROXY_ACCESS_TOKEN_EXPIRY", 15*time.Minute),
 		RefreshTokenExpiry: envDuration("TVPROXY_REFRESH_TOKEN_EXPIRY", 7*24*time.Hour),
 		APIKey:             envStr("TVPROXY_API_KEY", ""),
+		BaseURL:            envStr("TVPROXY_BASE_URL", ""),
 		LogLevel:           envStr("TVPROXY_LOG_LEVEL", "info"),
 		LogJSON:            envBool("TVPROXY_LOG_JSON", false),
 		M3URefreshInterval: envDuration("TVPROXY_M3U_REFRESH_INTERVAL", 24*time.Hour),
