@@ -1,0 +1,14 @@
+# Compiled binary
+tvproxy
+
+# Database files
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+*.sqlite
+
+# IDE / OS
+.idea/
+.vscode/
+.DS_Store
