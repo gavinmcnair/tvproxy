@@ -210,8 +210,8 @@ func TestMeHandler(t *testing.T) {
 	err := json.NewDecoder(rec.Body).Decode(&resp)
 	require.NoError(t, err)
 
-	assert.Equal(t, "testuser", resp["Username"])
-	assert.Equal(t, false, resp["IsAdmin"])
+	assert.Equal(t, "testuser", resp["username"])
+	assert.Equal(t, false, resp["is_admin"])
 }
 
 func TestMeHandlerAdmin(t *testing.T) {
@@ -231,8 +231,8 @@ func TestMeHandlerAdmin(t *testing.T) {
 	err := json.NewDecoder(rec.Body).Decode(&resp)
 	require.NoError(t, err)
 
-	assert.Equal(t, "admin", resp["Username"])
-	assert.Equal(t, true, resp["IsAdmin"])
+	assert.Equal(t, "admin", resp["username"])
+	assert.Equal(t, true, resp["is_admin"])
 }
 
 func TestMeHandlerNoAuth(t *testing.T) {
@@ -356,8 +356,8 @@ func TestAPIKeyAuthentication(t *testing.T) {
 	var resp map[string]interface{}
 	err := json.NewDecoder(rec.Body).Decode(&resp)
 	require.NoError(t, err)
-	assert.Equal(t, "api-key", resp["Username"])
-	assert.Equal(t, true, resp["IsAdmin"])
+	assert.Equal(t, "api-key", resp["username"])
+	assert.Equal(t, true, resp["is_admin"])
 }
 
 func TestAPIKeyAuthenticationWrongKey(t *testing.T) {

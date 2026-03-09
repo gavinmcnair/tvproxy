@@ -14,9 +14,9 @@ type contextKey string
 const userContextKey contextKey = "user"
 
 type ContextUser struct {
-	UserID   int64
-	Username string
-	IsAdmin  bool
+	UserID   int64  `json:"user_id"`
+	Username string `json:"username"`
+	IsAdmin  bool   `json:"is_admin"`
 }
 
 func UserFromContext(ctx context.Context) *ContextUser {

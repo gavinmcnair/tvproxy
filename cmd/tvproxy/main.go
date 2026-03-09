@@ -2,9 +2,11 @@ package main
 
 import (
 	"context"
+	"io/fs"
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -21,6 +23,7 @@ import (
 	"github.com/gavinmcnair/tvproxy/pkg/repository"
 	"github.com/gavinmcnair/tvproxy/pkg/service"
 	"github.com/gavinmcnair/tvproxy/pkg/worker"
+	"github.com/gavinmcnair/tvproxy/web"
 )
 
 func main() {
@@ -234,6 +237,25 @@ func main() {
 			r.Put("/{id}", userAgentHandler.Update)
 			r.Delete("/{id}", userAgentHandler.Delete)
 		})
+	})
+
+	// Embedded web frontend
+	distFS, err := fs.Sub(web.Assets, "dist")
+	if err != nil {
+		log.Fatal().Err(err).Msg("failed to load embedded web assets")
+	}
+	fileServer := http.FileServer(http.FS(distFS))
+	r.Get("/*", func(w http.ResponseWriter, req *http.Request) {
+		// Try to serve the static file first
+		path := strings.TrimPrefix(req.URL.Path, "/")
+		if f, err := distFS.Open(path); err == nil {
+			f.Close()
+			fileServer.ServeHTTP(w, req)
+			return
+		}
+		// Fall back to index.html for SPA routing
+		req.URL.Path = "/"
+		fileServer.ServeHTTP(w, req)
 	})
 
 	// Workers
