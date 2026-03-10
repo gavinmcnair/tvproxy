@@ -197,35 +197,83 @@ func (r *StreamRepository) DeleteByAccountID(ctx context.Context, accountID int6
 	return nil
 }
 
-func (r *StreamRepository) BulkCreate(ctx context.Context, streams []models.Stream) error {
-	return r.db.InTx(ctx, func(tx *sql.Tx) error {
-		stmt, err := tx.PrepareContext(ctx,
-			`INSERT INTO streams (m3u_account_id, name, url, "group", logo, tvg_id, tvg_name, content_hash, is_active, created_at, updated_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		)
-		if err != nil {
-			return fmt.Errorf("preparing statement: %w", err)
+func (r *StreamRepository) BulkUpdate(ctx context.Context, streams []*models.Stream) error {
+	const batchSize = 5000
+	for start := 0; start < len(streams); start += batchSize {
+		end := start + batchSize
+		if end > len(streams) {
+			end = len(streams)
 		}
-		defer stmt.Close()
-
-		now := time.Now()
-		for i := range streams {
-			result, err := stmt.ExecContext(ctx,
-				streams[i].M3UAccountID, streams[i].Name, streams[i].URL, streams[i].Group,
-				streams[i].Logo, streams[i].TvgID, streams[i].TvgName, streams[i].ContentHash,
-				streams[i].IsActive, now, now,
+		batch := streams[start:end]
+		if err := r.db.InTx(ctx, func(tx *sql.Tx) error {
+			stmt, err := tx.PrepareContext(ctx,
+				`UPDATE streams SET m3u_account_id = ?, name = ?, url = ?, "group" = ?, logo = ?, tvg_id = ?, tvg_name = ?, content_hash = ?, is_active = ?, updated_at = ?
+				WHERE id = ?`,
 			)
 			if err != nil {
-				return fmt.Errorf("inserting stream %d: %w", i, err)
+				return fmt.Errorf("preparing statement: %w", err)
 			}
-			id, err := result.LastInsertId()
-			if err != nil {
-				return fmt.Errorf("getting last insert id for stream %d: %w", i, err)
+			defer stmt.Close()
+
+			now := time.Now()
+			for i := range batch {
+				if _, err := stmt.ExecContext(ctx,
+					batch[i].M3UAccountID, batch[i].Name, batch[i].URL, batch[i].Group,
+					batch[i].Logo, batch[i].TvgID, batch[i].TvgName, batch[i].ContentHash,
+					batch[i].IsActive, now, batch[i].ID,
+				); err != nil {
+					return fmt.Errorf("updating stream %d: %w", batch[i].ID, err)
+				}
+				batch[i].UpdatedAt = now
 			}
-			streams[i].ID = id
-			streams[i].CreatedAt = now
-			streams[i].UpdatedAt = now
+			return nil
+		}); err != nil {
+			return err
 		}
-		return nil
-	})
+	}
+	return nil
+}
+
+func (r *StreamRepository) BulkCreate(ctx context.Context, streams []models.Stream) error {
+	const batchSize = 5000
+	for start := 0; start < len(streams); start += batchSize {
+		end := start + batchSize
+		if end > len(streams) {
+			end = len(streams)
+		}
+		batch := streams[start:end]
+		if err := r.db.InTx(ctx, func(tx *sql.Tx) error {
+			stmt, err := tx.PrepareContext(ctx,
+				`INSERT INTO streams (m3u_account_id, name, url, "group", logo, tvg_id, tvg_name, content_hash, is_active, created_at, updated_at)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			)
+			if err != nil {
+				return fmt.Errorf("preparing statement: %w", err)
+			}
+			defer stmt.Close()
+
+			now := time.Now()
+			for i := range batch {
+				result, err := stmt.ExecContext(ctx,
+					batch[i].M3UAccountID, batch[i].Name, batch[i].URL, batch[i].Group,
+					batch[i].Logo, batch[i].TvgID, batch[i].TvgName, batch[i].ContentHash,
+					batch[i].IsActive, now, now,
+				)
+				if err != nil {
+					return fmt.Errorf("inserting stream %d: %w", start+i, err)
+				}
+				id, err := result.LastInsertId()
+				if err != nil {
+					return fmt.Errorf("getting last insert id for stream %d: %w", start+i, err)
+				}
+				batch[i].ID = id
+				batch[i].CreatedAt = now
+				batch[i].UpdatedAt = now
+			}
+			return nil
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
 }

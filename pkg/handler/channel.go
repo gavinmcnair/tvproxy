@@ -151,6 +151,23 @@ func (h *ChannelHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// GetStreams returns the streams assigned to a channel.
+func (h *ChannelHandler) GetStreams(w http.ResponseWriter, r *http.Request) {
+	id, err := urlParamInt64(r, "id")
+	if err != nil {
+		respondError(w, http.StatusBadRequest, "invalid channel id")
+		return
+	}
+
+	streams, err := h.channelService.GetChannelStreams(r.Context(), id)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "failed to get channel streams")
+		return
+	}
+
+	respondJSON(w, http.StatusOK, streams)
+}
+
 // AssignStreams assigns streams to a channel.
 func (h *ChannelHandler) AssignStreams(w http.ResponseWriter, r *http.Request) {
 	id, err := urlParamInt64(r, "id")

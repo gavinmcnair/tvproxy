@@ -31,7 +31,12 @@ func main() {
 	cfg := config.Load()
 
 	log := setupLogger(cfg)
-	log.Info().Msg("starting tvproxy")
+
+	if cfg.BaseURL == "" {
+		log.Fatal().Msg("TVPROXY_BASE_URL is required (e.g. http://192.168.1.149:8888)")
+	}
+
+	log.Info().Str("base_url", cfg.BaseURL).Msg("starting tvproxy")
 
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
@@ -77,7 +82,7 @@ func main() {
 	channelService := service.NewChannelService(channelRepo, channelGroupRepo, streamRepo, log)
 	epgService := service.NewEPGService(epgSourceRepo, epgDataRepo, programDataRepo, userAgentRepo, log)
 	settingsService := service.NewSettingsService(settingsRepo)
-	proxyService := service.NewProxyService(channelRepo, streamRepo, m3uAccountRepo, userAgentRepo, log)
+	proxyService := service.NewProxyService(channelRepo, streamRepo, m3uAccountRepo, userAgentRepo, channelProfileRepo, streamProfileRepo, log)
 	hdhrService := service.NewHDHRService(hdhrDeviceRepo, channelRepo, channelProfileRepo, cfg, log)
 	outputService := service.NewOutputService(channelRepo, channelGroupRepo, epgDataRepo, programDataRepo, cfg, log)
 
@@ -98,7 +103,7 @@ func main() {
 	epgDataHandler := handler.NewEPGDataHandler(epgDataRepo, programDataRepo)
 	hdhrHandler := handler.NewHDHRHandler(hdhrService, proxyService, cfg)
 	outputHandler := handler.NewOutputHandler(outputService)
-	proxyHandler := handler.NewProxyHandler(proxyService)
+	proxyHandler := handler.NewProxyHandler(proxyService, log)
 	settingsHandler := handler.NewSettingsHandler(settingsService)
 	userAgentHandler := handler.NewUserAgentHandler(userAgentRepo)
 
@@ -124,11 +129,13 @@ func main() {
 	r.Post("/api/auth/login", authHandler.Login)
 	r.Post("/api/auth/refresh", authHandler.Refresh)
 
-	// HDHomeRun routes (no auth - Plex/Emby/Jellyfin need direct access)
-	r.Get("/hdhr/discover.json", hdhrHandler.Discover)
-	r.Get("/hdhr/lineup_status.json", hdhrHandler.LineupStatus)
-	r.Get("/hdhr/lineup.json", hdhrHandler.Lineup)
-	r.Get("/hdhr/device.xml", hdhrHandler.DeviceXML)
+	// HDHomeRun routes at root (no auth - Plex/Emby/Jellyfin need direct access)
+	// Matches Threadfin's route layout exactly: /device.xml, /discover.json, etc.
+	r.Get("/discover.json", hdhrHandler.Discover)
+	r.Get("/lineup_status.json", hdhrHandler.LineupStatus)
+	r.Get("/lineup.json", hdhrHandler.Lineup)
+	r.Get("/device.xml", hdhrHandler.DeviceXML)
+	r.Get("/capability", hdhrHandler.DeviceXML) // alias used by some clients
 
 	// Output routes (no auth for player access)
 	r.Get("/output/m3u", outputHandler.M3U)
@@ -174,6 +181,7 @@ func main() {
 			r.Get("/{id}", channelHandler.Get)
 			r.Put("/{id}", channelHandler.Update)
 			r.Delete("/{id}", channelHandler.Delete)
+			r.Get("/{id}/streams", channelHandler.GetStreams)
 			r.Post("/{id}/streams", channelHandler.AssignStreams)
 		})
 
@@ -270,6 +278,7 @@ func main() {
 		baseURL = fmt.Sprintf("http://%s:%d", cfg.Host, cfg.Port)
 	}
 	wm.Add("ssdp", worker.NewSSDPWorker(hdhrDeviceRepo, baseURL, log))
+	wm.Add("hdhr_discover", worker.NewHDHRDiscoverWorker(hdhrDeviceRepo, baseURL, log))
 
 	wm.Start(ctx)
 

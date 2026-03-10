@@ -2,7 +2,6 @@ package handler
 
 import (
 	"encoding/xml"
-	"fmt"
 	"net/http"
 
 	"github.com/gavinmcnair/tvproxy/pkg/config"
@@ -34,9 +33,14 @@ type lineupStatusResponse struct {
 	SourceList     []string `json:"SourceList"`
 }
 
+// resolveBaseURL returns the externally reachable base URL for HDHR responses.
+func (h *HDHRHandler) resolveBaseURL(r *http.Request) string {
+	return h.cfg.BaseURL
+}
+
 // Discover returns the HDHomeRun discover.json response.
 func (h *HDHRHandler) Discover(w http.ResponseWriter, r *http.Request) {
-	baseURL := fmt.Sprintf("http://%s:%d", h.cfg.Host, h.cfg.Port)
+	baseURL := h.resolveBaseURL(r)
 
 	data, err := h.hdhrService.GetDiscoverData(r.Context(), baseURL)
 	if err != nil {
@@ -61,7 +65,7 @@ func (h *HDHRHandler) LineupStatus(w http.ResponseWriter, r *http.Request) {
 
 // Lineup returns the HDHomeRun channel lineup.
 func (h *HDHRHandler) Lineup(w http.ResponseWriter, r *http.Request) {
-	baseURL := fmt.Sprintf("http://%s:%d", h.cfg.Host, h.cfg.Port)
+	baseURL := h.resolveBaseURL(r)
 
 	lineup, err := h.hdhrService.GetLineup(r.Context(), baseURL)
 	if err != nil {
@@ -74,7 +78,7 @@ func (h *HDHRHandler) Lineup(w http.ResponseWriter, r *http.Request) {
 
 // DeviceXML returns the HDHomeRun device XML description.
 func (h *HDHRHandler) DeviceXML(w http.ResponseWriter, r *http.Request) {
-	baseURL := fmt.Sprintf("http://%s:%d", h.cfg.Host, h.cfg.Port)
+	baseURL := h.resolveBaseURL(r)
 
 	deviceXML, err := h.hdhrService.GetDeviceXML(r.Context(), baseURL)
 	if err != nil {

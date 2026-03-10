@@ -21,8 +21,8 @@ func New(ctx context.Context, dbPath string, log zerolog.Logger) (*DB, error) {
 		return nil, fmt.Errorf("opening database: %w", err)
 	}
 
-	sqlDB.SetMaxOpenConns(10)
-	sqlDB.SetMaxIdleConns(5)
+	sqlDB.SetMaxOpenConns(4)
+	sqlDB.SetMaxIdleConns(2)
 
 	if err := sqlDB.PingContext(ctx); err != nil {
 		sqlDB.Close()

@@ -226,4 +226,15 @@ var migrations = []migration{
 			('M3U AV1 Intel QSV', 'ffmpeg', '-hide_banner -loglevel error -hwaccel qsv -hwaccel_output_format qsv -analyzeduration 1000000 -probesize 1000000 -i {input} -map 0:v -map 0:a:0 -c:v av1_qsv -preset fast -c:a aac -b:a 192k -ac 2 -c:s copy -f mpegts -fflags +genpts -movflags +faststart -copyts pipe:1'),
 			('M3U AV1 NVIDIA NVENC', 'ffmpeg', '-hide_banner -loglevel error -hwaccel cuda -hwaccel_output_format cuda -analyzeduration 1000000 -probesize 1000000 -i {input} -map 0:v -map 0:a:0 -c:v av1_nvenc -preset p4 -c:a aac -b:a 192k -ac 2 -c:s copy -f mpegts -fflags +genpts -movflags +faststart -copyts pipe:1')`,
 	},
+	{
+		name: "add_stream_profile_dropdown_columns",
+		sql: `ALTER TABLE stream_profiles ADD COLUMN source_type TEXT NOT NULL DEFAULT 'direct';
+		ALTER TABLE stream_profiles ADD COLUMN hwaccel TEXT NOT NULL DEFAULT 'none';
+		ALTER TABLE stream_profiles ADD COLUMN video_codec TEXT NOT NULL DEFAULT 'copy';
+		ALTER TABLE stream_profiles ADD COLUMN custom_args TEXT NOT NULL DEFAULT '';
+		UPDATE stream_profiles SET source_type = 'direct', hwaccel = 'none', video_codec = 'copy' WHERE name = 'Direct (No Transcoding)';
+		UPDATE stream_profiles SET source_type = 'satip', hwaccel = 'none', video_codec = 'copy' WHERE name = 'SAT>IP Direct';
+		UPDATE stream_profiles SET source_type = 'm3u', hwaccel = 'none', video_codec = 'copy' WHERE name = 'M3U Direct';
+		DELETE FROM stream_profiles WHERE name IN ('SAT>IP Intel QSV', 'SAT>IP NVIDIA NVENC', 'M3U Intel QSV', 'M3U NVIDIA NVENC', 'SAT>IP AV1 Intel QSV', 'SAT>IP AV1 NVIDIA NVENC', 'M3U AV1 Intel QSV', 'M3U AV1 NVIDIA NVENC')`,
+	},
 }

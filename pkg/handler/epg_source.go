@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"net/http"
 
 	"github.com/gavinmcnair/tvproxy/pkg/models"
@@ -140,10 +141,11 @@ func (h *EPGSourceHandler) Refresh(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.epgService.RefreshSource(r.Context(), id); err != nil {
-		respondError(w, http.StatusInternalServerError, "failed to refresh epg source")
-		return
-	}
+	go func() {
+		if err := h.epgService.RefreshSource(context.Background(), id); err != nil {
+			h.epgService.Log().Error().Err(err).Int64("source_id", id).Msg("background epg refresh failed")
+		}
+	}()
 
-	respondJSON(w, http.StatusOK, map[string]string{"message": "refresh started"})
+	respondJSON(w, http.StatusAccepted, map[string]string{"message": "refresh started"})
 }

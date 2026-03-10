@@ -40,6 +40,9 @@ func NewEPGService(
 	}
 }
 
+// Log returns the service logger for use by handlers.
+func (s *EPGService) Log() *zerolog.Logger { return &s.log }
+
 // CreateSource creates a new EPG source.
 func (s *EPGService) CreateSource(ctx context.Context, source *models.EPGSource) error {
 	if err := s.epgSourceRepo.Create(ctx, source); err != nil {

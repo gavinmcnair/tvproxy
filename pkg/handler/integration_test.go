@@ -45,6 +45,7 @@ func setupFullEnv(t *testing.T) *fullTestEnv {
 	cfg := &config.Config{
 		Host:               "localhost",
 		Port:               8080,
+		BaseURL:            "http://localhost:8080",
 		JWTSecret:          "test-jwt-secret",
 		AccessTokenExpiry:  15 * time.Minute,
 		RefreshTokenExpiry: 7 * 24 * time.Hour,
@@ -73,7 +74,7 @@ func setupFullEnv(t *testing.T) *fullTestEnv {
 	channelService := service.NewChannelService(channelRepo, channelGroupRepo, streamRepo, log)
 	epgService := service.NewEPGService(epgSourceRepo, epgDataRepo, programDataRepo, userAgentRepo, log)
 	settingsService := service.NewSettingsService(settingsRepo)
-	proxyService := service.NewProxyService(channelRepo, streamRepo, m3uAccountRepo, userAgentRepo, log)
+	proxyService := service.NewProxyService(channelRepo, streamRepo, m3uAccountRepo, userAgentRepo, channelProfileRepo, streamProfileRepo, log)
 	hdhrService := service.NewHDHRService(hdhrDeviceRepo, channelRepo, channelProfileRepo, cfg, log)
 	outputService := service.NewOutputService(channelRepo, channelGroupRepo, epgDataRepo, programDataRepo, cfg, log)
 
@@ -110,11 +111,11 @@ func setupFullEnv(t *testing.T) *fullTestEnv {
 	r.Post("/api/auth/login", authHandler.Login)
 	r.Post("/api/auth/refresh", authHandler.Refresh)
 
-	// HDHomeRun routes (no auth)
-	r.Get("/hdhr/discover.json", hdhrHandler.Discover)
-	r.Get("/hdhr/lineup_status.json", hdhrHandler.LineupStatus)
-	r.Get("/hdhr/lineup.json", hdhrHandler.Lineup)
-	r.Get("/hdhr/device.xml", hdhrHandler.DeviceXML)
+	// HDHomeRun routes at root (no auth)
+	r.Get("/discover.json", hdhrHandler.Discover)
+	r.Get("/lineup_status.json", hdhrHandler.LineupStatus)
+	r.Get("/lineup.json", hdhrHandler.Lineup)
+	r.Get("/device.xml", hdhrHandler.DeviceXML)
 
 	// Output routes (no auth)
 	r.Get("/output/m3u", outputHandler.M3U)
@@ -588,22 +589,31 @@ func TestIntegration_ChannelProfileCRUD(t *testing.T) {
 func TestIntegration_StreamProfileCRUD(t *testing.T) {
 	env := setupFullEnv(t)
 
-	t.Run("create", func(t *testing.T) {
+	t.Run("create with dropdowns", func(t *testing.T) {
 		rec := doRequest(t, env, "POST", "/api/stream-profiles/", map[string]interface{}{
-			"name": "Direct", "command": "", "args": "", "is_default": true,
+			"name": "SAT>IP QSV H264", "source_type": "satip", "hwaccel": "qsv", "video_codec": "h264", "is_default": false,
 		}, env.adminToken)
 		assert.Equal(t, http.StatusCreated, rec.Code)
 		var profile map[string]interface{}
 		decodeResponse(t, rec, &profile)
-		assert.Equal(t, "Direct", profile["name"])
-		assert.Equal(t, true, profile["is_default"])
+		assert.Equal(t, "SAT>IP QSV H264", profile["name"])
+		assert.Equal(t, "satip", profile["source_type"])
+		assert.Equal(t, "qsv", profile["hwaccel"])
+		assert.Equal(t, "h264", profile["video_codec"])
+		assert.Equal(t, "ffmpeg", profile["command"])
+		assert.Contains(t, profile["args"], "h264_qsv")
 	})
 
-	t.Run("create ffmpeg profile", func(t *testing.T) {
+	t.Run("create with custom args", func(t *testing.T) {
 		rec := doRequest(t, env, "POST", "/api/stream-profiles/", map[string]interface{}{
-			"name": "FFmpeg", "command": "ffmpeg", "args": "-i {input} -c copy {output}", "is_default": false,
+			"name": "Custom", "source_type": "m3u", "hwaccel": "none", "video_codec": "copy",
+			"custom_args": "-i {input} -c copy pipe:1", "is_default": false,
 		}, env.adminToken)
 		assert.Equal(t, http.StatusCreated, rec.Code)
+		var profile map[string]interface{}
+		decodeResponse(t, rec, &profile)
+		assert.Equal(t, "ffmpeg", profile["command"])
+		assert.Equal(t, "-i {input} -c copy pipe:1", profile["args"])
 	})
 
 	t.Run("list includes seeded defaults", func(t *testing.T) {
@@ -611,23 +621,29 @@ func TestIntegration_StreamProfileCRUD(t *testing.T) {
 		assert.Equal(t, http.StatusOK, rec.Code)
 		var profiles []map[string]interface{}
 		decodeResponse(t, rec, &profiles)
-		// 11 seeded by migrations + 2 created above = 13
-		assert.Len(t, profiles, 13)
+		// 3 seeded by migrations (Direct, SAT>IP Direct, M3U Direct) + 2 created above = 5
+		assert.Len(t, profiles, 5)
 	})
 
 	t.Run("get", func(t *testing.T) {
 		rec := doRequest(t, env, "GET", "/api/stream-profiles/12", nil, env.adminToken)
 		assert.Equal(t, http.StatusOK, rec.Code)
+		var profile map[string]interface{}
+		decodeResponse(t, rec, &profile)
+		assert.Equal(t, "SAT>IP QSV H264", profile["name"])
 	})
 
 	t.Run("update", func(t *testing.T) {
-		rec := doRequest(t, env, "PUT", "/api/stream-profiles/13", map[string]interface{}{
-			"name": "FFmpeg HD", "command": "ffmpeg", "args": "-i {input} -c:v libx264 {output}", "is_default": false,
+		rec := doRequest(t, env, "PUT", "/api/stream-profiles/12", map[string]interface{}{
+			"name": "SAT>IP NVENC AV1", "source_type": "satip", "hwaccel": "nvenc", "video_codec": "av1", "is_default": false,
 		}, env.adminToken)
 		assert.Equal(t, http.StatusOK, rec.Code)
 		var profile map[string]interface{}
 		decodeResponse(t, rec, &profile)
-		assert.Equal(t, "FFmpeg HD", profile["name"])
+		assert.Equal(t, "SAT>IP NVENC AV1", profile["name"])
+		assert.Equal(t, "nvenc", profile["hwaccel"])
+		assert.Equal(t, "av1", profile["video_codec"])
+		assert.Contains(t, profile["args"], "av1_nvenc")
 	})
 
 	t.Run("delete", func(t *testing.T) {
@@ -637,7 +653,14 @@ func TestIntegration_StreamProfileCRUD(t *testing.T) {
 
 	t.Run("create missing name", func(t *testing.T) {
 		rec := doRequest(t, env, "POST", "/api/stream-profiles/", map[string]interface{}{
-			"command": "ffmpeg",
+			"source_type": "direct",
+		}, env.adminToken)
+		assert.Equal(t, http.StatusBadRequest, rec.Code)
+	})
+
+	t.Run("create invalid source_type", func(t *testing.T) {
+		rec := doRequest(t, env, "POST", "/api/stream-profiles/", map[string]interface{}{
+			"name": "Bad", "source_type": "invalid",
 		}, env.adminToken)
 		assert.Equal(t, http.StatusBadRequest, rec.Code)
 	})
@@ -1088,7 +1111,7 @@ func TestIntegration_HDHRDiscovery(t *testing.T) {
 	env := setupFullEnv(t)
 
 	t.Run("lineup status", func(t *testing.T) {
-		rec := doRequest(t, env, "GET", "/hdhr/lineup_status.json", nil, "")
+		rec := doRequest(t, env, "GET", "/lineup_status.json", nil, "")
 		assert.Equal(t, http.StatusOK, rec.Code)
 		var resp map[string]interface{}
 		decodeResponse(t, rec, &resp)
@@ -1096,7 +1119,7 @@ func TestIntegration_HDHRDiscovery(t *testing.T) {
 	})
 
 	t.Run("discover without devices fails", func(t *testing.T) {
-		rec := doRequest(t, env, "GET", "/hdhr/discover.json", nil, "")
+		rec := doRequest(t, env, "GET", "/discover.json", nil, "")
 		assert.Equal(t, http.StatusInternalServerError, rec.Code)
 	})
 
@@ -1108,7 +1131,7 @@ func TestIntegration_HDHRDiscovery(t *testing.T) {
 		}, env.adminToken)
 		require.Equal(t, http.StatusCreated, rec.Code)
 
-		rec = doRequest(t, env, "GET", "/hdhr/discover.json", nil, "")
+		rec = doRequest(t, env, "GET", "/discover.json", nil, "")
 		assert.Equal(t, http.StatusOK, rec.Code)
 		var resp map[string]interface{}
 		decodeResponse(t, rec, &resp)
@@ -1118,7 +1141,7 @@ func TestIntegration_HDHRDiscovery(t *testing.T) {
 	})
 
 	t.Run("lineup empty", func(t *testing.T) {
-		rec := doRequest(t, env, "GET", "/hdhr/lineup.json", nil, "")
+		rec := doRequest(t, env, "GET", "/lineup.json", nil, "")
 		assert.Equal(t, http.StatusOK, rec.Code)
 		var lineup []map[string]interface{}
 		decodeResponse(t, rec, &lineup)
@@ -1126,7 +1149,7 @@ func TestIntegration_HDHRDiscovery(t *testing.T) {
 	})
 
 	t.Run("device xml", func(t *testing.T) {
-		rec := doRequest(t, env, "GET", "/hdhr/device.xml", nil, "")
+		rec := doRequest(t, env, "GET", "/device.xml", nil, "")
 		assert.Equal(t, http.StatusOK, rec.Code)
 		assert.Equal(t, "application/xml", rec.Header().Get("Content-Type"))
 	})
@@ -1378,7 +1401,7 @@ func TestIntegration_FullUserWorkflow(t *testing.T) {
 
 	// Step 8: Create stream profile
 	rec = doRequest(t, env, "POST", "/api/stream-profiles/", map[string]interface{}{
-		"name": "Direct", "is_default": true,
+		"name": "Direct", "source_type": "direct", "hwaccel": "none", "video_codec": "copy", "is_default": true,
 	}, operatorToken)
 	require.Equal(t, http.StatusCreated, rec.Code)
 
@@ -1440,14 +1463,14 @@ func TestIntegration_FullUserWorkflow(t *testing.T) {
 	assert.Contains(t, m3uBody, `group-title="Movies"`)
 
 	// Check HDHR discover works
-	rec = doRequest(t, env, "GET", "/hdhr/discover.json", nil, "")
+	rec = doRequest(t, env, "GET", "/discover.json", nil, "")
 	require.Equal(t, http.StatusOK, rec.Code)
 	var discover map[string]interface{}
 	decodeResponse(t, rec, &discover)
 	assert.Equal(t, "TVProxy Tuner", discover["FriendlyName"])
 
 	// Check HDHR lineup includes our channels
-	rec = doRequest(t, env, "GET", "/hdhr/lineup.json", nil, "")
+	rec = doRequest(t, env, "GET", "/lineup.json", nil, "")
 	require.Equal(t, http.StatusOK, rec.Code)
 	var lineup []map[string]interface{}
 	decodeResponse(t, rec, &lineup)
@@ -1480,7 +1503,7 @@ func TestIntegration_FullUserWorkflow(t *testing.T) {
 	rec = doRequest(t, env, "GET", "/output/m3u", nil, "")
 	assert.Equal(t, http.StatusOK, rec.Code)
 
-	rec = doRequest(t, env, "GET", "/hdhr/lineup_status.json", nil, "")
+	rec = doRequest(t, env, "GET", "/lineup_status.json", nil, "")
 	assert.Equal(t, http.StatusOK, rec.Code)
 }
 

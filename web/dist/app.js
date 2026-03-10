@@ -132,23 +132,74 @@
     info(msg) { this.show(msg, 'info'); },
   };
 
-  // ─── Data Caches ──────────────────────────────────────────────────────
-  let _epgDataCache = null;
-  let _logosCache = null;
-
-  async function getEpgData() {
-    if (!_epgDataCache) {
-      try { _epgDataCache = await api.get('/api/epg/data'); } catch { _epgDataCache = []; }
+  // ─── Data Cache Utility ───────────────────────────────────────────────
+  class DataCache {
+    constructor({ loader, searchKeys }) {
+      this._loader = loader;
+      this._searchKeys = searchKeys;
+      this._data = null;
+      this._index = null;
     }
-    return _epgDataCache;
+
+    async getAll() {
+      if (!this._data) {
+        try { this._data = await this._loader(); } catch { this._data = []; }
+        this._buildIndex();
+      }
+      return this._data;
+    }
+
+    _buildIndex() {
+      const keys = this._searchKeys;
+      this._index = new Array(this._data.length);
+      for (let i = 0; i < this._data.length; i++) {
+        const parts = [];
+        for (let k = 0; k < keys.length; k++) {
+          const val = this._data[i][keys[k]];
+          if (val != null) parts.push(String(val));
+        }
+        this._index[i] = parts.join(' ').toLowerCase();
+      }
+    }
+
+    search(query, limit) {
+      if (!this._data || !query) return [];
+      limit = limit || 50;
+      const q = query.toLowerCase();
+      const startsWith = [];
+      const contains = [];
+      for (let i = 0; i < this._data.length; i++) {
+        if (this._index[i].indexOf(q) === 0) {
+          startsWith.push(this._data[i]);
+        } else if (this._index[i].indexOf(q) !== -1) {
+          contains.push(this._data[i]);
+        }
+        if (startsWith.length + contains.length >= limit * 2) break;
+      }
+      return startsWith.concat(contains).slice(0, limit);
+    }
+
+    invalidate() {
+      this._data = null;
+      this._index = null;
+    }
   }
 
-  async function getLogos() {
-    try { _logosCache = await api.get('/api/logos'); } catch { _logosCache = []; }
-    return _logosCache;
-  }
+  // ─── Data Caches ──────────────────────────────────────────────────────
+  const epgCache = new DataCache({
+    loader: () => api.get('/api/epg/data'),
+    searchKeys: ['name', 'channel_id'],
+  });
 
-  function invalidateLogosCache() { _logosCache = null; }
+  const logosCache = new DataCache({
+    loader: () => api.get('/api/logos'),
+    searchKeys: ['name', 'url'],
+  });
+
+  const streamsCache = new DataCache({
+    loader: () => api.get('/api/streams'),
+    searchKeys: ['name', 'group'],
+  });
 
   // ─── Router ───────────────────────────────────────────────────────────
   function navigate(page) {
@@ -273,37 +324,63 @@
   // ─── Navigation ───────────────────────────────────────────────────────
   const navItems = [
     { section: 'Overview' },
-    { id: 'dashboard', label: 'Dashboard', icon: '\u2302' },
+    { id: 'dashboard', label: 'Dashboard', icon: '\u2302', tip: 'Overview of your TVProxy system status' },
     { section: 'Sources' },
-    { id: 'm3u-accounts', label: 'M3U Accounts', icon: '\u2630' },
-    { id: 'streams', label: 'Streams', icon: '\u25b6' },
-    { id: 'epg-sources', label: 'EPG Sources', icon: '\ud83d\udcc5' },
+    { id: 'm3u-accounts', label: 'M3U Accounts', icon: '\u2630', tip: 'Add your SAT>IP or IPTV source M3U files' },
+    { id: 'streams', label: 'Streams', icon: '\u25b6', tip: 'All streams available from your registered M3U sources' },
+    { id: 'epg-sources', label: 'EPG Sources', icon: '\ud83d\udcc5', tip: 'Manage XMLTV EPG data sources for programme guides' },
     { section: 'Channels' },
-    { id: 'channels', label: 'Channels', icon: '\ud83d\udcfa' },
-    { id: 'channel-groups', label: 'Channel Groups', icon: '\ud83d\udcc2' },
-    { id: 'channel-profiles', label: 'Channel Profiles', icon: '\u2699' },
+    { id: 'channels', label: 'Channels', icon: '\ud83d\udcfa', tip: 'Define your custom channels and assign streams and EPG data' },
+    { id: 'channel-groups', label: 'Channel Groups', icon: '\ud83d\udcc2', tip: 'Organize channels into groups like Sports, Entertainment, News' },
+    { id: 'channel-profiles', label: 'Channel Profiles', icon: '\u2699', tip: 'Control which channels are exposed to each HDHR device' },
     { section: 'Configuration' },
-    { id: 'stream-profiles', label: 'Stream Profiles', icon: '\ud83d\udd27' },
-    { id: 'hdhr-devices', label: 'HDHR Devices', icon: '\ud83d\udce1' },
-    { id: 'user-agents', label: 'User Agents', icon: '\ud83c\udf10' },
-    { id: 'logos', label: 'Logos', icon: '\ud83d\uddbc' },
+    { id: 'stream-profiles', label: 'Stream Profiles', icon: '\ud83d\udd27', tip: 'Configure transcoding profiles for stream processing' },
+    { id: 'hdhr-devices', label: 'HDHR Devices', icon: '\ud83d\udce1', tip: 'Virtual HDHomeRun devices for Plex, Jellyfin, and Emby' },
+    { id: 'user-agents', label: 'User Agents', icon: '\ud83c\udf10', tip: 'User-Agent strings sent when fetching upstream M3U and EPG data' },
+    { id: 'logos', label: 'Logos', icon: '\ud83d\uddbc', tip: 'Saved channel logos for quick reuse' },
     { section: 'System' },
-    { id: 'users', label: 'Users', icon: '\ud83d\udc65' },
-    { id: 'settings', label: 'Settings', icon: '\u2699' },
+    { id: 'users', label: 'Users', icon: '\ud83d\udc65', tip: 'Manage admin and user accounts' },
+    { id: 'settings', label: 'Settings', icon: '\u2699', tip: 'Core application settings' },
   ];
+
+  // Shared tooltip element
+  const tooltipEl = h('div', { className: 'nav-tooltip' });
+  tooltipEl.style.cssText = 'position:fixed;background:var(--bg-elevated);color:var(--text-primary);border:1px solid var(--border);border-radius:var(--radius-sm);padding:6px 10px;font-size:12px;max-width:240px;pointer-events:none;opacity:0;transition:opacity 0.15s;z-index:9999;box-shadow:0 4px 12px rgba(0,0,0,0.3);';
+  document.body.appendChild(tooltipEl);
+  let tooltipTimer = null;
+
+  function showTooltip(el, text) {
+    tooltipTimer = setTimeout(() => {
+      const rect = el.getBoundingClientRect();
+      tooltipEl.textContent = text;
+      tooltipEl.style.top = rect.top + 'px';
+      tooltipEl.style.left = (rect.right + 8) + 'px';
+      tooltipEl.style.opacity = '1';
+    }, 750);
+  }
+
+  function hideTooltip() {
+    clearTimeout(tooltipTimer);
+    tooltipEl.style.opacity = '0';
+  }
 
   function renderSidebar() {
     const items = navItems.map(item => {
       if (item.section) {
         return h('div', { className: 'nav-section' }, item.section);
       }
-      return h('div', {
+      const el = h('div', {
         className: 'nav-item' + (state.currentPage === item.id ? ' active' : ''),
         onClick: () => navigate(item.id),
       },
         h('span', { className: 'icon' }, item.icon),
         item.label,
       );
+      if (item.tip) {
+        el.addEventListener('mouseenter', () => showTooltip(el, item.tip));
+        el.addEventListener('mouseleave', hideTooltip);
+      }
+      return el;
     });
 
     return h('nav', { className: 'sidebar' },
@@ -372,7 +449,7 @@
           ),
           h('p', null,
             h('strong', null, 'HDHR Discover: '),
-            h('a', { href: '/hdhr/discover.json', target: '_blank' }, window.location.origin + '/hdhr/discover.json'),
+            h('a', { href: '/discover.json', target: '_blank' }, window.location.origin + '/discover.json'),
           ),
         ),
       );
@@ -663,7 +740,9 @@
             let selectedIdx = -1;
 
             async function ensureOptions() {
-              if (acOptions === null && field.loadOptions) {
+              if (field.cache) {
+                await field.cache.getAll();
+              } else if (acOptions === null && field.loadOptions) {
                 acOptions = await field.loadOptions();
               }
               return acOptions || [];
@@ -671,15 +750,29 @@
 
             function renderDropdown(query) {
               dropdown.innerHTML = '';
-              if (!acOptions) { dropdown.style.display = 'none'; return; }
               const q = (query || '').toLowerCase();
-              const matches = [];
-              for (let i = 0; i < acOptions.length && matches.length < 30; i++) {
-                const opt = acOptions[i];
-                const v = (opt[field.valueKey] || '').toLowerCase();
-                const d = (opt[field.displayKey] || '').toLowerCase();
-                if (!q || v.indexOf(q) !== -1 || d.indexOf(q) !== -1) {
-                  matches.push(opt);
+              let matches = [];
+              if (q.length >= 1) {
+                if (field.cache) {
+                  matches = field.cache.search(q, 50);
+                } else {
+                  if (!acOptions) { dropdown.style.display = 'none'; return; }
+                  const startsWith = [];
+                  const contains = [];
+                  for (let i = 0; i < acOptions.length; i++) {
+                    const opt = acOptions[i];
+                    const v = (opt[field.valueKey] || '').toLowerCase();
+                    const d = (opt[field.displayKey] || '').toLowerCase();
+                    if (d.indexOf(q) === 0 || v.indexOf(q) === 0) {
+                      startsWith.push(opt);
+                    } else if (d.indexOf(q) !== -1 || v.indexOf(q) !== -1) {
+                      contains.push(opt);
+                    }
+                  }
+                  const combined = startsWith.concat(contains);
+                  for (let i = 0; i < combined.length && i < 50; i++) {
+                    matches.push(combined[i]);
+                  }
                 }
               }
               if (matches.length === 0) { dropdown.style.display = 'none'; return; }
@@ -692,8 +785,9 @@
                 }
                 const text = h('div', { className: 'autocomplete-text' });
                 text.appendChild(h('div', { className: 'autocomplete-name' }, opt[field.displayKey] || ''));
-                if (field.valueKey !== field.displayKey) {
-                  text.appendChild(h('div', { className: 'autocomplete-id' }, opt[field.valueKey] || ''));
+                const secondary = field.secondaryKey ? opt[field.secondaryKey] : (field.valueKey !== field.displayKey ? opt[field.valueKey] : null);
+                if (secondary) {
+                  text.appendChild(h('div', { className: 'autocomplete-id' }, secondary || ''));
                 }
                 row.appendChild(text);
                 row.addEventListener('click', () => {
@@ -798,24 +892,27 @@
             const body = {};
             fields.forEach(field => {
               if (field.readOnly && isEdit) return;
+              if (field.exclude) return;
               const el = inputs[field.key];
               if (field.type === 'checkbox') {
                 body[field.key] = el.checked;
               } else if (field.type === 'number') {
                 body[field.key] = el.value ? Number(el.value) : 0;
               } else if (field.type === 'async-select') {
-                body[field.key] = el.value ? Number(el.value) : null;
+                body[field.key] = el.value ? (field.stringValue ? el.value : Number(el.value)) : null;
               } else {
                 body[field.key] = el.value;
               }
             });
+            let result;
             if (isEdit) {
-              await api.put(config.apiPath + '/' + item.id, body);
+              result = await api.put(config.apiPath + '/' + item.id, body);
               toast.success(config.singular + ' updated');
             } else {
-              await api.post(config.apiPath, body);
+              result = await api.post(config.apiPath, body);
               toast.success(config.singular + ' created');
             }
+            if (config.postSave) await config.postSave(result, inputs, isEdit, item);
             await reloadData();
           },
           isEdit ? 'Save Changes' : 'Create',
@@ -877,6 +974,7 @@
           handler: async () => {
             try {
               await api.post('/api/m3u/accounts/' + item.id + '/refresh');
+              streamsCache.invalidate();
               toast.success('Refresh started for ' + item.name);
               setTimeout(reload, 2000);
             } catch (err) {
@@ -928,7 +1026,7 @@
           key: 'tvg_id', label: 'EPG Channel ID', type: 'autocomplete',
           placeholder: 'Search EPG channels...',
           help: 'Type to search EPG channels. Auto-matches when you enter a channel name above.',
-          loadOptions: getEpgData,
+          cache: epgCache,
           valueKey: 'channel_id',
           displayKey: 'name',
           onSelect: (epg, inputs) => {
@@ -941,7 +1039,7 @@
           key: 'logo', label: 'Logo', type: 'autocomplete',
           placeholder: 'Search logos or paste URL...',
           help: 'Search saved logos by name, or paste a URL directly.',
-          loadOptions: getLogos,
+          cache: logosCache,
           valueKey: 'url',
           displayKey: 'name',
         },
@@ -959,9 +1057,31 @@
           valueKey: 'id', displayKey: 'name',
           help: 'Assign a profile to control which HDHR devices expose this channel',
         },
+        {
+          key: '_stream', label: 'Stream', type: 'autocomplete',
+          placeholder: 'Search streams...',
+          help: 'Search and select a stream source for this channel.',
+          cache: streamsCache,
+          valueKey: 'name',
+          displayKey: 'name',
+          secondaryKey: 'group',
+          exclude: true,
+          onSelect: (stream, inputs) => {
+            inputs._stream._selectedStreamId = stream.id;
+          },
+        },
         { key: 'is_enabled', label: 'Enabled', type: 'checkbox', default: true },
       ],
       postFormSetup: (inputs, isEdit, item) => {
+        // Load existing stream assignment when editing
+        if (isEdit && inputs._stream && item.id) {
+          api.get('/api/channels/' + item.id + '/streams').then(streams => {
+            if (streams && streams.length > 0) {
+              inputs._stream.value = streams[0].name;
+              inputs._stream._selectedStreamId = streams[0].id;
+            }
+          }).catch(() => {});
+        }
         // Auto-match EPG when channel name is entered
         if (inputs.name) {
           inputs.name.addEventListener('blur', async () => {
@@ -970,7 +1090,7 @@
             // Only auto-match if tvg_id is empty
             if (inputs.tvg_id && inputs.tvg_id.value) return;
 
-            const epgData = await getEpgData();
+            const epgData = await epgCache.getAll();
             if (!epgData.length) return;
 
             // Normalize name for matching: lowercase, remove common suffixes
@@ -1008,13 +1128,26 @@
         const channelName = inputs.name ? inputs.name.value.trim() : '';
         if (logoUrl && logoUrl.startsWith('http')) {
           try {
-            const logos = await getLogos();
+            const logos = await logosCache.getAll();
             const exists = logos.some(l => l.url === logoUrl);
             if (!exists && channelName) {
               await api.post('/api/logos', { name: channelName, url: logoUrl });
-              invalidateLogosCache();
+              logosCache.invalidate();
             }
           } catch { /* ignore logo save errors */ }
+        }
+      },
+      postSave: async (result, inputs, isEdit, original) => {
+        const streamInput = inputs._stream;
+        if (streamInput && streamInput._selectedStreamId) {
+          const channelId = isEdit ? original.id : result.id;
+          try {
+            await api.post('/api/channels/' + channelId + '/streams', {
+              stream_ids: [streamInput._selectedStreamId],
+            });
+          } catch (err) {
+            toast.error('Channel saved but stream assignment failed: ' + err.message);
+          }
         }
       },
     }),
@@ -1043,10 +1176,22 @@
       update: true,
       columns: [
         { key: 'name', label: 'Name' },
+        { key: 'stream_profile', label: 'Stream Profile', render: item => item.stream_profile || '-' },
         { key: 'sort_order', label: 'Sort Order' },
       ],
       fields: [
         { key: 'name', label: 'Profile Name', placeholder: 'Default Profile' },
+        {
+          key: 'stream_profile', label: 'Stream Profile', type: 'async-select',
+          emptyLabel: '-- Default --',
+          stringValue: true,
+          loadOptions: async () => {
+            const profiles = await api.get('/api/stream-profiles');
+            return (profiles || []).map(p => ({ id: p.name, name: p.name }));
+          },
+          valueKey: 'id', displayKey: 'name',
+          help: 'Stream processing profile to use for channels in this profile',
+        },
         { key: 'sort_order', label: 'Sort Order', type: 'number', default: 0 },
       ],
     }),
@@ -1074,7 +1219,7 @@
           handler: async () => {
             try {
               await api.post('/api/epg/sources/' + item.id + '/refresh');
-              _epgDataCache = null; // invalidate EPG cache after refresh
+              epgCache.invalidate(); // invalidate EPG cache after refresh
               toast.success('EPG refresh started for ' + item.name);
               setTimeout(reload, 2000);
             } catch (err) {
@@ -1093,19 +1238,34 @@
       update: true,
       columns: [
         { key: 'name', label: 'Name' },
-        { key: 'command', label: 'Command', render: item => item.command || 'Direct' },
-        { key: 'args', label: 'Arguments', render: item => {
-          const args = item.args || '';
-          return args.length > 60 ? args.substring(0, 60) + '...' : (args || '-');
-        }},
+        { key: 'source_type', label: 'Source', render: item => ({direct:'Direct',satip:'SAT>IP',m3u:'M3U'})[item.source_type] || item.source_type },
+        { key: 'hwaccel', label: 'HW Accel', render: item => ({none:'None (Software)',qsv:'Intel QSV',nvenc:'NVIDIA NVENC',vaapi:'VAAPI (AMD/Intel)',videotoolbox:'VideoToolbox (macOS)'})[item.hwaccel] || item.hwaccel },
+        { key: 'video_codec', label: 'Codec', render: item => ({copy:'Copy',h264:'H.264',h265:'H.265',av1:'AV1'})[item.video_codec] || item.video_codec },
         { key: 'is_default', label: 'Default', render: item =>
           item.is_default ? h('span', { className: 'badge badge-success' }, 'Default') : ''
         },
       ],
       fields: [
-        { key: 'name', label: 'Profile Name', placeholder: 'Direct Proxy' },
-        { key: 'command', label: 'Command', placeholder: 'ffmpeg', help: 'The executable to run (e.g., ffmpeg). Leave empty for direct pass-through.' },
-        { key: 'args', label: 'Arguments', type: 'textarea', placeholder: '-hide_banner -loglevel error -i {input} -c copy -f mpegts pipe:1', help: 'Use {input} for the stream URL placeholder.' },
+        { key: 'name', label: 'Profile Name', placeholder: 'My Stream Profile' },
+        { key: 'source_type', label: 'Source Type', type: 'select', options: [
+          { value: 'direct', label: 'Direct (No Processing)' },
+          { value: 'satip', label: 'SAT>IP' },
+          { value: 'm3u', label: 'M3U' },
+        ]},
+        { key: 'hwaccel', label: 'Hardware Acceleration', type: 'select', options: [
+          { value: 'none', label: 'None (Software)' },
+          { value: 'qsv', label: 'Intel QSV (Arc/iGPU)' },
+          { value: 'nvenc', label: 'NVIDIA NVENC' },
+          { value: 'vaapi', label: 'VAAPI (AMD/Intel)' },
+          { value: 'videotoolbox', label: 'VideoToolbox (macOS only)' },
+        ]},
+        { key: 'video_codec', label: 'Video Codec', type: 'select', options: [
+          { value: 'copy', label: 'Copy (No Transcode)' },
+          { value: 'h264', label: 'H.264 / AVC' },
+          { value: 'h265', label: 'H.265 / HEVC' },
+          { value: 'av1', label: 'AV1' },
+        ]},
+        { key: 'custom_args', label: 'Custom Args Override (Advanced)', type: 'textarea', placeholder: '-hide_banner -loglevel error -i {input} -c copy -f mpegts pipe:1', help: 'If set, overrides auto-generated args. Use {input} for the stream URL.' },
       ],
     }),
 
@@ -1134,6 +1294,7 @@
           valueKey: 'id', displayKey: 'name',
           help: 'Only expose channels with this profile. Leave empty for all channels.',
         },
+        { key: 'is_enabled', label: 'Enabled', type: 'checkbox', default: true },
       ],
     }),
 

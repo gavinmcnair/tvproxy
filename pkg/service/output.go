@@ -8,6 +8,7 @@ import (
 	"github.com/rs/zerolog"
 
 	"github.com/gavinmcnair/tvproxy/pkg/config"
+	"github.com/gavinmcnair/tvproxy/pkg/models"
 	"github.com/gavinmcnair/tvproxy/pkg/repository"
 )
 
@@ -40,6 +41,19 @@ func NewOutputService(
 	}
 }
 
+// placeholderLogo is a minimal SVG data URI used when a channel has no logo assigned.
+const placeholderLogo = `data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='200' viewBox='0 0 200 200'%3E%3Crect width='200' height='200' rx='20' fill='%23374151'/%3E%3Ctext x='100' y='115' font-family='sans-serif' font-size='80' fill='%239CA3AF' text-anchor='middle'%3ETV%3C/text%3E%3C/svg%3E`
+
+// channelEPGID returns the EPG channel ID for a channel. If the channel has a
+// tvg_id assigned it is used directly; otherwise a synthetic ID is generated
+// from the channel's database ID so the M3U tvg-id and XMLTV channel id match.
+func channelEPGID(ch models.Channel) string {
+	if ch.TvgID != "" {
+		return ch.TvgID
+	}
+	return fmt.Sprintf("tvproxy.%d", ch.ID)
+}
+
 // GenerateM3U generates an M3U playlist from all enabled channels.
 func (s *OutputService) GenerateM3U(ctx context.Context) (string, error) {
 	channels, err := s.channelRepo.List(ctx)
@@ -57,7 +71,7 @@ func (s *OutputService) GenerateM3U(ctx context.Context) (string, error) {
 		groupNames[g.ID] = g.Name
 	}
 
-	baseURL := fmt.Sprintf("http://%s:%d", s.config.Host, s.config.Port)
+	baseURL := s.config.BaseURL
 
 	var b strings.Builder
 	b.WriteString("#EXTM3U\n")
@@ -70,10 +84,8 @@ func (s *OutputService) GenerateM3U(ctx context.Context) (string, error) {
 		// Build the EXTINF line
 		b.WriteString("#EXTINF:-1")
 
-		// Add tvg-id if present
-		if ch.TvgID != "" {
-			b.WriteString(fmt.Sprintf(" tvg-id=\"%s\"", ch.TvgID))
-		}
+		// Always emit tvg-id so Plex can link to the EPG
+		b.WriteString(fmt.Sprintf(" tvg-id=\"%s\"", channelEPGID(ch)))
 
 		// Add tvg-chno for channel number
 		b.WriteString(fmt.Sprintf(" tvg-chno=\"%d\"", ch.ChannelNumber))
@@ -81,10 +93,12 @@ func (s *OutputService) GenerateM3U(ctx context.Context) (string, error) {
 		// Add tvg-name
 		b.WriteString(fmt.Sprintf(" tvg-name=\"%s\"", ch.Name))
 
-		// Add tvg-logo if present
-		if ch.Logo != "" {
-			b.WriteString(fmt.Sprintf(" tvg-logo=\"%s\"", ch.Logo))
+		// Always emit tvg-logo; use placeholder when none assigned
+		logo := ch.Logo
+		if logo == "" {
+			logo = placeholderLogo
 		}
+		b.WriteString(fmt.Sprintf(" tvg-logo=\"%s\"", logo))
 
 		// Add group-title if channel belongs to a group
 		if ch.ChannelGroupID != nil {
@@ -96,25 +110,33 @@ func (s *OutputService) GenerateM3U(ctx context.Context) (string, error) {
 		b.WriteString(fmt.Sprintf(",%s\n", ch.Name))
 
 		// Stream URL
-		b.WriteString(fmt.Sprintf("%s/api/stream/%d\n", baseURL, ch.ID))
+		b.WriteString(fmt.Sprintf("%s/proxy/stream/%d\n", baseURL, ch.ID))
 	}
 
 	return b.String(), nil
 }
 
 // GenerateEPG generates XMLTV-format EPG data from all stored EPG data and programs.
+// Channels that have a tvg_id get their real EPG data. Channels without a tvg_id
+// get a synthetic channel entry so that Plex/Jellyfin can still link them.
 func (s *OutputService) GenerateEPG(ctx context.Context) (string, error) {
-	// Get all channels to map tvg_id to channel info
 	channels, err := s.channelRepo.List(ctx)
 	if err != nil {
 		return "", fmt.Errorf("listing channels: %w", err)
 	}
 
-	// Build a set of enabled channel tvg_ids for filtering
+	// Build a set of enabled channel tvg_ids for filtering EPG data,
+	// and collect channels without EPG for synthetic entries.
 	enabledTvgIDs := make(map[string]bool, len(channels))
+	var noEPGChannels []models.Channel
 	for _, ch := range channels {
-		if ch.IsEnabled && ch.TvgID != "" {
+		if !ch.IsEnabled {
+			continue
+		}
+		if ch.TvgID != "" {
 			enabledTvgIDs[ch.TvgID] = true
+		} else {
+			noEPGChannels = append(noEPGChannels, ch)
 		}
 	}
 
@@ -129,9 +151,8 @@ func (s *OutputService) GenerateEPG(ctx context.Context) (string, error) {
 	b.WriteString(`<!DOCTYPE tv SYSTEM "xmltv.dtd">` + "\n")
 	b.WriteString(`<tv generator-info-name="tvproxy">` + "\n")
 
-	// Write channel elements
+	// Write channel elements for real EPG entries
 	for _, epg := range epgDataList {
-		// Only include channels that match enabled channels
 		if !enabledTvgIDs[epg.ChannelID] {
 			continue
 		}
@@ -147,7 +168,23 @@ func (s *OutputService) GenerateEPG(ctx context.Context) (string, error) {
 		b.WriteString("  </channel>\n")
 	}
 
-	// Write programme elements
+	// Write synthetic channel entries for channels without EPG
+	for _, ch := range noEPGChannels {
+		syntheticID := channelEPGID(ch)
+		b.WriteString(fmt.Sprintf(`  <channel id="%s">`, xmlEscape(syntheticID)))
+		b.WriteString("\n")
+		b.WriteString(fmt.Sprintf(`    <display-name>%s</display-name>`, xmlEscape(ch.Name)))
+		b.WriteString("\n")
+		logo := ch.Logo
+		if logo == "" {
+			logo = placeholderLogo
+		}
+		b.WriteString(fmt.Sprintf(`    <icon src="%s" />`, xmlEscape(logo)))
+		b.WriteString("\n")
+		b.WriteString("  </channel>\n")
+	}
+
+	// Write programme elements for real EPG entries
 	for _, epg := range epgDataList {
 		if !enabledTvgIDs[epg.ChannelID] {
 			continue

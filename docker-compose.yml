@@ -7,12 +7,14 @@ services:
     container_name: tvproxy
     restart: unless-stopped
     ports:
-      - "8080:8080"
+      - "8081:8080"
+    environment:
+      - TVPROXY_BASE_URL=http://localhost:8081
     volumes:
       - tvproxy-data:/data
-    devices:
-      # Intel GPU (Arc A380, iGPU) - VA-API / QSV
-      - /dev/dri:/dev/dri
+    # devices:
+    #   # Intel GPU (Arc A380, iGPU) - VA-API / QSV
+    #   - /dev/dri:/dev/dri
     # Uncomment below for NVIDIA GPU support (requires nvidia-container-toolkit)
     # deploy:
     #   resources:
@@ -24,3 +26,4 @@ services:
 
 volumes:
   tvproxy-data:
+    external: true

@@ -1,14 +1,18 @@
 package service
 
 import (
+	"bufio"
 	"context"
 	"fmt"
 	"io"
 	"net/http"
+	"os/exec"
+	"strings"
 	"sync"
 
 	"github.com/rs/zerolog"
 
+	"github.com/gavinmcnair/tvproxy/pkg/models"
 	"github.com/gavinmcnair/tvproxy/pkg/repository"
 )
 
@@ -23,9 +27,9 @@ const (
 
 // client represents a connected downstream viewer.
 type client struct {
-	w      http.ResponseWriter
+	w       http.ResponseWriter
 	flusher http.Flusher
-	done   chan struct{}
+	done    chan struct{}
 }
 
 // channelConnection tracks an active upstream connection and its downstream clients.
@@ -38,11 +42,13 @@ type channelConnection struct {
 
 // ProxyService handles stream proxying with connection sharing and failover.
 type ProxyService struct {
-	channelRepo    *repository.ChannelRepository
-	streamRepo     *repository.StreamRepository
-	m3uAccountRepo *repository.M3UAccountRepository
-	userAgentRepo  *repository.UserAgentRepository
-	log            zerolog.Logger
+	channelRepo        *repository.ChannelRepository
+	streamRepo         *repository.StreamRepository
+	m3uAccountRepo     *repository.M3UAccountRepository
+	userAgentRepo      *repository.UserAgentRepository
+	channelProfileRepo *repository.ChannelProfileRepository
+	streamProfileRepo  *repository.StreamProfileRepository
+	log                zerolog.Logger
 
 	mu          sync.RWMutex
 	connections map[int64]*channelConnection
@@ -54,16 +60,51 @@ func NewProxyService(
 	streamRepo *repository.StreamRepository,
 	m3uAccountRepo *repository.M3UAccountRepository,
 	userAgentRepo *repository.UserAgentRepository,
+	channelProfileRepo *repository.ChannelProfileRepository,
+	streamProfileRepo *repository.StreamProfileRepository,
 	log zerolog.Logger,
 ) *ProxyService {
 	return &ProxyService{
-		channelRepo:    channelRepo,
-		streamRepo:     streamRepo,
-		m3uAccountRepo: m3uAccountRepo,
-		userAgentRepo:  userAgentRepo,
-		log:            log.With().Str("service", "proxy").Logger(),
-		connections:    make(map[int64]*channelConnection),
+		channelRepo:        channelRepo,
+		streamRepo:         streamRepo,
+		m3uAccountRepo:     m3uAccountRepo,
+		userAgentRepo:      userAgentRepo,
+		channelProfileRepo: channelProfileRepo,
+		streamProfileRepo:  streamProfileRepo,
+		log:                log.With().Str("service", "proxy").Logger(),
+		connections:        make(map[int64]*channelConnection),
 	}
+}
+
+// resolveStreamProfile follows Channel → ChannelProfile → StreamProfile.
+// Returns nil if the channel has no profile or the profile is "direct".
+func (s *ProxyService) resolveStreamProfile(ctx context.Context, channel *models.Channel) *models.StreamProfile {
+	if channel.ChannelProfileID == nil {
+		return nil
+	}
+
+	chanProfile, err := s.channelProfileRepo.GetByID(ctx, *channel.ChannelProfileID)
+	if err != nil {
+		s.log.Warn().Err(err).Int64("channel_profile_id", *channel.ChannelProfileID).Msg("channel profile not found")
+		return nil
+	}
+
+	if chanProfile.StreamProfile == "" {
+		return nil
+	}
+
+	streamProfile, err := s.streamProfileRepo.GetByName(ctx, chanProfile.StreamProfile)
+	if err != nil {
+		s.log.Warn().Err(err).Str("stream_profile", chanProfile.StreamProfile).Msg("stream profile not found")
+		return nil
+	}
+
+	// copy = HTTP passthrough, no ffmpeg involvement
+	if streamProfile.VideoCodec == "copy" {
+		return nil
+	}
+
+	return streamProfile
 }
 
 // ProxyStream proxies a live stream for the given channel to the HTTP response writer.
@@ -121,12 +162,15 @@ func (s *ProxyService) ProxyStream(ctx context.Context, w http.ResponseWriter, r
 		return nil
 	}
 
+	// Resolve stream profile for this channel
+	streamProfile := s.resolveStreamProfile(ctx, channel)
+
 	// No existing connection - start a new upstream connection
-	return s.startUpstream(ctx, r, channelID, c)
+	return s.startUpstream(ctx, r, channelID, c, streamProfile)
 }
 
 // startUpstream initiates an upstream connection for the channel and begins proxying data.
-func (s *ProxyService) startUpstream(ctx context.Context, r *http.Request, channelID int64, c *client) error {
+func (s *ProxyService) startUpstream(ctx context.Context, r *http.Request, channelID int64, c *client, profile *models.StreamProfile) error {
 	// Get channel streams in priority order
 	channelStreams, err := s.channelRepo.GetStreams(ctx, channelID)
 	if err != nil {
@@ -170,43 +214,24 @@ func (s *ProxyService) startUpstream(ctx context.Context, r *http.Request, chann
 		s.connections[channelID] = conn
 		s.mu.Unlock()
 
-		s.log.Info().
-			Int64("channel_id", channelID).
-			Int64("stream_id", stream.ID).
-			Str("url", stream.URL).
-			Msg("starting upstream connection")
+		var reader io.ReadCloser
+		var startErr error
 
-		// Create upstream request
-		upstreamReq, err := http.NewRequestWithContext(upstreamCtx, http.MethodGet, stream.URL, nil)
-		if err != nil {
-			cancel()
-			s.cleanupConnection(channelID)
-			s.log.Error().Err(err).Msg("creating upstream request")
-			continue
+		if profile != nil {
+			reader, startErr = s.startFFmpeg(upstreamCtx, channelID, stream, profile, userAgent)
+		} else {
+			reader, startErr = s.startHTTPPassthrough(upstreamCtx, channelID, stream, userAgent)
 		}
 
-		if userAgent != "" {
-			upstreamReq.Header.Set("User-Agent", userAgent)
-		}
-
-		resp, err := http.DefaultClient.Do(upstreamReq)
-		if err != nil {
+		if startErr != nil {
 			cancel()
 			s.cleanupConnection(channelID)
-			s.log.Error().Err(err).Str("url", stream.URL).Msg("upstream connection failed, trying next")
-			continue
-		}
-
-		if resp.StatusCode != http.StatusOK {
-			resp.Body.Close()
-			cancel()
-			s.cleanupConnection(channelID)
-			s.log.Warn().Int("status", resp.StatusCode).Str("url", stream.URL).Msg("upstream returned non-200, trying next")
+			s.log.Error().Err(startErr).Str("url", stream.URL).Msg("upstream start failed, trying next")
 			continue
 		}
 
 		// Successfully connected - start proxying in a goroutine
-		go s.proxyLoop(channelID, resp.Body, cancel)
+		go s.proxyLoop(channelID, reader, cancel)
 
 		// Wait for this client to disconnect
 		select {
@@ -219,6 +244,120 @@ func (s *ProxyService) startUpstream(ctx context.Context, r *http.Request, chann
 	}
 
 	return fmt.Errorf("all streams failed for channel %d", channelID)
+}
+
+// startHTTPPassthrough opens a direct HTTP connection to the upstream (no transcoding).
+func (s *ProxyService) startHTTPPassthrough(ctx context.Context, channelID int64, stream *models.Stream, userAgent string) (io.ReadCloser, error) {
+	s.log.Info().
+		Int64("channel_id", channelID).
+		Int64("stream_id", stream.ID).
+		Str("url", stream.URL).
+		Str("mode", "direct passthrough").
+		Msg("starting upstream connection")
+
+	upstreamReq, err := http.NewRequestWithContext(ctx, http.MethodGet, stream.URL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("creating upstream request: %w", err)
+	}
+
+	if userAgent != "" {
+		upstreamReq.Header.Set("User-Agent", userAgent)
+	}
+
+	resp, err := http.DefaultClient.Do(upstreamReq)
+	if err != nil {
+		return nil, fmt.Errorf("upstream connection failed: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		resp.Body.Close()
+		return nil, fmt.Errorf("upstream returned %d", resp.StatusCode)
+	}
+
+	return resp.Body, nil
+}
+
+// startFFmpeg spawns an ffmpeg process to transcode the upstream stream.
+func (s *ProxyService) startFFmpeg(ctx context.Context, channelID int64, stream *models.Stream, profile *models.StreamProfile, userAgent string) (io.ReadCloser, error) {
+	// Build the ffmpeg argument list from the stored args string.
+	// The args contain {input} as a placeholder for the stream URL.
+	argsStr := strings.Replace(profile.Args, "{input}", stream.URL, 1)
+	args := strings.Fields(argsStr)
+
+	// Inject user agent before -i if one is configured (same approach as Threadfin)
+	if userAgent != "" {
+		for i, arg := range args {
+			if arg == "-i" {
+				newArgs := make([]string, 0, len(args)+2)
+				newArgs = append(newArgs, args[:i]...)
+				newArgs = append(newArgs, "-user_agent", userAgent)
+				newArgs = append(newArgs, args[i:]...)
+				args = newArgs
+				break
+			}
+		}
+	}
+
+	s.log.Info().
+		Int64("channel_id", channelID).
+		Int64("stream_id", stream.ID).
+		Str("url", stream.URL).
+		Str("profile", profile.Name).
+		Str("command", profile.Command).
+		Strs("args", args).
+		Msg("starting transcoding")
+
+	cmd := exec.CommandContext(ctx, profile.Command, args...)
+
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return nil, fmt.Errorf("creating ffmpeg stdout pipe: %w", err)
+	}
+
+	stderr, err := cmd.StderrPipe()
+	if err != nil {
+		return nil, fmt.Errorf("creating ffmpeg stderr pipe: %w", err)
+	}
+
+	if err := cmd.Start(); err != nil {
+		return nil, fmt.Errorf("starting ffmpeg: %w", err)
+	}
+
+	// Log ffmpeg stderr in the background
+	go s.logFFmpegStderr(channelID, stderr)
+
+	// Wait for process exit in background to avoid zombie processes.
+	// We capture the error BEFORE checking ctx so hardware/codec errors aren't masked.
+	go func() {
+		waitErr := cmd.Wait()
+		if waitErr != nil {
+			// Check if this was a genuine ffmpeg error vs a normal shutdown
+			if ctx.Err() != nil && cmd.ProcessState != nil && cmd.ProcessState.ExitCode() == -1 {
+				// Killed by signal (context cancelled) — expected shutdown
+				s.log.Info().Int64("channel_id", channelID).Msg("ffmpeg process stopped")
+			} else {
+				exitCode := -1
+				if cmd.ProcessState != nil {
+					exitCode = cmd.ProcessState.ExitCode()
+				}
+				s.log.Error().Err(waitErr).Int("exit_code", exitCode).Int64("channel_id", channelID).Msg("ffmpeg process exited with error")
+			}
+		} else {
+			s.log.Info().Int64("channel_id", channelID).Msg("ffmpeg process finished")
+		}
+	}()
+
+	return stdout, nil
+}
+
+// logFFmpegStderr reads ffmpeg's stderr and logs each line at WARN level
+// so hardware/codec errors are always visible.
+func (s *ProxyService) logFFmpegStderr(channelID int64, stderr io.ReadCloser) {
+	scanner := bufio.NewScanner(stderr)
+	for scanner.Scan() {
+		line := scanner.Text()
+		s.log.Warn().Int64("channel_id", channelID).Str("ffmpeg", line).Msg("ffmpeg output")
+	}
 }
 
 // proxyLoop reads from the upstream and distributes data to all connected clients.

@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"net/http"
 
 	"github.com/gavinmcnair/tvproxy/pkg/models"
@@ -162,10 +163,11 @@ func (h *M3UAccountHandler) Refresh(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.m3uService.RefreshAccount(r.Context(), id); err != nil {
-		respondError(w, http.StatusInternalServerError, "failed to refresh m3u account")
-		return
-	}
+	go func() {
+		if err := h.m3uService.RefreshAccount(context.Background(), id); err != nil {
+			h.m3uService.Log().Error().Err(err).Int64("account_id", id).Msg("background m3u refresh failed")
+		}
+	}()
 
-	respondJSON(w, http.StatusOK, map[string]string{"message": "refresh started"})
+	respondJSON(w, http.StatusAccepted, map[string]string{"message": "refresh started"})
 }

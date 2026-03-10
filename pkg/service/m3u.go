@@ -38,6 +38,9 @@ func NewM3UService(
 	}
 }
 
+// Log returns the service logger for use by handlers.
+func (s *M3UService) Log() *zerolog.Logger { return &s.log }
+
 // CreateAccount creates a new M3U account.
 func (s *M3UService) CreateAccount(ctx context.Context, account *models.M3UAccount) error {
 	if err := s.m3uAccountRepo.Create(ctx, account); err != nil {
@@ -140,9 +143,9 @@ func (s *M3UService) RefreshAccount(ctx context.Context, accountID int64) error 
 
 	// Determine which streams to create, update, or deactivate
 	var toCreate []models.Stream
+	var toUpdate []*models.Stream
 	for i := range streams {
 		if existing, ok := existingByHash[streams[i].ContentHash]; ok {
-			// Stream exists - update it if needed
 			existing.Name = streams[i].Name
 			existing.URL = streams[i].URL
 			existing.Group = streams[i].Group
@@ -150,26 +153,29 @@ func (s *M3UService) RefreshAccount(ctx context.Context, accountID int64) error 
 			existing.TvgID = streams[i].TvgID
 			existing.TvgName = streams[i].TvgName
 			existing.IsActive = true
-			if err := s.streamRepo.Update(ctx, existing); err != nil {
-				s.log.Error().Err(err).Int64("stream_id", existing.ID).Msg("failed to update stream")
-			}
+			toUpdate = append(toUpdate, existing)
 		} else {
-			// New stream - add to create list
 			toCreate = append(toCreate, streams[i])
 		}
 	}
 
 	// Deactivate streams that are no longer in the M3U
-	for _, existing := range existingStreams {
-		if _, ok := newHashes[existing.ContentHash]; !ok {
-			existing.IsActive = false
-			if err := s.streamRepo.Update(ctx, &existing); err != nil {
-				s.log.Error().Err(err).Int64("stream_id", existing.ID).Msg("failed to deactivate stream")
-			}
+	for i := range existingStreams {
+		if _, ok := newHashes[existingStreams[i].ContentHash]; !ok {
+			existingStreams[i].IsActive = false
+			toUpdate = append(toUpdate, &existingStreams[i])
 		}
 	}
 
-	// Bulk create new streams
+	// Bulk update existing streams (batched)
+	if len(toUpdate) > 0 {
+		if err := s.streamRepo.BulkUpdate(ctx, toUpdate); err != nil {
+			return fmt.Errorf("bulk updating streams: %w", err)
+		}
+		s.log.Info().Int("count", len(toUpdate)).Msg("updated existing streams")
+	}
+
+	// Bulk create new streams (batched)
 	if len(toCreate) > 0 {
 		if err := s.streamRepo.BulkCreate(ctx, toCreate); err != nil {
 			return fmt.Errorf("bulk creating streams: %w", err)

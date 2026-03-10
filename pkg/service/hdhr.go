@@ -161,15 +161,15 @@ func (s *HDHRService) GetDiscoverData(ctx context.Context, baseURL string) (*Dis
 
 	return &DiscoverData{
 		FriendlyName:    device.Name,
-		Manufacturer:    "TVProxy",
-		ManufacturerURL: "https://github.com/gavinmcnair/tvproxy",
+		Manufacturer:    "Silicondust",
+		ManufacturerURL: "https://www.silicondust.com/",
 		ModelNumber:     "HDTC-2US",
 		FirmwareName:    "hdhomerun_atsc",
 		FirmwareVersion: device.FirmwareVersion,
 		DeviceID:        device.DeviceID,
 		DeviceAuth:      device.DeviceAuth,
 		BaseURL:         baseURL,
-		LineupURL:       baseURL + "/hdhr/lineup.json",
+		LineupURL:       baseURL + "/lineup.json",
 		TunerCount:      device.TunerCount,
 	}, nil
 }
@@ -228,7 +228,7 @@ func (s *HDHRService) GetDeviceXML(ctx context.Context, baseURL string) (*Device
 		Device: deviceXMLInner{
 			DeviceType:   "urn:schemas-upnp-org:device:MediaServer:1",
 			FriendlyName: device.Name,
-			Manufacturer: "TVProxy",
+			Manufacturer: "Silicondust",
 			ModelName:    "HDTC-2US",
 			ModelNumber:  "HDTC-2US",
 			SerialNumber: device.DeviceID,
