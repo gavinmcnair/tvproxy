@@ -12,3 +12,6 @@
 .idea/
 .vscode/
 .DS_Store
+
+# Project instructions (local only)
+CLAUDE.md

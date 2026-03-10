@@ -71,7 +71,11 @@ func (db *DB) migrate(ctx context.Context) error {
 			continue
 		}
 		db.log.Info().Int("version", version).Str("name", m.name).Msg("applying migration")
-		if _, err := db.ExecContext(ctx, m.sql); err != nil {
+		if m.fn != nil {
+			if err := m.fn(ctx, db.DB); err != nil {
+				return fmt.Errorf("applying migration %d (%s): %w", version, m.name, err)
+			}
+		} else if _, err := db.ExecContext(ctx, m.sql); err != nil {
 			return fmt.Errorf("applying migration %d (%s): %w", version, m.name, err)
 		}
 		if _, err := db.ExecContext(ctx, "INSERT INTO schema_migrations (version) VALUES (?)", version); err != nil {

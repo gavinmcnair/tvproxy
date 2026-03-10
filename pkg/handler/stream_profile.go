@@ -3,9 +3,9 @@ package handler
 import (
 	"net/http"
 
+	"github.com/gavinmcnair/tvproxy/pkg/ffmpeg"
 	"github.com/gavinmcnair/tvproxy/pkg/models"
 	"github.com/gavinmcnair/tvproxy/pkg/repository"
-	"github.com/gavinmcnair/tvproxy/pkg/service"
 )
 
 // StreamProfileHandler handles stream profile HTTP requests.
@@ -21,6 +21,7 @@ func NewStreamProfileHandler(repo *repository.StreamProfileRepository) *StreamPr
 var validSourceTypes = map[string]bool{"direct": true, "satip": true, "m3u": true}
 var validHWAccels = map[string]bool{"none": true, "qsv": true, "nvenc": true, "vaapi": true, "videotoolbox": true}
 var validVideoCodecs = map[string]bool{"copy": true, "h264": true, "h265": true, "av1": true}
+var validContainers = map[string]bool{"mpegts": true, "matroska": true, "mp4": true, "webm": true}
 
 // List returns all stream profiles.
 func (h *StreamProfileHandler) List(w http.ResponseWriter, r *http.Request) {
@@ -36,12 +37,14 @@ func (h *StreamProfileHandler) List(w http.ResponseWriter, r *http.Request) {
 // Create creates a new stream profile.
 func (h *StreamProfileHandler) Create(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Name       string `json:"name"`
-		SourceType string `json:"source_type"`
-		HWAccel    string `json:"hwaccel"`
-		VideoCodec string `json:"video_codec"`
-		CustomArgs string `json:"custom_args"`
-		IsDefault  bool   `json:"is_default"`
+		Name          string `json:"name"`
+		SourceType    string `json:"source_type"`
+		HWAccel       string `json:"hwaccel"`
+		VideoCodec    string `json:"video_codec"`
+		Container     string `json:"container"`
+		UseCustomArgs bool   `json:"use_custom_args"`
+		CustomArgs    string `json:"custom_args"`
+		IsDefault     bool   `json:"is_default"`
 	}
 	if err := decodeJSON(r, &req); err != nil {
 		respondError(w, http.StatusBadRequest, "invalid request body")
@@ -63,6 +66,9 @@ func (h *StreamProfileHandler) Create(w http.ResponseWriter, r *http.Request) {
 	if req.VideoCodec == "" {
 		req.VideoCodec = "copy"
 	}
+	if req.Container == "" {
+		req.Container = ffmpeg.DefaultContainer(req.VideoCodec)
+	}
 
 	if !validSourceTypes[req.SourceType] {
 		respondError(w, http.StatusBadRequest, "invalid source_type")
@@ -76,24 +82,33 @@ func (h *StreamProfileHandler) Create(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusBadRequest, "invalid video_codec")
 		return
 	}
+	if !validContainers[req.Container] {
+		respondError(w, http.StatusBadRequest, "invalid container")
+		return
+	}
 
-	var command, args string
-	if req.CustomArgs != "" {
-		command = "ffmpeg"
-		args = req.CustomArgs
+	var fullArgs string
+	if req.UseCustomArgs {
+		fullArgs = req.CustomArgs
 	} else {
-		command, args = service.ComposeStreamProfileArgs(req.SourceType, req.HWAccel, req.VideoCodec)
+		composed := ffmpeg.ComposeStreamProfileArgs(req.SourceType, req.HWAccel, req.VideoCodec, req.Container)
+		fullArgs = composed
+		if req.CustomArgs != "" && composed != "" {
+			fullArgs = composed + " " + req.CustomArgs
+		}
 	}
 
 	profile := &models.StreamProfile{
-		Name:       req.Name,
-		SourceType: req.SourceType,
-		HWAccel:    req.HWAccel,
-		VideoCodec: req.VideoCodec,
-		CustomArgs: req.CustomArgs,
-		Command:    command,
-		Args:       args,
-		IsDefault:  req.IsDefault,
+		Name:          req.Name,
+		SourceType:    req.SourceType,
+		HWAccel:       req.HWAccel,
+		VideoCodec:    req.VideoCodec,
+		Container:     req.Container,
+		UseCustomArgs: req.UseCustomArgs,
+		CustomArgs:    req.CustomArgs,
+		Command:       "ffmpeg",
+		Args:          fullArgs,
+		IsDefault:     req.IsDefault,
 	}
 
 	if err := h.repo.Create(r.Context(), profile); err != nil {
@@ -136,12 +151,14 @@ func (h *StreamProfileHandler) Update(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req struct {
-		Name       string `json:"name"`
-		SourceType string `json:"source_type"`
-		HWAccel    string `json:"hwaccel"`
-		VideoCodec string `json:"video_codec"`
-		CustomArgs string `json:"custom_args"`
-		IsDefault  bool   `json:"is_default"`
+		Name          string `json:"name"`
+		SourceType    string `json:"source_type"`
+		HWAccel       string `json:"hwaccel"`
+		VideoCodec    string `json:"video_codec"`
+		Container     string `json:"container"`
+		UseCustomArgs bool   `json:"use_custom_args"`
+		CustomArgs    string `json:"custom_args"`
+		IsDefault     bool   `json:"is_default"`
 	}
 	if err := decodeJSON(r, &req); err != nil {
 		respondError(w, http.StatusBadRequest, "invalid request body")
@@ -162,6 +179,9 @@ func (h *StreamProfileHandler) Update(w http.ResponseWriter, r *http.Request) {
 	if req.VideoCodec == "" {
 		req.VideoCodec = profile.VideoCodec
 	}
+	if req.Container == "" {
+		req.Container = profile.Container
+	}
 
 	if !validSourceTypes[req.SourceType] {
 		respondError(w, http.StatusBadRequest, "invalid source_type")
@@ -175,19 +195,32 @@ func (h *StreamProfileHandler) Update(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusBadRequest, "invalid video_codec")
 		return
 	}
+	if !validContainers[req.Container] {
+		respondError(w, http.StatusBadRequest, "invalid container")
+		return
+	}
 
 	profile.SourceType = req.SourceType
 	profile.HWAccel = req.HWAccel
 	profile.VideoCodec = req.VideoCodec
-	profile.CustomArgs = req.CustomArgs
+	profile.Container = req.Container
 	profile.IsDefault = req.IsDefault
 
-	if req.CustomArgs != "" {
-		profile.Command = "ffmpeg"
-		profile.Args = req.CustomArgs
+	var fullArgs string
+	if req.UseCustomArgs {
+		fullArgs = req.CustomArgs
 	} else {
-		profile.Command, profile.Args = service.ComposeStreamProfileArgs(req.SourceType, req.HWAccel, req.VideoCodec)
+		composed := ffmpeg.ComposeStreamProfileArgs(req.SourceType, req.HWAccel, req.VideoCodec, req.Container)
+		fullArgs = composed
+		if req.CustomArgs != "" && composed != "" {
+			fullArgs = composed + " " + req.CustomArgs
+		}
 	}
+
+	profile.UseCustomArgs = req.UseCustomArgs
+	profile.CustomArgs = req.CustomArgs
+	profile.Command = "ffmpeg"
+	profile.Args = fullArgs
 
 	if err := h.repo.Update(r.Context(), profile); err != nil {
 		respondError(w, http.StatusInternalServerError, "failed to update stream profile")

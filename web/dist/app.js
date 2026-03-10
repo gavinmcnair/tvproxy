@@ -1241,6 +1241,7 @@
         { key: 'source_type', label: 'Source', render: item => ({direct:'Direct',satip:'SAT>IP',m3u:'M3U'})[item.source_type] || item.source_type },
         { key: 'hwaccel', label: 'HW Accel', render: item => ({none:'None (Software)',qsv:'Intel QSV',nvenc:'NVIDIA NVENC',vaapi:'VAAPI (AMD/Intel)',videotoolbox:'VideoToolbox (macOS)'})[item.hwaccel] || item.hwaccel },
         { key: 'video_codec', label: 'Codec', render: item => ({copy:'Copy',h264:'H.264',h265:'H.265',av1:'AV1'})[item.video_codec] || item.video_codec },
+        { key: 'container', label: 'Container', render: item => ({mpegts:'MPEG-TS',matroska:'Matroska',mp4:'MP4',webm:'WebM'})[item.container] || item.container },
         { key: 'is_default', label: 'Default', render: item =>
           item.is_default ? h('span', { className: 'badge badge-success' }, 'Default') : ''
         },
@@ -1265,7 +1266,14 @@
           { value: 'h265', label: 'H.265 / HEVC' },
           { value: 'av1', label: 'AV1' },
         ]},
-        { key: 'custom_args', label: 'Custom Args Override (Advanced)', type: 'textarea', placeholder: '-hide_banner -loglevel error -i {input} -c copy -f mpegts pipe:1', help: 'If set, overrides auto-generated args. Use {input} for the stream URL.' },
+        { key: 'container', label: 'Container Format', type: 'select', options: [
+          { value: 'mpegts', label: 'MPEG-TS (HDHR/Plex)' },
+          { value: 'matroska', label: 'Matroska (VLC)' },
+          { value: 'mp4', label: 'MP4 (Browser/Plex)' },
+          { value: 'webm', label: 'WebM (Browser, requires Opus audio)' },
+        ]},
+        { key: 'use_custom_args', label: 'Use Custom Args', type: 'checkbox', default: false, help: 'When checked, the FFmpeg Args field below is used as the complete command (dropdowns are ignored).' },
+        { key: 'custom_args', label: 'FFmpeg Args', type: 'textarea', placeholder: '-b:v 4M -maxrate 5M', help: 'Extra flags appended to the composed command. When "Use Custom Args" is checked, this is the full command.' },
       ],
     }),
 

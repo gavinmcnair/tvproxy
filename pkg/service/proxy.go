@@ -99,8 +99,8 @@ func (s *ProxyService) resolveStreamProfile(ctx context.Context, channel *models
 		return nil
 	}
 
-	// copy = HTTP passthrough, no ffmpeg involvement
-	if streamProfile.VideoCodec == "copy" {
+	// Direct source type means HTTP passthrough (no ffmpeg)
+	if streamProfile.SourceType == "direct" {
 		return nil
 	}
 
@@ -122,6 +122,21 @@ func (s *ProxyService) ProxyStream(ctx context.Context, w http.ResponseWriter, r
 		return fmt.Errorf("channel %d is disabled", channelID)
 	}
 
+	// Resolve stream profile early so we can set the correct Content-Type
+	streamProfile := s.resolveStreamProfile(ctx, channel)
+
+	contentType := "video/mp2t"
+	if streamProfile != nil {
+		switch streamProfile.Container {
+		case "mp4":
+			contentType = "video/mp4"
+		case "matroska":
+			contentType = "video/x-matroska"
+		case "webm":
+			contentType = "video/webm"
+		}
+	}
+
 	// Create client
 	flusher, ok := w.(http.Flusher)
 	if !ok {
@@ -134,8 +149,8 @@ func (s *ProxyService) ProxyStream(ctx context.Context, w http.ResponseWriter, r
 		done:    make(chan struct{}),
 	}
 
-	// Set response headers for TS streaming
-	w.Header().Set("Content-Type", "video/mp2t")
+	// Set response headers
+	w.Header().Set("Content-Type", contentType)
 	w.Header().Set("Cache-Control", "no-cache, no-store")
 	w.Header().Set("Connection", "keep-alive")
 
@@ -161,9 +176,6 @@ func (s *ProxyService) ProxyStream(ctx context.Context, w http.ResponseWriter, r
 		s.removeClient(channelID, c)
 		return nil
 	}
-
-	// Resolve stream profile for this channel
-	streamProfile := s.resolveStreamProfile(ctx, channel)
 
 	// No existing connection - start a new upstream connection
 	return s.startUpstream(ctx, r, channelID, c, streamProfile)

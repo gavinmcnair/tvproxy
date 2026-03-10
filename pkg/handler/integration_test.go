@@ -602,18 +602,35 @@ func TestIntegration_StreamProfileCRUD(t *testing.T) {
 		assert.Equal(t, "h264", profile["video_codec"])
 		assert.Equal(t, "ffmpeg", profile["command"])
 		assert.Contains(t, profile["args"], "h264_qsv")
+		assert.Nil(t, profile["custom_args"]) // extras only, omitted when empty
 	})
 
 	t.Run("create with custom args", func(t *testing.T) {
 		rec := doRequest(t, env, "POST", "/api/stream-profiles/", map[string]interface{}{
 			"name": "Custom", "source_type": "m3u", "hwaccel": "none", "video_codec": "copy",
-			"custom_args": "-i {input} -c copy pipe:1", "is_default": false,
+			"custom_args": "-b:v 4M", "is_default": false,
 		}, env.adminToken)
 		assert.Equal(t, http.StatusCreated, rec.Code)
 		var profile map[string]interface{}
 		decodeResponse(t, rec, &profile)
 		assert.Equal(t, "ffmpeg", profile["command"])
-		assert.Equal(t, "-i {input} -c copy pipe:1", profile["args"])
+		assert.Equal(t, "-b:v 4M", profile["custom_args"])      // extras only
+		assert.Contains(t, profile["args"], "-b:v 4M")           // extras appended to composed
+		assert.Contains(t, profile["args"], "-i {input}")         // composed base present
+	})
+
+	t.Run("create with use_custom_args", func(t *testing.T) {
+		rec := doRequest(t, env, "POST", "/api/stream-profiles/", map[string]interface{}{
+			"name": "Full Custom", "source_type": "m3u", "hwaccel": "none", "video_codec": "copy",
+			"use_custom_args": true,
+			"custom_args":     "-i {input} -c:v copy -c:a copy -f mpegts pipe:1",
+		}, env.adminToken)
+		assert.Equal(t, http.StatusCreated, rec.Code)
+		var profile map[string]interface{}
+		decodeResponse(t, rec, &profile)
+		assert.Equal(t, true, profile["use_custom_args"])
+		assert.Equal(t, "-i {input} -c:v copy -c:a copy -f mpegts pipe:1", profile["args"])
+		assert.Equal(t, "-i {input} -c:v copy -c:a copy -f mpegts pipe:1", profile["custom_args"])
 	})
 
 	t.Run("list includes seeded defaults", func(t *testing.T) {
@@ -621,20 +638,21 @@ func TestIntegration_StreamProfileCRUD(t *testing.T) {
 		assert.Equal(t, http.StatusOK, rec.Code)
 		var profiles []map[string]interface{}
 		decodeResponse(t, rec, &profiles)
-		// 3 seeded by migrations (Direct, SAT>IP Direct, M3U Direct) + 2 created above = 5
-		assert.Len(t, profiles, 5)
+		// 5 seeded by migrations (Direct, SAT>IP Direct, M3U Direct, M3U→MP4, M3U→Matroska) + 3 created above = 8
+		assert.Len(t, profiles, 8)
 	})
 
 	t.Run("get", func(t *testing.T) {
-		rec := doRequest(t, env, "GET", "/api/stream-profiles/12", nil, env.adminToken)
+		rec := doRequest(t, env, "GET", "/api/stream-profiles/6", nil, env.adminToken)
 		assert.Equal(t, http.StatusOK, rec.Code)
 		var profile map[string]interface{}
 		decodeResponse(t, rec, &profile)
 		assert.Equal(t, "SAT>IP QSV H264", profile["name"])
+		assert.Equal(t, "mpegts", profile["container"])
 	})
 
 	t.Run("update", func(t *testing.T) {
-		rec := doRequest(t, env, "PUT", "/api/stream-profiles/12", map[string]interface{}{
+		rec := doRequest(t, env, "PUT", "/api/stream-profiles/6", map[string]interface{}{
 			"name": "SAT>IP NVENC AV1", "source_type": "satip", "hwaccel": "nvenc", "video_codec": "av1", "is_default": false,
 		}, env.adminToken)
 		assert.Equal(t, http.StatusOK, rec.Code)
@@ -647,7 +665,7 @@ func TestIntegration_StreamProfileCRUD(t *testing.T) {
 	})
 
 	t.Run("delete", func(t *testing.T) {
-		rec := doRequest(t, env, "DELETE", "/api/stream-profiles/13", nil, env.adminToken)
+		rec := doRequest(t, env, "DELETE", "/api/stream-profiles/7", nil, env.adminToken)
 		assert.Equal(t, http.StatusNoContent, rec.Code)
 	})
 

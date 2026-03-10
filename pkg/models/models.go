@@ -88,17 +88,19 @@ type Logo struct {
 }
 
 type StreamProfile struct {
-	ID         int64     `json:"id"`
-	Name       string    `json:"name"`
-	SourceType string    `json:"source_type"`
-	HWAccel    string    `json:"hwaccel"`
-	VideoCodec string    `json:"video_codec"`
-	CustomArgs string    `json:"custom_args,omitempty"`
-	Command    string    `json:"command,omitempty"`
-	Args       string    `json:"args,omitempty"`
-	IsDefault  bool      `json:"is_default"`
-	CreatedAt  time.Time `json:"created_at"`
-	UpdatedAt  time.Time `json:"updated_at"`
+	ID            int64     `json:"id"`
+	Name          string    `json:"name"`
+	SourceType    string    `json:"source_type"`
+	HWAccel       string    `json:"hwaccel"`
+	VideoCodec    string    `json:"video_codec"`
+	Container     string    `json:"container"`
+	UseCustomArgs bool      `json:"use_custom_args"`
+	CustomArgs    string    `json:"custom_args,omitempty"`
+	Command       string    `json:"command,omitempty"`
+	Args          string    `json:"args,omitempty"`
+	IsDefault     bool      `json:"is_default"`
+	CreatedAt     time.Time `json:"created_at"`
+	UpdatedAt     time.Time `json:"updated_at"`
 }
 
 type EPGSource struct {

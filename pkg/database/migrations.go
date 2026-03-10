@@ -1,8 +1,16 @@
 package database
 
+import (
+	"context"
+	"database/sql"
+
+	"github.com/gavinmcnair/tvproxy/pkg/ffmpeg"
+)
+
 type migration struct {
 	name string
 	sql  string
+	fn   func(ctx context.Context, db *sql.DB) error // optional Go migration (used instead of sql if set)
 }
 
 var migrations = []migration{
@@ -236,5 +244,215 @@ var migrations = []migration{
 		UPDATE stream_profiles SET source_type = 'satip', hwaccel = 'none', video_codec = 'copy' WHERE name = 'SAT>IP Direct';
 		UPDATE stream_profiles SET source_type = 'm3u', hwaccel = 'none', video_codec = 'copy' WHERE name = 'M3U Direct';
 		DELETE FROM stream_profiles WHERE name IN ('SAT>IP Intel QSV', 'SAT>IP NVIDIA NVENC', 'M3U Intel QSV', 'M3U NVIDIA NVENC', 'SAT>IP AV1 Intel QSV', 'SAT>IP AV1 NVIDIA NVENC', 'M3U AV1 Intel QSV', 'M3U AV1 NVIDIA NVENC')`,
+	},
+	{
+		name: "recompose_stream_profile_args",
+		fn: func(ctx context.Context, db *sql.DB) error {
+			rows, err := db.QueryContext(ctx,
+				`SELECT id, source_type, hwaccel, video_codec, custom_args FROM stream_profiles WHERE custom_args = ''`)
+			if err != nil {
+				return err
+			}
+			defer rows.Close()
+
+			type profile struct {
+				id         int64
+				sourceType string
+				hwaccel    string
+				videoCodec string
+			}
+			var profiles []profile
+			for rows.Next() {
+				var p profile
+				var customArgs string
+				if err := rows.Scan(&p.id, &p.sourceType, &p.hwaccel, &p.videoCodec, &customArgs); err != nil {
+					return err
+				}
+				profiles = append(profiles, p)
+			}
+			if err := rows.Err(); err != nil {
+				return err
+			}
+
+			for _, p := range profiles {
+				container := ffmpeg.DefaultContainer(p.videoCodec)
+				args := ffmpeg.ComposeStreamProfileArgs(p.sourceType, p.hwaccel, p.videoCodec, container)
+				command := "ffmpeg"
+				if args == "" {
+					command = ""
+				}
+				if _, err := db.ExecContext(ctx,
+					`UPDATE stream_profiles SET command = ?, args = ? WHERE id = ?`,
+					command, args, p.id); err != nil {
+					return err
+				}
+			}
+			return nil
+		},
+	},
+	{
+		name: "add_container_column",
+		sql:  `ALTER TABLE stream_profiles ADD COLUMN container TEXT NOT NULL DEFAULT 'mpegts'`,
+	},
+	{
+		name: "unify_custom_args_and_container",
+		fn: func(ctx context.Context, db *sql.DB) error {
+			rows, err := db.QueryContext(ctx,
+				`SELECT id, source_type, hwaccel, video_codec, custom_args, args FROM stream_profiles`)
+			if err != nil {
+				return err
+			}
+			defer rows.Close()
+
+			type profile struct {
+				id         int64
+				sourceType string
+				hwaccel    string
+				videoCodec string
+				customArgs string
+				args       string
+			}
+			var profiles []profile
+			for rows.Next() {
+				var p profile
+				if err := rows.Scan(&p.id, &p.sourceType, &p.hwaccel, &p.videoCodec, &p.customArgs, &p.args); err != nil {
+					return err
+				}
+				profiles = append(profiles, p)
+			}
+			if err := rows.Err(); err != nil {
+				return err
+			}
+
+			for _, p := range profiles {
+				container := ffmpeg.DefaultContainer(p.videoCodec)
+				var customArgs string
+				if p.customArgs != "" {
+					customArgs = p.customArgs
+				} else if p.args != "" {
+					customArgs = p.args
+				} else {
+					customArgs = ffmpeg.ComposeStreamProfileArgs(p.sourceType, p.hwaccel, p.videoCodec, container)
+				}
+				command := "ffmpeg"
+				if _, err := db.ExecContext(ctx,
+					`UPDATE stream_profiles SET container = ?, custom_args = ?, command = ?, args = ? WHERE id = ?`,
+					container, customArgs, command, customArgs, p.id); err != nil {
+					return err
+				}
+			}
+			return nil
+		},
+	},
+	{
+		name: "seed_container_profiles",
+		sql: `INSERT INTO stream_profiles (name, source_type, hwaccel, video_codec, container, custom_args, command, args, is_default, created_at, updated_at)
+		VALUES
+			('M3U → MP4 (Browser/Plex)', 'm3u', 'none', 'copy', 'mp4',
+			 '',
+			 'ffmpeg',
+			 '-hide_banner -loglevel warning -analyzeduration 1000000 -probesize 1000000 -i {input} -map 0:v:0 -map 0:a:0 -c:v copy -c:a aac -b:a 128k -ac 2 -f mp4 -movflags frag_keyframe+empty_moov+default_base_moof -fflags +genpts pipe:1',
+			 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
+			('M3U → Matroska (VLC)', 'm3u', 'none', 'copy', 'matroska',
+			 '',
+			 'ffmpeg',
+			 '-hide_banner -loglevel warning -analyzeduration 1000000 -probesize 1000000 -i {input} -map 0:v:0 -map 0:a:0 -c:v copy -c:a aac -b:a 128k -ac 2 -f matroska -fflags +genpts -copyts pipe:1',
+			 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+	},
+	{
+		name: "clear_custom_args_extras",
+		sql:  `UPDATE stream_profiles SET custom_args = '' WHERE custom_args = args AND custom_args != ''`,
+	},
+	{
+		name: "reset_stream_profiles_to_defaults",
+		fn: func(ctx context.Context, db *sql.DB) error {
+			// Wipe all existing stream profiles
+			if _, err := db.ExecContext(ctx, `DELETE FROM stream_profiles`); err != nil {
+				return err
+			}
+			// Reset autoincrement so IDs start fresh
+			if _, err := db.ExecContext(ctx, `DELETE FROM sqlite_sequence WHERE name = 'stream_profiles'`); err != nil {
+				return err
+			}
+
+			type seed struct {
+				name       string
+				sourceType string
+				hwaccel    string
+				videoCodec string
+				container  string
+				isDefault  bool
+			}
+
+			seeds := []seed{
+				{"Direct (No Transcoding)", "direct", "none", "copy", "mpegts", true},
+				{"SAT>IP Direct", "satip", "none", "copy", "mpegts", false},
+				{"M3U Direct", "m3u", "none", "copy", "mpegts", false},
+				{"M3U → MP4 (Browser/Plex)", "m3u", "none", "copy", "mp4", false},
+				{"M3U → Matroska (VLC)", "m3u", "none", "copy", "matroska", false},
+			}
+
+			for _, s := range seeds {
+				args := ffmpeg.ComposeStreamProfileArgs(s.sourceType, s.hwaccel, s.videoCodec, s.container)
+				command := "ffmpeg"
+				if args == "" {
+					command = ""
+				}
+				if _, err := db.ExecContext(ctx,
+					`INSERT INTO stream_profiles (name, source_type, hwaccel, video_codec, container, custom_args, command, args, is_default)
+					 VALUES (?, ?, ?, ?, ?, '', ?, ?, ?)`,
+					s.name, s.sourceType, s.hwaccel, s.videoCodec, s.container, command, args, s.isDefault); err != nil {
+					return err
+				}
+			}
+			return nil
+		},
+	},
+	{
+		name: "reset_stream_profiles_v2",
+		fn: func(ctx context.Context, db *sql.DB) error {
+			if _, err := db.ExecContext(ctx, `DELETE FROM stream_profiles`); err != nil {
+				return err
+			}
+			if _, err := db.ExecContext(ctx, `DELETE FROM sqlite_sequence WHERE name = 'stream_profiles'`); err != nil {
+				return err
+			}
+
+			type seed struct {
+				name       string
+				sourceType string
+				hwaccel    string
+				videoCodec string
+				container  string
+				isDefault  bool
+			}
+
+			seeds := []seed{
+				{"Direct (No Transcoding)", "direct", "none", "copy", "mpegts", true},
+				{"SAT>IP Direct", "satip", "none", "copy", "mpegts", false},
+				{"M3U Direct", "m3u", "none", "copy", "mpegts", false},
+				{"M3U → MP4 (Browser/Plex)", "m3u", "none", "copy", "mp4", false},
+				{"M3U → Matroska (VLC)", "m3u", "none", "copy", "matroska", false},
+			}
+
+			for _, s := range seeds {
+				args := ffmpeg.ComposeStreamProfileArgs(s.sourceType, s.hwaccel, s.videoCodec, s.container)
+				command := "ffmpeg"
+				if args == "" {
+					command = ""
+				}
+				if _, err := db.ExecContext(ctx,
+					`INSERT INTO stream_profiles (name, source_type, hwaccel, video_codec, container, custom_args, command, args, is_default)
+					 VALUES (?, ?, ?, ?, ?, '', ?, ?, ?)`,
+					s.name, s.sourceType, s.hwaccel, s.videoCodec, s.container, command, args, s.isDefault); err != nil {
+					return err
+				}
+			}
+			return nil
+		},
+	},
+	{
+		name: "add_use_custom_args_column",
+		sql:  `ALTER TABLE stream_profiles ADD COLUMN use_custom_args INTEGER NOT NULL DEFAULT 0`,
 	},
 }
