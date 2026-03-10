@@ -149,9 +149,8 @@ func (s *ProxyService) ProxyStream(ctx context.Context, w http.ResponseWriter, r
 		done:    make(chan struct{}),
 	}
 
-	// Set response headers (matches Threadfin's proven Plex-compatible approach)
+	// Set response headers
 	w.Header().Set("Content-Type", contentType)
-	w.Header().Set("Content-Length", "0")
 	w.Header().Set("Connection", "close")
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 	w.Header().Set("Cache-Control", "no-cache, no-store")
