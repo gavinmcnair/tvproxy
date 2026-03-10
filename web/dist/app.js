@@ -327,7 +327,6 @@
     { id: 'dashboard', label: 'Dashboard', icon: '\u2302', tip: 'Overview of your TVProxy system status' },
     { section: 'Sources' },
     { id: 'm3u-accounts', label: 'M3U Accounts', icon: '\u2630', tip: 'Add your SAT>IP or IPTV source M3U files' },
-    { id: 'streams', label: 'Streams', icon: '\u25b6', tip: 'All streams available from your registered M3U sources' },
     { id: 'epg-sources', label: 'EPG Sources', icon: '\ud83d\udcc5', tip: 'Manage XMLTV EPG data sources for programme guides' },
     { section: 'Channels' },
     { id: 'channels', label: 'Channels', icon: '\ud83d\udcfa', tip: 'Define your custom channels and assign streams and EPG data' },
@@ -338,6 +337,8 @@
     { id: 'hdhr-devices', label: 'HDHR Devices', icon: '\ud83d\udce1', tip: 'Virtual HDHomeRun devices for Plex, Jellyfin, and Emby' },
     { id: 'user-agents', label: 'User Agents', icon: '\ud83c\udf10', tip: 'User-Agent strings sent when fetching upstream M3U and EPG data' },
     { id: 'logos', label: 'Logos', icon: '\ud83d\uddbc', tip: 'Saved channel logos for quick reuse' },
+    { section: 'Debug' },
+    { id: 'streams', label: 'Streams', icon: '\u25b6', tip: 'Read-only view of all streams parsed from your M3U sources' },
     { section: 'System' },
     { id: 'users', label: 'Users', icon: '\ud83d\udc65', tip: 'Manage admin and user accounts' },
     { id: 'settings', label: 'Settings', icon: '\u2699', tip: 'Core application settings' },
@@ -418,17 +419,17 @@
       container.innerHTML = '';
 
       const cards = [
-        { label: 'M3U Accounts', value: accounts.length, icon: '\u2630' },
-        { label: 'Streams', value: streamCount, icon: '\u25b6' },
-        { label: 'Channels', value: channels.length, icon: '\ud83d\udcfa' },
-        { label: 'Channel Groups', value: groups.length, icon: '\ud83d\udcc2' },
-        { label: 'EPG Sources', value: epgSources.length, icon: '\ud83d\udcc5' },
-        { label: 'HDHR Devices', value: devices.length, icon: '\ud83d\udce1' },
+        { label: 'M3U Accounts', value: accounts.length, icon: '\u2630', page: 'm3u-accounts' },
+        { label: 'Streams', value: streamCount, icon: '\u25b6', page: 'streams' },
+        { label: 'Channels', value: channels.length, icon: '\ud83d\udcfa', page: 'channels' },
+        { label: 'Channel Groups', value: groups.length, icon: '\ud83d\udcc2', page: 'channel-groups' },
+        { label: 'EPG Sources', value: epgSources.length, icon: '\ud83d\udcc5', page: 'epg-sources' },
+        { label: 'HDHR Devices', value: devices.length, icon: '\ud83d\udce1', page: 'hdhr-devices' },
       ];
 
       const grid = h('div', { className: 'dashboard-grid' },
         ...cards.map(c =>
-          h('div', { className: 'stat-card' },
+          h('div', { className: 'stat-card', style: 'cursor: pointer', onClick: () => navigate(c.page) },
             h('div', { className: 'stat-icon' }, c.icon),
             h('div', { className: 'stat-label' }, c.label),
             h('div', { className: 'stat-value' }, String(c.value)),
@@ -436,26 +437,50 @@
         ),
       );
 
-      const outputLinks = h('div', { className: 'table-container', style: 'margin-top: 24px' },
-        h('div', { className: 'table-header' }, h('h3', null, 'Output Links')),
-        h('div', { style: 'padding: 16px' },
-          h('p', { style: 'margin-bottom: 12px' },
-            h('strong', null, 'M3U Playlist: '),
-            h('a', { href: '/output/m3u', target: '_blank' }, window.location.origin + '/output/m3u'),
+      // Per-device URLs table
+      const enabledDevices = devices.filter(d => d.is_enabled && d.port > 0);
+      const hostname = window.location.hostname;
+      let deviceUrlsSection;
+      if (enabledDevices.length > 0) {
+        const thead = h('tr', null,
+          h('th', null, 'Device'),
+          h('th', null, 'Port'),
+          h('th', null, 'M3U URL'),
+          h('th', null, 'EPG URL'),
+          h('th', null, 'Discover URL'),
+        );
+        const rows = enabledDevices.map(d => {
+          const base = 'http://' + hostname + ':' + d.port;
+          return h('tr', null,
+            h('td', null, d.name),
+            h('td', null, String(d.port)),
+            h('td', null, h('a', { href: base + '/output/m3u', target: '_blank' }, base + '/output/m3u')),
+            h('td', null, h('a', { href: base + '/output/epg', target: '_blank' }, base + '/output/epg')),
+            h('td', null, h('a', { href: base + '/discover.json', target: '_blank' }, base + '/discover.json')),
+          );
+        });
+        deviceUrlsSection = h('div', { className: 'table-container', style: 'margin-top: 24px' },
+          h('div', { className: 'table-header' }, h('h3', null, 'HDHR Device URLs')),
+          h('div', { style: 'overflow-x: auto' },
+            h('table', null,
+              h('thead', null, thead),
+              h('tbody', null, ...rows),
+            ),
           ),
-          h('p', { style: 'margin-bottom: 12px' },
-            h('strong', null, 'EPG (XMLTV): '),
-            h('a', { href: '/output/epg', target: '_blank' }, window.location.origin + '/output/epg'),
+        );
+      } else {
+        deviceUrlsSection = h('div', { className: 'table-container', style: 'margin-top: 24px' },
+          h('div', { className: 'table-header' }, h('h3', null, 'HDHR Device URLs')),
+          h('div', { style: 'padding: 16px; color: var(--text-secondary)' },
+            'No HDHR devices configured. Add one in ',
+            h('a', { href: '#', onClick: (e) => { e.preventDefault(); navigate('hdhr-devices'); } }, 'HDHR Devices'),
+            '.',
           ),
-          h('p', null,
-            h('strong', null, 'HDHR Discover: '),
-            h('a', { href: '/discover.json', target: '_blank' }, window.location.origin + '/discover.json'),
-          ),
-        ),
-      );
+        );
+      }
 
       container.appendChild(grid);
-      container.appendChild(outputLinks);
+      container.appendChild(deviceUrlsSection);
     } catch (err) {
       container.innerHTML = '';
       container.appendChild(h('p', { style: 'color: var(--danger)' }, 'Failed to load dashboard: ' + err.message));
@@ -622,7 +647,7 @@
               editBtn.onclick = () => openForm(item);
               actionsTd.appendChild(editBtn);
             }
-            if (config.delete !== false) {
+            if (config.delete !== false && (typeof config.delete !== 'function' || config.delete(item))) {
               const delBtn = document.createElement('button');
               delBtn.className = 'btn btn-danger btn-sm';
               delBtn.textContent = 'Del';
@@ -689,6 +714,7 @@
       async function reloadData() {
         try {
           allItems = await api.get(config.apiPath);
+          if (config.onDataLoaded) await config.onDataLoaded(allItems);
           buildSearchIndex();
           filteredCache = null;
           updateTable();
@@ -882,6 +908,33 @@
           }
         });
 
+        // showWhen: conditionally show/hide fields based on other field values
+        const conditionalFields = [];
+        fields.forEach(field => {
+          if (field.showWhen && inputs[field.key]) {
+            const wrapper = inputs[field.key].closest('.form-group') || inputs[field.key].parentElement;
+            conditionalFields.push({ field, wrapper });
+          }
+        });
+        if (conditionalFields.length > 0) {
+          const updateVisibility = () => {
+            const formValues = {};
+            fields.forEach(f => {
+              const el = inputs[f.key];
+              if (el) formValues[f.key] = f.type === 'checkbox' ? el.checked : el.value;
+            });
+            conditionalFields.forEach(({ field, wrapper }) => {
+              wrapper.style.display = field.showWhen(formValues) ? '' : 'none';
+            });
+          };
+          // Listen for changes on all inputs
+          fields.forEach(f => {
+            const el = inputs[f.key];
+            if (el) el.addEventListener('change', updateVisibility);
+          });
+          updateVisibility();
+        }
+
         if (config.postFormSetup) config.postFormSetup(inputs, isEdit, item);
 
         showModal(
@@ -935,6 +988,222 @@
       buildShell();
       updateTable();
     };
+  }
+
+  // ─── Video Player Modal ──────────────────────────────────────────────
+  const CODEC_NAMES = {
+    avc1:'H.264', h264:'H.264', hev1:'H.265', hvc1:'H.265',
+    vp8:'VP8', vp9:'VP9', av01:'AV1', mp4a:'AAC', aac:'AAC',
+    'ac-3':'AC-3', opus:'Opus', mp3:'MP3', flac:'FLAC'
+  };
+  function codecName(s) { if (!s) return '?'; return CODEC_NAMES[s.split('.')[0].toLowerCase()] || s; }
+
+  function openVideoPlayer(title, url) {
+    let mpegtsPlayer = null;
+    let retryCount = 0;
+    const MAX_RETRIES = 3;
+    let retryTimeout = null;
+    let statsInterval = null;
+
+    function destroyPlayer() {
+      if (mpegtsPlayer) {
+        try { mpegtsPlayer.pause(); } catch(e) {}
+        try { mpegtsPlayer.unload(); } catch(e) {}
+        try { mpegtsPlayer.detachMediaElement(); } catch(e) {}
+        try { mpegtsPlayer.destroy(); } catch(e) {}
+        mpegtsPlayer = null;
+      }
+    }
+
+    function cleanup() {
+      if (retryTimeout) { clearTimeout(retryTimeout); retryTimeout = null; }
+      if (statsInterval) { clearInterval(statsInterval); statsInterval = null; }
+      destroyPlayer();
+      video.pause();
+      video.removeAttribute('src');
+      video.load();
+      overlay.remove();
+    }
+
+    // ── Build UI ──
+    const overlay = document.createElement('div');
+    overlay.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.8);z-index:10000;display:flex;align-items:center;justify-content:center;';
+    const modal = document.createElement('div');
+    modal.style.cssText = 'background:#1a1a2e;border-radius:8px;padding:16px;max-width:800px;width:90%;position:relative;';
+
+    // Header with title + buttons
+    const header = document.createElement('div');
+    header.style.cssText = 'display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;';
+    const titleEl = document.createElement('h3');
+    titleEl.style.cssText = 'margin:0;color:#e0e0e0;font-size:16px;flex:1;';
+    titleEl.textContent = title;
+
+    const btnGroup = document.createElement('div');
+    btnGroup.style.cssText = 'display:flex;gap:6px;';
+
+    const statsBtn = document.createElement('button');
+    statsBtn.className = 'btn btn-sm';
+    statsBtn.textContent = 'Stats';
+    statsBtn.title = 'Toggle stream statistics';
+
+    const refreshBtn = document.createElement('button');
+    refreshBtn.className = 'btn btn-sm';
+    refreshBtn.textContent = 'Refresh';
+    refreshBtn.title = 'Restart stream';
+    refreshBtn.onclick = () => { retryCount = 0; startPlayback(); };
+
+    const closeBtn = document.createElement('button');
+    closeBtn.className = 'btn btn-danger btn-sm';
+    closeBtn.textContent = 'Close';
+    closeBtn.onclick = cleanup;
+
+    btnGroup.appendChild(statsBtn);
+    btnGroup.appendChild(refreshBtn);
+    btnGroup.appendChild(closeBtn);
+    header.appendChild(titleEl);
+    header.appendChild(btnGroup);
+    modal.appendChild(header);
+
+    // Video container (relative for stats overlay)
+    const videoWrap = document.createElement('div');
+    videoWrap.style.cssText = 'position:relative;';
+    const video = document.createElement('video');
+    video.style.cssText = 'width:100%;max-height:450px;background:#000;border-radius:4px;';
+    video.controls = true;
+    video.autoplay = true;
+    video.volume = parseFloat(localStorage.getItem('tvproxy_volume') || '0.5');
+    video.addEventListener('volumechange', () => localStorage.setItem('tvproxy_volume', video.volume));
+
+    // Stats overlay
+    const statsOverlay = document.createElement('div');
+    statsOverlay.style.cssText = 'display:none;position:absolute;top:8px;left:8px;background:rgba(0,0,0,0.75);color:#fff;padding:8px 10px;border-radius:6px;font-size:11px;font-family:monospace;pointer-events:none;line-height:1.6;z-index:10;';
+    statsBtn.onclick = () => {
+      statsOverlay.style.display = statsOverlay.style.display === 'none' ? 'block' : 'none';
+    };
+    videoWrap.appendChild(video);
+    videoWrap.appendChild(statsOverlay);
+    modal.appendChild(videoWrap);
+
+    // Status bar
+    const statusEl = document.createElement('div');
+    statusEl.style.cssText = 'color:#999;font-size:12px;margin-top:8px;';
+    modal.appendChild(statusEl);
+
+    overlay.appendChild(modal);
+    overlay.onclick = (e) => { if (e.target === overlay) cleanup(); };
+    document.body.appendChild(overlay);
+
+    // ── Stats updater ──
+    function updateStats() {
+      if (!mpegtsPlayer || !mpegtsPlayer.statisticsInfo) return;
+      const stats = mpegtsPlayer.statisticsInfo;
+      const mi = mpegtsPlayer.mediaInfo || {};
+      const res = (video.videoWidth && video.videoHeight) ? video.videoWidth + 'x' + video.videoHeight : '?';
+      const speed = stats.speed != null ? (stats.speed / 1024).toFixed(2) + ' MB/s' : '?';
+      const fps = mi.fps || '?';
+      const dropped = (stats.droppedFrames != null) ? stats.droppedFrames : '?';
+      const buf = video.buffered.length > 0 ? (video.buffered.end(0) - video.currentTime).toFixed(1) + 's' : '0s';
+      statsOverlay.innerHTML =
+        'Res: ' + res + '<br>' +
+        'Speed: ' + speed + '<br>' +
+        'FPS: ' + fps + '<br>' +
+        'Dropped: ' + dropped + '<br>' +
+        'Buffer: ' + buf + '<br>' +
+        'Video: ' + codecName(mi.videoCodec) + '<br>' +
+        'Audio: ' + codecName(mi.audioCodec);
+    }
+
+    // ── Playback ──
+    // Detect if the URL uses a profile that outputs fMP4/MP4 (native playback)
+    const isBrowserProfile = url.includes('profile=Browser');
+
+    function startPlayback() {
+      destroyPlayer();
+      if (retryTimeout) { clearTimeout(retryTimeout); retryTimeout = null; }
+      if (statsInterval) { clearInterval(statsInterval); statsInterval = null; }
+      video.removeAttribute('src');
+
+      if (isBrowserProfile) {
+        // Browser profile outputs fMP4 — use native HTML5 video
+        statusEl.style.color = '#999';
+        statusEl.textContent = 'Connecting (fMP4)...';
+        video.src = url;
+        video.oncanplay = () => {
+          statusEl.style.color = '#4caf50';
+          statusEl.textContent = 'Playing (fMP4)';
+          retryCount = 0;
+        };
+        video.play().catch(() => handleRetry());
+      } else if (typeof mpegts !== 'undefined' && mpegts.isSupported()) {
+        // MPEG-TS streams — use mpegts.js
+        statusEl.style.color = '#999';
+        statusEl.textContent = 'Connecting via mpegts.js...';
+        mpegtsPlayer = mpegts.createPlayer({
+          type: 'mse',
+          isLive: true,
+          url: url,
+        }, {
+          enableStashBuffer: true,
+          stashInitialSize: 4096,
+          liveBufferLatency: 2.0,
+        });
+
+        mpegtsPlayer.attachMediaElement(video);
+        mpegtsPlayer.load();
+        mpegtsPlayer.play();
+
+        mpegtsPlayer.on(mpegts.Events.ERROR, (errorType, errorDetail) => {
+          console.warn('mpegts.js error:', errorType, errorDetail);
+          if (errorType === 'NetworkError' || errorType === 'MediaError') {
+            handleRetry();
+          } else {
+            statusEl.style.color = '#ff6b6b';
+            statusEl.textContent = 'Error: ' + errorDetail;
+          }
+        });
+
+        mpegtsPlayer.on(mpegts.Events.MEDIA_INFO, () => {
+          retryCount = 0;
+          if (retryTimeout) { clearTimeout(retryTimeout); retryTimeout = null; }
+          statusEl.style.color = '#4caf50';
+          statusEl.textContent = 'Playing';
+        });
+
+        statsInterval = setInterval(updateStats, 2000);
+      } else {
+        // No mpegts.js — try native video as last resort
+        statusEl.style.color = '#999';
+        statusEl.textContent = 'Trying native playback...';
+        video.src = url;
+        video.play().catch(() => {
+          statusEl.style.color = '#ff6b6b';
+          statusEl.textContent = 'Playback failed. Try a Browser (fMP4) profile.';
+        });
+      }
+    }
+
+    function handleRetry() {
+      if (retryCount >= MAX_RETRIES) {
+        statusEl.style.color = '#ff6b6b';
+        statusEl.textContent = 'Stream failed after ' + MAX_RETRIES + ' retries.';
+        destroyPlayer();
+        return;
+      }
+      retryCount++;
+      statusEl.style.color = '#ffa726';
+      statusEl.textContent = 'Retrying... (' + retryCount + '/' + MAX_RETRIES + ')';
+      destroyPlayer();
+      retryTimeout = setTimeout(startPlayback, 2000);
+    }
+
+    video.onerror = () => {
+      if (!mpegtsPlayer) {
+        statusEl.style.color = '#ff6b6b';
+        statusEl.textContent = 'Playback failed. Try a Browser (fMP4) profile.';
+      }
+    };
+
+    startPlayback();
   }
 
   // ─── Page Definitions ─────────────────────────────────────────────────
@@ -992,14 +1261,24 @@
       perPage: 100,
       create: false,
       update: false,
-      delete: true,
+      delete: false,
       columns: [
         { key: 'name', label: 'Name' },
         { key: 'group', label: 'Group', render: item => item.group || '-' },
-        { key: 'm3u_account_id', label: 'Account ID' },
+        { key: 'm3u_account_id', label: 'M3U Account', render: item => item._account_name || ('Account #' + item.m3u_account_id) },
       ],
       searchKeys: ['name', 'group'],
       fields: [],
+      rowActions: (item) => [
+        { label: 'Play', handler: () => openVideoPlayer(item.name, '/stream/' + item.id) },
+      ],
+      onDataLoaded: async (items) => {
+        const accounts = await api.get('/api/m3u/accounts').catch(() => null);
+        if (!accounts || !accounts.length) return;
+        const nameMap = {};
+        accounts.forEach(a => { nameMap[a.id] = a.name; });
+        items.forEach(item => { item._account_name = nameMap[item.m3u_account_id] || ''; });
+      },
     }),
 
     channels: buildCrudPage({
@@ -1071,6 +1350,9 @@
           },
         },
         { key: 'is_enabled', label: 'Enabled', type: 'checkbox', default: true },
+      ],
+      rowActions: (item) => [
+        { label: 'Play', handler: () => openVideoPlayer(item.name, '/channel/' + item.id + '?profile=Browser') },
       ],
       postFormSetup: (inputs, isEdit, item) => {
         // Load existing stream assignment when editing
@@ -1236,44 +1518,56 @@
       apiPath: '/api/stream-profiles',
       create: true,
       update: true,
+      delete: item => !item.is_system,
       columns: [
         { key: 'name', label: 'Name' },
+        { key: 'stream_mode', label: 'Mode', render: item => ({direct:'Direct',proxy:'Proxy',ffmpeg:'FFmpeg'})[item.stream_mode] || item.stream_mode },
         { key: 'source_type', label: 'Source', render: item => ({direct:'Direct',satip:'SAT>IP',m3u:'M3U'})[item.source_type] || item.source_type },
         { key: 'hwaccel', label: 'HW Accel', render: item => ({none:'None (Software)',qsv:'Intel QSV',nvenc:'NVIDIA NVENC',vaapi:'VAAPI (AMD/Intel)',videotoolbox:'VideoToolbox (macOS)'})[item.hwaccel] || item.hwaccel },
         { key: 'video_codec', label: 'Codec', render: item => ({copy:'Copy',h264:'H.264',h265:'H.265',av1:'AV1'})[item.video_codec] || item.video_codec },
         { key: 'container', label: 'Container', render: item => ({mpegts:'MPEG-TS',matroska:'Matroska',mp4:'MP4',webm:'WebM'})[item.container] || item.container },
-        { key: 'is_default', label: 'Default', render: item =>
-          item.is_default ? h('span', { className: 'badge badge-success' }, 'Default') : ''
-        },
+        { key: 'is_default', label: 'Default', render: item => {
+          const badges = [];
+          if (item.is_system) badges.push(h('span', { className: 'badge badge-info', style: 'margin-right:4px' }, 'System'));
+          if (item.is_default) badges.push(h('span', { className: 'badge badge-success' }, 'Default'));
+          if (badges.length === 0) return '';
+          const container = document.createElement('span');
+          badges.forEach(b => container.appendChild(b));
+          return container;
+        }},
       ],
       fields: [
         { key: 'name', label: 'Profile Name', placeholder: 'My Stream Profile' },
+        { key: 'stream_mode', label: 'Stream Mode', type: 'select', options: [
+          { value: 'direct', label: 'Direct (source URL)' },
+          { value: 'proxy', label: 'Proxy (HTTP relay)' },
+          { value: 'ffmpeg', label: 'FFmpeg (transcode/copy)' },
+        ], default: 'ffmpeg', help: 'How the stream reaches the client.' },
         { key: 'source_type', label: 'Source Type', type: 'select', options: [
-          { value: 'direct', label: 'Direct (No Processing)' },
           { value: 'satip', label: 'SAT>IP' },
           { value: 'm3u', label: 'M3U' },
-        ]},
+        ], showWhen: form => (form.stream_mode || 'ffmpeg') === 'ffmpeg' },
         { key: 'hwaccel', label: 'Hardware Acceleration', type: 'select', options: [
           { value: 'none', label: 'None (Software)' },
           { value: 'qsv', label: 'Intel QSV (Arc/iGPU)' },
           { value: 'nvenc', label: 'NVIDIA NVENC' },
           { value: 'vaapi', label: 'VAAPI (AMD/Intel)' },
           { value: 'videotoolbox', label: 'VideoToolbox (macOS only)' },
-        ]},
+        ], showWhen: form => (form.stream_mode || 'ffmpeg') === 'ffmpeg' },
         { key: 'video_codec', label: 'Video Codec', type: 'select', options: [
           { value: 'copy', label: 'Copy (No Transcode)' },
           { value: 'h264', label: 'H.264 / AVC' },
           { value: 'h265', label: 'H.265 / HEVC' },
           { value: 'av1', label: 'AV1' },
-        ]},
+        ], showWhen: form => (form.stream_mode || 'ffmpeg') === 'ffmpeg' },
         { key: 'container', label: 'Container Format', type: 'select', options: [
           { value: 'mpegts', label: 'MPEG-TS (HDHR/Plex)' },
           { value: 'matroska', label: 'Matroska (VLC)' },
           { value: 'mp4', label: 'MP4 (Browser/Plex)' },
           { value: 'webm', label: 'WebM (Browser, requires Opus audio)' },
-        ]},
-        { key: 'use_custom_args', label: 'Use Custom Args', type: 'checkbox', default: false, help: 'When checked, the FFmpeg Args field below is used as the complete command (dropdowns are ignored).' },
-        { key: 'custom_args', label: 'FFmpeg Args', type: 'textarea', placeholder: '-b:v 4M -maxrate 5M', help: 'Extra flags appended to the composed command. When "Use Custom Args" is checked, this is the full command.' },
+        ], showWhen: form => (form.stream_mode || 'ffmpeg') === 'ffmpeg' },
+        { key: 'use_custom_args', label: 'Use Custom Args', type: 'checkbox', default: false, help: 'When checked, the FFmpeg Args field below is used as the complete command (dropdowns are ignored).', showWhen: form => (form.stream_mode || 'ffmpeg') === 'ffmpeg' },
+        { key: 'custom_args', label: 'FFmpeg Args', type: 'textarea', placeholder: '-b:v 4M -maxrate 5M', help: 'Extra flags appended to the composed command. When "Use Custom Args" is checked, this is the full command.', showWhen: form => (form.stream_mode || 'ffmpeg') === 'ffmpeg' },
       ],
     }),
 
@@ -1286,6 +1580,7 @@
       columns: [
         { key: 'name', label: 'Name' },
         { key: 'device_id', label: 'Device ID' },
+        { key: 'port', label: 'Port' },
         { key: 'tuner_count', label: 'Tuners' },
         { key: 'is_enabled', label: 'Status', render: item =>
           h('span', { className: 'badge ' + (item.is_enabled ? 'badge-success' : 'badge-danger') }, item.is_enabled ? 'Enabled' : 'Disabled')
@@ -1295,6 +1590,7 @@
         { key: 'name', label: 'Device Name', placeholder: 'TVProxy HDHR' },
         { key: 'device_id', label: 'Device ID', placeholder: '12345678', help: '8-character hex device ID' },
         { key: 'tuner_count', label: 'Tuner Count', type: 'number', default: 2 },
+        { key: 'port', label: 'Port', type: 'number', help: 'Auto-assigned starting at 47601. Each device needs a unique port for Plex.' },
         {
           key: 'channel_profile_id', label: 'Channel Profile', type: 'async-select',
           emptyLabel: '-- All Channels --',

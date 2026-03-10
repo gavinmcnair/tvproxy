@@ -22,6 +22,11 @@ func respondJSON(w http.ResponseWriter, status int, data interface{}) {
 	json.NewEncoder(w).Encode(data)
 }
 
+// RespondJSONPublic is a public version of respondJSON for use by other packages.
+func RespondJSONPublic(w http.ResponseWriter, status int, data interface{}) {
+	respondJSON(w, status, data)
+}
+
 func respondError(w http.ResponseWriter, status int, message string) {
 	respondJSON(w, status, map[string]string{"error": message})
 }

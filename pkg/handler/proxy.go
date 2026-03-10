@@ -23,6 +23,7 @@ func NewProxyHandler(proxyService *service.ProxyService, log zerolog.Logger) *Pr
 }
 
 // Stream proxies a stream for the given channel ID.
+// Supports ?profile=NAME to override the channel's configured profile (e.g. ?profile=Browser).
 func (h *ProxyHandler) Stream(w http.ResponseWriter, r *http.Request) {
 	channelID, err := urlParamInt64(r, "channelID")
 	if err != nil {
@@ -30,8 +31,25 @@ func (h *ProxyHandler) Stream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.proxyService.ProxyStream(r.Context(), w, r, channelID); err != nil {
+	profileOverride := r.URL.Query().Get("profile")
+
+	if err := h.proxyService.ProxyStream(r.Context(), w, r, channelID, profileOverride); err != nil {
 		h.log.Error().Err(err).Int64("channel_id", channelID).Msg("proxy stream failed")
+		respondError(w, http.StatusInternalServerError, "failed to proxy stream")
+		return
+	}
+}
+
+// RawStream proxies a raw stream by stream ID (for preview/debug).
+func (h *ProxyHandler) RawStream(w http.ResponseWriter, r *http.Request) {
+	streamID, err := urlParamInt64(r, "streamID")
+	if err != nil {
+		respondError(w, http.StatusBadRequest, "invalid stream id")
+		return
+	}
+
+	if err := h.proxyService.ProxyRawStream(r.Context(), w, r, streamID); err != nil {
+		h.log.Error().Err(err).Int64("stream_id", streamID).Msg("raw stream proxy failed")
 		respondError(w, http.StatusInternalServerError, "failed to proxy stream")
 		return
 	}

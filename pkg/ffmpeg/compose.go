@@ -3,12 +3,8 @@ package ffmpeg
 import "strings"
 
 // ComposeStreamProfileArgs builds the ffmpeg args string from the user-facing
-// dropdown values. Returns empty string for "direct" source type.
+// dropdown values.
 func ComposeStreamProfileArgs(sourceType, hwaccel, videoCodec, container string) string {
-	if sourceType == "direct" {
-		return ""
-	}
-
 	var parts []string
 
 	// Base flags

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"hash/crc32"
 	"net"
+	"net/url"
 	"strconv"
 	"time"
 
@@ -30,7 +31,7 @@ const (
 	hdhrTagDeviceAuth = 0x2B
 
 	// Device types
-	hdhrDeviceTypeTuner   = 0x00000001
+	hdhrDeviceTypeTuner    = 0x00000001
 	hdhrDeviceTypeWildcard = 0xFFFFFFFF
 
 	// Wildcard device ID
@@ -181,14 +182,16 @@ func (w *HDHRDiscoverWorker) handleDiscoverRequest(ctx context.Context, conn *ne
 		requestedID = binary.BigEndian.Uint32(di)
 	}
 
-	// Find enabled device
+	// Find enabled devices
 	devices, err := w.hdhrDeviceRepo.List(ctx)
 	if err != nil {
 		return
 	}
 
+	host := w.extractHost()
+
 	for _, device := range devices {
-		if !device.IsEnabled {
+		if !device.IsEnabled || device.Port <= 0 {
 			continue
 		}
 
@@ -197,18 +200,32 @@ func (w *HDHRDiscoverWorker) handleDiscoverRequest(ctx context.Context, conn *ne
 			continue
 		}
 
-		reply := w.buildDiscoverReply(deviceID, device.TunerCount, device.DeviceAuth)
+		deviceBaseURL := fmt.Sprintf("http://%s:%d", host, device.Port)
+		reply := w.buildDiscoverReply(deviceID, device.TunerCount, device.DeviceAuth, deviceBaseURL)
 		if _, err := conn.WriteToUDP(reply, remoteAddr); err != nil {
 			w.log.Warn().Err(err).Str("remote", remoteAddr.String()).Msg("failed to send discover reply")
 		} else {
-			w.log.Info().
+			w.log.Debug().
 				Str("remote", remoteAddr.String()).
 				Str("device", device.Name).
 				Str("device_id", device.DeviceID).
+				Int("port", device.Port).
 				Msg("responded to HDHomeRun discover request")
 		}
-		return // only respond with the first enabled device
+		// Respond for ALL matching enabled devices (not just first)
 	}
+}
+
+func (w *HDHRDiscoverWorker) extractHost() string {
+	u, err := url.Parse(w.baseURL)
+	if err != nil {
+		return "localhost"
+	}
+	host := u.Hostname()
+	if host == "" {
+		return "localhost"
+	}
+	return host
 }
 
 // parseDeviceID converts a hex device ID string to uint32.
@@ -222,7 +239,7 @@ func (w *HDHRDiscoverWorker) parseDeviceID(id string) uint32 {
 }
 
 // buildDiscoverReply builds a complete HDHomeRun discover reply packet.
-func (w *HDHRDiscoverWorker) buildDiscoverReply(deviceID uint32, tunerCount int, deviceAuth string) []byte {
+func (w *HDHRDiscoverWorker) buildDiscoverReply(deviceID uint32, tunerCount int, deviceAuth string, baseURL string) []byte {
 	// Build payload with TLV tags
 	var payload []byte
 
@@ -238,11 +255,10 @@ func (w *HDHRDiscoverWorker) buildDiscoverReply(deviceID uint32, tunerCount int,
 	}
 
 	// Base URL
-	baseURL := fmt.Sprintf("%s", w.baseURL)
 	payload = append(payload, w.encodeTLV(hdhrTagBaseURL, []byte(baseURL))...)
 
 	// Lineup URL
-	lineupURL := fmt.Sprintf("%s/lineup.json", w.baseURL)
+	lineupURL := fmt.Sprintf("%s/lineup.json", baseURL)
 	payload = append(payload, w.encodeTLV(hdhrTagLineupURL, []byte(lineupURL))...)
 
 	// Device auth

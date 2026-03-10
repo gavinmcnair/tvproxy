@@ -83,8 +83,8 @@ func main() {
 	epgService := service.NewEPGService(epgSourceRepo, epgDataRepo, programDataRepo, userAgentRepo, log)
 	settingsService := service.NewSettingsService(settingsRepo)
 	proxyService := service.NewProxyService(channelRepo, streamRepo, m3uAccountRepo, userAgentRepo, channelProfileRepo, streamProfileRepo, log)
-	hdhrService := service.NewHDHRService(hdhrDeviceRepo, channelRepo, channelProfileRepo, cfg, log)
-	outputService := service.NewOutputService(channelRepo, channelGroupRepo, epgDataRepo, programDataRepo, cfg, log)
+	hdhrService := service.NewHDHRService(hdhrDeviceRepo, channelRepo, streamRepo, channelProfileRepo, streamProfileRepo, cfg, log)
+	outputService := service.NewOutputService(channelRepo, channelGroupRepo, streamRepo, channelProfileRepo, streamProfileRepo, epgDataRepo, programDataRepo, cfg, log)
 
 	// Auth middleware
 	authMW := middleware.NewAuthMiddleware(authService, cfg.APIKey)
@@ -101,7 +101,7 @@ func main() {
 	streamProfileHandler := handler.NewStreamProfileHandler(streamProfileRepo)
 	epgSourceHandler := handler.NewEPGSourceHandler(epgService)
 	epgDataHandler := handler.NewEPGDataHandler(epgDataRepo, programDataRepo)
-	hdhrHandler := handler.NewHDHRHandler(hdhrService, proxyService, cfg)
+	hdhrHandler := handler.NewHDHRHandler(hdhrService, hdhrDeviceRepo, proxyService, cfg)
 	outputHandler := handler.NewOutputHandler(outputService)
 	proxyHandler := handler.NewProxyHandler(proxyService, log)
 	settingsHandler := handler.NewSettingsHandler(settingsService)
@@ -141,8 +141,9 @@ func main() {
 	r.Get("/output/m3u", outputHandler.M3U)
 	r.Get("/output/epg", outputHandler.EPG)
 
-	// Proxy routes (no auth for player access)
-	r.Get("/proxy/stream/{channelID}", proxyHandler.Stream)
+	// Stream routes (no auth for player access)
+	r.Get("/channel/{channelID}", proxyHandler.Stream)
+	r.Get("/stream/{streamID}", proxyHandler.RawStream)
 
 	// Authenticated API routes
 	r.Group(func(r chi.Router) {
@@ -272,13 +273,15 @@ func main() {
 	wm.Add("m3u_refresh", worker.NewM3URefreshWorker(m3uService, cfg.M3URefreshInterval, log))
 	wm.Add("epg_refresh", worker.NewEPGRefreshWorker(epgService, cfg.EPGRefreshInterval, log))
 
-	// SSDP discovery worker
+	// SSDP discovery worker — BaseURL is portless (e.g. http://192.168.1.149).
+	// Workers extract the host and append per-device ports.
 	baseURL := cfg.BaseURL
 	if baseURL == "" {
-		baseURL = fmt.Sprintf("http://%s:%d", cfg.Host, cfg.Port)
+		baseURL = fmt.Sprintf("http://%s", cfg.Host)
 	}
 	wm.Add("ssdp", worker.NewSSDPWorker(hdhrDeviceRepo, baseURL, log))
 	wm.Add("hdhr_discover", worker.NewHDHRDiscoverWorker(hdhrDeviceRepo, baseURL, log))
+	wm.Add("hdhr_servers", worker.NewHDHRServerWorker(hdhrDeviceRepo, hdhrService, proxyService, outputService, cfg, log))
 
 	wm.Start(ctx)
 

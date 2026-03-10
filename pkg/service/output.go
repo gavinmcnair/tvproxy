@@ -14,31 +14,56 @@ import (
 
 // OutputService generates M3U playlists and XMLTV EPG data from the configured channels.
 type OutputService struct {
-	channelRepo      *repository.ChannelRepository
-	channelGroupRepo *repository.ChannelGroupRepository
-	epgDataRepo      *repository.EPGDataRepository
-	programDataRepo  *repository.ProgramDataRepository
-	config           *config.Config
-	log              zerolog.Logger
+	channelRepo        *repository.ChannelRepository
+	channelGroupRepo   *repository.ChannelGroupRepository
+	streamRepo         *repository.StreamRepository
+	channelProfileRepo *repository.ChannelProfileRepository
+	streamProfileRepo  *repository.StreamProfileRepository
+	epgDataRepo        *repository.EPGDataRepository
+	programDataRepo    *repository.ProgramDataRepository
+	config             *config.Config
+	log                zerolog.Logger
 }
 
 // NewOutputService creates a new OutputService.
 func NewOutputService(
 	channelRepo *repository.ChannelRepository,
 	channelGroupRepo *repository.ChannelGroupRepository,
+	streamRepo *repository.StreamRepository,
+	channelProfileRepo *repository.ChannelProfileRepository,
+	streamProfileRepo *repository.StreamProfileRepository,
 	epgDataRepo *repository.EPGDataRepository,
 	programDataRepo *repository.ProgramDataRepository,
 	cfg *config.Config,
 	log zerolog.Logger,
 ) *OutputService {
 	return &OutputService{
-		channelRepo:      channelRepo,
-		channelGroupRepo: channelGroupRepo,
-		epgDataRepo:      epgDataRepo,
-		programDataRepo:  programDataRepo,
-		config:           cfg,
-		log:              log.With().Str("service", "output").Logger(),
+		channelRepo:        channelRepo,
+		channelGroupRepo:   channelGroupRepo,
+		streamRepo:         streamRepo,
+		channelProfileRepo: channelProfileRepo,
+		streamProfileRepo:  streamProfileRepo,
+		epgDataRepo:        epgDataRepo,
+		programDataRepo:    programDataRepo,
+		config:             cfg,
+		log:                log.With().Str("service", "output").Logger(),
 	}
+}
+
+// resolveSourceURL returns the URL of the first active stream for the channel.
+func (s *OutputService) resolveSourceURL(ctx context.Context, channelID int64) string {
+	streams, err := s.channelRepo.GetStreams(ctx, channelID)
+	if err != nil || len(streams) == 0 {
+		return ""
+	}
+	for _, cs := range streams {
+		stream, err := s.streamRepo.GetByID(ctx, cs.StreamID)
+		if err != nil || !stream.IsActive {
+			continue
+		}
+		return stream.URL
+	}
+	return ""
 }
 
 // placeholderLogo is a minimal SVG data URI used when a channel has no logo assigned.
@@ -71,7 +96,7 @@ func (s *OutputService) GenerateM3U(ctx context.Context) (string, error) {
 		groupNames[g.ID] = g.Name
 	}
 
-	baseURL := s.config.BaseURL
+	baseURL := fmt.Sprintf("%s:%d", s.config.BaseURL, s.config.Port)
 
 	var b strings.Builder
 	b.WriteString("#EXTM3U\n")
@@ -109,8 +134,15 @@ func (s *OutputService) GenerateM3U(ctx context.Context) (string, error) {
 
 		b.WriteString(fmt.Sprintf(",%s\n", ch.Name))
 
-		// Stream URL
-		b.WriteString(fmt.Sprintf("%s/proxy/stream/%d\n", baseURL, ch.ID))
+		// Stream URL — direct source for direct mode, proxy for everything else
+		streamURL := fmt.Sprintf("%s/channel/%d", baseURL, ch.ID)
+		mode, _ := ResolveStreamMode(ctx, &ch, s.channelProfileRepo, s.streamProfileRepo, s.log)
+		if mode == "direct" {
+			if src := s.resolveSourceURL(ctx, ch.ID); src != "" {
+				streamURL = src
+			}
+		}
+		b.WriteString(streamURL + "\n")
 	}
 
 	return b.String(), nil

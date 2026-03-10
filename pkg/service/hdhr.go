@@ -63,7 +63,9 @@ type deviceXMLInner struct {
 type HDHRService struct {
 	hdhrDeviceRepo     *repository.HDHRDeviceRepository
 	channelRepo        *repository.ChannelRepository
+	streamRepo         *repository.StreamRepository
 	channelProfileRepo *repository.ChannelProfileRepository
+	streamProfileRepo  *repository.StreamProfileRepository
 	config             *config.Config
 	log                zerolog.Logger
 }
@@ -72,14 +74,18 @@ type HDHRService struct {
 func NewHDHRService(
 	hdhrDeviceRepo *repository.HDHRDeviceRepository,
 	channelRepo *repository.ChannelRepository,
+	streamRepo *repository.StreamRepository,
 	channelProfileRepo *repository.ChannelProfileRepository,
+	streamProfileRepo *repository.StreamProfileRepository,
 	cfg *config.Config,
 	log zerolog.Logger,
 ) *HDHRService {
 	return &HDHRService{
 		hdhrDeviceRepo:     hdhrDeviceRepo,
 		channelRepo:        channelRepo,
+		streamRepo:         streamRepo,
 		channelProfileRepo: channelProfileRepo,
+		streamProfileRepo:  streamProfileRepo,
 		config:             cfg,
 		log:                log.With().Str("service", "hdhr").Logger(),
 	}
@@ -174,6 +180,22 @@ func (s *HDHRService) GetDiscoverData(ctx context.Context, baseURL string) (*Dis
 	}, nil
 }
 
+// resolveSourceURL returns the URL of the first active stream for the channel.
+func (s *HDHRService) resolveSourceURL(ctx context.Context, channelID int64) string {
+	streams, err := s.channelRepo.GetStreams(ctx, channelID)
+	if err != nil || len(streams) == 0 {
+		return ""
+	}
+	for _, cs := range streams {
+		stream, err := s.streamRepo.GetByID(ctx, cs.StreamID)
+		if err != nil || !stream.IsActive {
+			continue
+		}
+		return stream.URL
+	}
+	return ""
+}
+
 // GetLineup returns the lineup.json response for the given HDHR device.
 func (s *HDHRService) GetLineup(ctx context.Context, baseURL string) ([]LineupEntry, error) {
 	channels, err := s.channelRepo.List(ctx)
@@ -186,10 +208,21 @@ func (s *HDHRService) GetLineup(ctx context.Context, baseURL string) ([]LineupEn
 		if !ch.IsEnabled {
 			continue
 		}
+
+		streamURL := fmt.Sprintf("%s/channel/%d", baseURL, ch.ID)
+
+		// For direct channels, point Plex straight at the source
+		mode, _ := ResolveStreamMode(ctx, &ch, s.channelProfileRepo, s.streamProfileRepo, s.log)
+		if mode == "direct" {
+			if src := s.resolveSourceURL(ctx, ch.ID); src != "" {
+				streamURL = src
+			}
+		}
+
 		lineup = append(lineup, LineupEntry{
 			GuideNumber: strconv.Itoa(ch.ChannelNumber),
 			GuideName:   ch.Name,
-			URL:         fmt.Sprintf("%s/proxy/stream/%d", baseURL, ch.ID),
+			URL:         streamURL,
 		})
 	}
 
@@ -218,6 +251,33 @@ func (s *HDHRService) GetDeviceXML(ctx context.Context, baseURL string) (*Device
 		return nil, fmt.Errorf("no enabled hdhr devices")
 	}
 
+	return s.GetDeviceXMLForDevice(ctx, device, baseURL)
+}
+
+// GetDiscoverDataForDevice returns discover.json for a specific device.
+func (s *HDHRService) GetDiscoverDataForDevice(ctx context.Context, device *models.HDHRDevice, baseURL string) (*DiscoverData, error) {
+	return &DiscoverData{
+		FriendlyName:    device.Name,
+		Manufacturer:    "Silicondust",
+		ManufacturerURL: "https://www.silicondust.com/",
+		ModelNumber:     "HDTC-2US",
+		FirmwareName:    "hdhomerun_atsc",
+		FirmwareVersion: device.FirmwareVersion,
+		DeviceID:        device.DeviceID,
+		DeviceAuth:      device.DeviceAuth,
+		BaseURL:         baseURL,
+		LineupURL:       baseURL + "/lineup.json",
+		TunerCount:      device.TunerCount,
+	}, nil
+}
+
+// GetLineupForDevice returns lineup.json using the given device's baseURL.
+func (s *HDHRService) GetLineupForDevice(ctx context.Context, device *models.HDHRDevice, baseURL string) ([]LineupEntry, error) {
+	return s.GetLineup(ctx, baseURL)
+}
+
+// GetDeviceXMLForDevice returns device.xml for a specific device.
+func (s *HDHRService) GetDeviceXMLForDevice(ctx context.Context, device *models.HDHRDevice, baseURL string) (*DeviceXML, error) {
 	return &DeviceXML{
 		XMLNS:   "urn:schemas-upnp-org:device-1-0",
 		URLBase: baseURL,

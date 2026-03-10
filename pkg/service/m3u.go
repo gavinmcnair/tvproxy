@@ -110,11 +110,16 @@ func (s *M3UService) RefreshAccount(ctx context.Context, accountID int64) error 
 
 	s.log.Info().Int("entries", len(entries)).Msg("parsed m3u entries")
 
-	// Build a set of content hashes from the new entries
+	// Build a set of content hashes from the new entries.
+	// Hash is based on accountID + name only, so duplicate channel names
+	// collapse into one stream (first occurrence wins).
 	newHashes := make(map[string]struct{}, len(entries))
 	streams := make([]models.Stream, 0, len(entries))
 	for _, entry := range entries {
-		hash := computeContentHash(entry.URL, entry.Name, account.ID)
+		hash := computeContentHash(entry.Name, account.ID)
+		if _, dup := newHashes[hash]; dup {
+			continue // skip duplicate name
+		}
 		newHashes[hash] = struct{}{}
 		streams = append(streams, models.Stream{
 			M3UAccountID: account.ID,
@@ -251,10 +256,11 @@ func (s *M3UService) fetchURL(ctx context.Context, url string) (io.ReadCloser, e
 	return resp.Body, nil
 }
 
-// computeContentHash generates a SHA-256 hash from the stream URL, name, and account ID
-// to uniquely identify a stream for upsert matching.
-func computeContentHash(url, name string, accountID int64) string {
+// computeContentHash generates a SHA-256 hash from the account ID and stream name.
+// URL is excluded so that duplicate channel names within the same account collapse
+// into a single stream (common in IPTV M3U files with multiple server mirrors).
+func computeContentHash(name string, accountID int64) string {
 	h := sha256.New()
-	h.Write([]byte(fmt.Sprintf("%d:%s:%s", accountID, url, name)))
+	h.Write([]byte(fmt.Sprintf("%d:%s", accountID, name)))
 	return fmt.Sprintf("%x", h.Sum(nil))
 }

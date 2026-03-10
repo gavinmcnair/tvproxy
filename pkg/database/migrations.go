@@ -455,4 +455,187 @@ var migrations = []migration{
 		name: "add_use_custom_args_column",
 		sql:  `ALTER TABLE stream_profiles ADD COLUMN use_custom_args INTEGER NOT NULL DEFAULT 0`,
 	},
+	{
+		name: "add_stream_mode_columns",
+		fn: func(ctx context.Context, db *sql.DB) error {
+			if _, err := db.ExecContext(ctx, `ALTER TABLE stream_profiles ADD COLUMN stream_mode TEXT NOT NULL DEFAULT 'ffmpeg'`); err != nil {
+				return err
+			}
+			// Backfill: "Direct (No Transcoding)" gets stream_mode='direct', all others stay 'ffmpeg'
+			if _, err := db.ExecContext(ctx, `UPDATE stream_profiles SET stream_mode = 'direct' WHERE source_type = 'direct'`); err != nil {
+				return err
+			}
+			return nil
+		},
+	},
+	{
+		name: "reset_stream_profiles_v3",
+		fn: func(ctx context.Context, db *sql.DB) error {
+			if _, err := db.ExecContext(ctx, `DELETE FROM stream_profiles`); err != nil {
+				return err
+			}
+			if _, err := db.ExecContext(ctx, `DELETE FROM sqlite_sequence WHERE name = 'stream_profiles'`); err != nil {
+				return err
+			}
+
+			type seed struct {
+				name       string
+				streamMode string
+				sourceType string
+				hwaccel    string
+				videoCodec string
+				container  string
+				isDefault  bool
+			}
+
+			seeds := []seed{
+				{"Direct", "direct", "m3u", "none", "copy", "mpegts", true},
+				{"Proxy", "proxy", "m3u", "none", "copy", "mpegts", false},
+				{"SAT>IP Copy", "ffmpeg", "satip", "none", "copy", "mpegts", false},
+				{"M3U Copy", "ffmpeg", "m3u", "none", "copy", "mpegts", false},
+				{"M3U → MP4 (Browser/Plex)", "ffmpeg", "m3u", "none", "copy", "mp4", false},
+				{"M3U → Matroska (VLC)", "ffmpeg", "m3u", "none", "copy", "matroska", false},
+			}
+
+			for _, s := range seeds {
+				args := ffmpeg.ComposeStreamProfileArgs(s.sourceType, s.hwaccel, s.videoCodec, s.container)
+				command := "ffmpeg"
+				// Direct and proxy modes don't use ffmpeg
+				if s.streamMode == "direct" || s.streamMode == "proxy" {
+					command = ""
+					args = ""
+				}
+				if _, err := db.ExecContext(ctx,
+					`INSERT INTO stream_profiles (name, stream_mode, source_type, hwaccel, video_codec, container, custom_args, command, args, is_default)
+					 VALUES (?, ?, ?, ?, ?, ?, '', ?, ?, ?)`,
+					s.name, s.streamMode, s.sourceType, s.hwaccel, s.videoCodec, s.container, command, args, s.isDefault); err != nil {
+					return err
+				}
+			}
+			return nil
+		},
+	},
+	{
+		name: "add_is_system_and_browser_profile",
+		fn: func(ctx context.Context, db *sql.DB) error {
+			// Add is_system column
+			if _, err := db.ExecContext(ctx, `ALTER TABLE stream_profiles ADD COLUMN is_system INTEGER NOT NULL DEFAULT 0`); err != nil {
+				return err
+			}
+
+			// Wipe and re-seed with system profiles
+			if _, err := db.ExecContext(ctx, `DELETE FROM stream_profiles`); err != nil {
+				return err
+			}
+			if _, err := db.ExecContext(ctx, `DELETE FROM sqlite_sequence WHERE name = 'stream_profiles'`); err != nil {
+				return err
+			}
+
+			type seed struct {
+				name       string
+				streamMode string
+				sourceType string
+				hwaccel    string
+				videoCodec string
+				container  string
+				isDefault  bool
+				isSystem   bool
+			}
+
+			seeds := []seed{
+				{"Direct", "direct", "m3u", "none", "copy", "mpegts", true, true},
+				{"Proxy", "proxy", "m3u", "none", "copy", "mpegts", false, true},
+				{"Browser", "ffmpeg", "m3u", "none", "copy", "mp4", false, true},
+				{"SAT>IP Copy", "ffmpeg", "satip", "none", "copy", "mpegts", false, false},
+				{"M3U Copy", "ffmpeg", "m3u", "none", "copy", "mpegts", false, false},
+				{"M3U → MP4", "ffmpeg", "m3u", "none", "copy", "mp4", false, false},
+				{"M3U → Matroska", "ffmpeg", "m3u", "none", "copy", "matroska", false, false},
+			}
+
+			for _, s := range seeds {
+				args := ffmpeg.ComposeStreamProfileArgs(s.sourceType, s.hwaccel, s.videoCodec, s.container)
+				command := "ffmpeg"
+				if s.streamMode == "direct" || s.streamMode == "proxy" {
+					command = ""
+					args = ""
+				}
+				if _, err := db.ExecContext(ctx,
+					`INSERT INTO stream_profiles (name, stream_mode, source_type, hwaccel, video_codec, container, custom_args, command, args, is_default, is_system)
+					 VALUES (?, ?, ?, ?, ?, ?, '', ?, ?, ?, ?)`,
+					s.name, s.streamMode, s.sourceType, s.hwaccel, s.videoCodec, s.container, command, args, s.isDefault, s.isSystem); err != nil {
+					return err
+				}
+			}
+			return nil
+		},
+	},
+	{
+		name: "add_port_to_hdhr_devices",
+		fn: func(ctx context.Context, db *sql.DB) error {
+			// Idempotent: check if column already exists (may have been added by a prior broken migration run)
+			var hasPort bool
+			rows2, err := db.QueryContext(ctx, `PRAGMA table_info(hdhr_devices)`)
+			if err != nil {
+				return err
+			}
+			for rows2.Next() {
+				var cid int
+				var name, typ string
+				var notnull int
+				var dflt sql.NullString
+				var pk int
+				if err := rows2.Scan(&cid, &name, &typ, &notnull, &dflt, &pk); err != nil {
+					rows2.Close()
+					return err
+				}
+				if name == "port" {
+					hasPort = true
+				}
+			}
+			rows2.Close()
+
+			if !hasPort {
+				if _, err := db.ExecContext(ctx, `ALTER TABLE hdhr_devices ADD COLUMN port INTEGER NOT NULL DEFAULT 0`); err != nil {
+					return err
+				}
+			}
+			// Backfill existing devices with sequential ports starting at 47601.
+			// Collect IDs first to avoid holding an open cursor while writing (SQLITE_BUSY).
+			rows, err := db.QueryContext(ctx, `SELECT id FROM hdhr_devices WHERE port = 0 ORDER BY id`)
+			if err != nil {
+				return err
+			}
+			var ids []int64
+			for rows.Next() {
+				var id int64
+				if err := rows.Scan(&id); err != nil {
+					rows.Close()
+					return err
+				}
+				ids = append(ids, id)
+			}
+			rows.Close()
+			if err := rows.Err(); err != nil {
+				return err
+			}
+
+			// Get the next available port (in case some devices already have ports)
+			var maxPort int
+			if err := db.QueryRowContext(ctx, `SELECT COALESCE(MAX(port), 47600) FROM hdhr_devices`).Scan(&maxPort); err != nil {
+				return err
+			}
+			port := maxPort + 1
+			if port < 47601 {
+				port = 47601
+			}
+
+			for _, id := range ids {
+				if _, err := db.ExecContext(ctx, `UPDATE hdhr_devices SET port = ? WHERE id = ?`, port, id); err != nil {
+					return err
+				}
+				port++
+			}
+			return nil
+		},
+	},
 }

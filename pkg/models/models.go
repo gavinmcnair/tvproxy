@@ -90,6 +90,7 @@ type Logo struct {
 type StreamProfile struct {
 	ID            int64     `json:"id"`
 	Name          string    `json:"name"`
+	StreamMode    string    `json:"stream_mode"`
 	SourceType    string    `json:"source_type"`
 	HWAccel       string    `json:"hwaccel"`
 	VideoCodec    string    `json:"video_codec"`
@@ -99,6 +100,7 @@ type StreamProfile struct {
 	Command       string    `json:"command,omitempty"`
 	Args          string    `json:"args,omitempty"`
 	IsDefault     bool      `json:"is_default"`
+	IsSystem      bool      `json:"is_system"`
 	CreatedAt     time.Time `json:"created_at"`
 	UpdatedAt     time.Time `json:"updated_at"`
 }
@@ -142,6 +144,7 @@ type HDHRDevice struct {
 	DeviceAuth      string    `json:"device_auth"`
 	FirmwareVersion string    `json:"firmware_version"`
 	TunerCount      int       `json:"tuner_count"`
+	Port            int       `json:"port"`
 	ChannelProfileID *int64   `json:"channel_profile_id,omitempty"`
 	IsEnabled       bool      `json:"is_enabled"`
 	CreatedAt       time.Time `json:"created_at"`

@@ -45,7 +45,7 @@ func setupFullEnv(t *testing.T) *fullTestEnv {
 	cfg := &config.Config{
 		Host:               "localhost",
 		Port:               8080,
-		BaseURL:            "http://localhost:8080",
+		BaseURL:            "http://localhost",
 		JWTSecret:          "test-jwt-secret",
 		AccessTokenExpiry:  15 * time.Minute,
 		RefreshTokenExpiry: 7 * 24 * time.Hour,
@@ -75,8 +75,8 @@ func setupFullEnv(t *testing.T) *fullTestEnv {
 	epgService := service.NewEPGService(epgSourceRepo, epgDataRepo, programDataRepo, userAgentRepo, log)
 	settingsService := service.NewSettingsService(settingsRepo)
 	proxyService := service.NewProxyService(channelRepo, streamRepo, m3uAccountRepo, userAgentRepo, channelProfileRepo, streamProfileRepo, log)
-	hdhrService := service.NewHDHRService(hdhrDeviceRepo, channelRepo, channelProfileRepo, cfg, log)
-	outputService := service.NewOutputService(channelRepo, channelGroupRepo, epgDataRepo, programDataRepo, cfg, log)
+	hdhrService := service.NewHDHRService(hdhrDeviceRepo, channelRepo, streamRepo, channelProfileRepo, streamProfileRepo, cfg, log)
+	outputService := service.NewOutputService(channelRepo, channelGroupRepo, streamRepo, channelProfileRepo, streamProfileRepo, epgDataRepo, programDataRepo, cfg, log)
 
 	// Create test users
 	_, err = authService.CreateUser(context.Background(), "admin", "adminpass", true)
@@ -99,7 +99,7 @@ func setupFullEnv(t *testing.T) *fullTestEnv {
 	streamProfileHandler := NewStreamProfileHandler(streamProfileRepo)
 	epgSourceHandler := NewEPGSourceHandler(epgService)
 	epgDataHandler := NewEPGDataHandler(epgDataRepo, programDataRepo)
-	hdhrHandler := NewHDHRHandler(hdhrService, proxyService, cfg)
+	hdhrHandler := NewHDHRHandler(hdhrService, hdhrDeviceRepo, proxyService, cfg)
 	outputHandler := NewOutputHandler(outputService)
 	settingsHandler := NewSettingsHandler(settingsService)
 	userAgentHandler := NewUserAgentHandler(userAgentRepo)
@@ -591,18 +591,19 @@ func TestIntegration_StreamProfileCRUD(t *testing.T) {
 
 	t.Run("create with dropdowns", func(t *testing.T) {
 		rec := doRequest(t, env, "POST", "/api/stream-profiles/", map[string]interface{}{
-			"name": "SAT>IP QSV H264", "source_type": "satip", "hwaccel": "qsv", "video_codec": "h264", "is_default": false,
+			"name": "SAT>IP QSV H264", "stream_mode": "ffmpeg", "source_type": "satip", "hwaccel": "qsv", "video_codec": "h264", "is_default": false,
 		}, env.adminToken)
 		assert.Equal(t, http.StatusCreated, rec.Code)
 		var profile map[string]interface{}
 		decodeResponse(t, rec, &profile)
 		assert.Equal(t, "SAT>IP QSV H264", profile["name"])
+		assert.Equal(t, "ffmpeg", profile["stream_mode"])
 		assert.Equal(t, "satip", profile["source_type"])
 		assert.Equal(t, "qsv", profile["hwaccel"])
 		assert.Equal(t, "h264", profile["video_codec"])
 		assert.Equal(t, "ffmpeg", profile["command"])
 		assert.Contains(t, profile["args"], "h264_qsv")
-		assert.Nil(t, profile["custom_args"]) // extras only, omitted when empty
+		assert.Nil(t, profile["custom_args"])
 	})
 
 	t.Run("create with custom args", func(t *testing.T) {
@@ -638,12 +639,12 @@ func TestIntegration_StreamProfileCRUD(t *testing.T) {
 		assert.Equal(t, http.StatusOK, rec.Code)
 		var profiles []map[string]interface{}
 		decodeResponse(t, rec, &profiles)
-		// 5 seeded by migrations (Direct, SAT>IP Direct, M3U Direct, M3U→MP4, M3U→Matroska) + 3 created above = 8
-		assert.Len(t, profiles, 8)
+		// 7 seeded by migrations (Direct, Proxy, Browser, SAT>IP Copy, M3U Copy, M3U→MP4, M3U→Matroska) + 3 created above = 10
+		assert.Len(t, profiles, 10)
 	})
 
 	t.Run("get", func(t *testing.T) {
-		rec := doRequest(t, env, "GET", "/api/stream-profiles/6", nil, env.adminToken)
+		rec := doRequest(t, env, "GET", "/api/stream-profiles/8", nil, env.adminToken)
 		assert.Equal(t, http.StatusOK, rec.Code)
 		var profile map[string]interface{}
 		decodeResponse(t, rec, &profile)
@@ -652,7 +653,7 @@ func TestIntegration_StreamProfileCRUD(t *testing.T) {
 	})
 
 	t.Run("update", func(t *testing.T) {
-		rec := doRequest(t, env, "PUT", "/api/stream-profiles/6", map[string]interface{}{
+		rec := doRequest(t, env, "PUT", "/api/stream-profiles/8", map[string]interface{}{
 			"name": "SAT>IP NVENC AV1", "source_type": "satip", "hwaccel": "nvenc", "video_codec": "av1", "is_default": false,
 		}, env.adminToken)
 		assert.Equal(t, http.StatusOK, rec.Code)
@@ -664,14 +665,31 @@ func TestIntegration_StreamProfileCRUD(t *testing.T) {
 		assert.Contains(t, profile["args"], "av1_nvenc")
 	})
 
-	t.Run("delete", func(t *testing.T) {
-		rec := doRequest(t, env, "DELETE", "/api/stream-profiles/7", nil, env.adminToken)
+	t.Run("delete non-system profile", func(t *testing.T) {
+		rec := doRequest(t, env, "DELETE", "/api/stream-profiles/9", nil, env.adminToken)
 		assert.Equal(t, http.StatusNoContent, rec.Code)
+	})
+
+	t.Run("delete system profile is forbidden", func(t *testing.T) {
+		// Profile 1 is "Direct" (is_system=true)
+		rec := doRequest(t, env, "DELETE", "/api/stream-profiles/1", nil, env.adminToken)
+		assert.Equal(t, http.StatusForbidden, rec.Code)
+	})
+
+	t.Run("browser profile is system", func(t *testing.T) {
+		rec := doRequest(t, env, "GET", "/api/stream-profiles/3", nil, env.adminToken)
+		assert.Equal(t, http.StatusOK, rec.Code)
+		var profile map[string]interface{}
+		decodeResponse(t, rec, &profile)
+		assert.Equal(t, "Browser", profile["name"])
+		assert.Equal(t, true, profile["is_system"])
+		assert.Equal(t, "ffmpeg", profile["stream_mode"])
+		assert.Equal(t, "mp4", profile["container"])
 	})
 
 	t.Run("create missing name", func(t *testing.T) {
 		rec := doRequest(t, env, "POST", "/api/stream-profiles/", map[string]interface{}{
-			"source_type": "direct",
+			"source_type": "m3u",
 		}, env.adminToken)
 		assert.Equal(t, http.StatusBadRequest, rec.Code)
 	})
@@ -681,6 +699,33 @@ func TestIntegration_StreamProfileCRUD(t *testing.T) {
 			"name": "Bad", "source_type": "invalid",
 		}, env.adminToken)
 		assert.Equal(t, http.StatusBadRequest, rec.Code)
+	})
+
+	t.Run("create invalid stream_mode", func(t *testing.T) {
+		rec := doRequest(t, env, "POST", "/api/stream-profiles/", map[string]interface{}{
+			"name": "Bad Mode", "stream_mode": "invalid",
+		}, env.adminToken)
+		assert.Equal(t, http.StatusBadRequest, rec.Code)
+	})
+
+	t.Run("create with direct stream_mode", func(t *testing.T) {
+		rec := doRequest(t, env, "POST", "/api/stream-profiles/", map[string]interface{}{
+			"name": "My Direct", "stream_mode": "direct", "is_default": false,
+		}, env.adminToken)
+		assert.Equal(t, http.StatusCreated, rec.Code)
+		var profile map[string]interface{}
+		decodeResponse(t, rec, &profile)
+		assert.Equal(t, "direct", profile["stream_mode"])
+	})
+
+	t.Run("default stream_mode is ffmpeg", func(t *testing.T) {
+		rec := doRequest(t, env, "POST", "/api/stream-profiles/", map[string]interface{}{
+			"name": "No Mode Specified", "source_type": "m3u", "is_default": false,
+		}, env.adminToken)
+		assert.Equal(t, http.StatusCreated, rec.Code)
+		var profile map[string]interface{}
+		decodeResponse(t, rec, &profile)
+		assert.Equal(t, "ffmpeg", profile["stream_mode"])
 	})
 }
 
@@ -1078,6 +1123,7 @@ func TestIntegration_HDHRDeviceCRUD(t *testing.T) {
 		assert.Equal(t, "TVProxy HDHR", device["name"])
 		assert.Equal(t, "12345678", device["device_id"])
 		assert.Equal(t, float64(2), device["tuner_count"])
+		assert.Equal(t, float64(47601), device["port"]) // auto-assigned
 	})
 
 	t.Run("create missing fields", func(t *testing.T) {
@@ -1098,6 +1144,7 @@ func TestIntegration_HDHRDeviceCRUD(t *testing.T) {
 			"device_id":        "12345678",
 			"firmware_version": "20240101",
 			"tuner_count":      4,
+			"port":             47605,
 			"is_enabled":       true,
 		}, env.adminToken)
 		assert.Equal(t, http.StatusOK, rec.Code)
@@ -1105,6 +1152,7 @@ func TestIntegration_HDHRDeviceCRUD(t *testing.T) {
 		decodeResponse(t, rec, &device)
 		assert.Equal(t, "Updated HDHR", device["name"])
 		assert.Equal(t, float64(4), device["tuner_count"])
+		assert.Equal(t, float64(47605), device["port"])
 	})
 
 	t.Run("list after create", func(t *testing.T) {
@@ -1145,7 +1193,7 @@ func TestIntegration_HDHRDiscovery(t *testing.T) {
 		// Create an HDHR device first
 		rec := doRequest(t, env, "POST", "/api/hdhr/devices/", map[string]interface{}{
 			"name": "Test HDHR", "device_id": "ABCD1234", "device_auth": "auth",
-			"firmware_version": "20240101", "tuner_count": 2, "is_enabled": true,
+			"firmware_version": "20240101", "tuner_count": 2, "port": 47601, "is_enabled": true,
 		}, env.adminToken)
 		require.Equal(t, http.StatusCreated, rec.Code)
 
@@ -1419,7 +1467,7 @@ func TestIntegration_FullUserWorkflow(t *testing.T) {
 
 	// Step 8: Create stream profile
 	rec = doRequest(t, env, "POST", "/api/stream-profiles/", map[string]interface{}{
-		"name": "Direct", "source_type": "direct", "hwaccel": "none", "video_codec": "copy", "is_default": true,
+		"name": "My Direct Profile", "stream_mode": "direct", "is_default": true,
 	}, operatorToken)
 	require.Equal(t, http.StatusCreated, rec.Code)
 
@@ -1445,7 +1493,7 @@ func TestIntegration_FullUserWorkflow(t *testing.T) {
 	// Step 11: Create an HDHR device
 	rec = doRequest(t, env, "POST", "/api/hdhr/devices/", map[string]interface{}{
 		"name": "TVProxy Tuner", "device_id": "ABCDEF12", "device_auth": "auth123",
-		"firmware_version": "20240101", "tuner_count": 4, "is_enabled": true,
+		"firmware_version": "20240101", "tuner_count": 4, "port": 47601, "is_enabled": true,
 	}, operatorToken)
 	require.Equal(t, http.StatusCreated, rec.Code)
 

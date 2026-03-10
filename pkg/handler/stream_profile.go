@@ -18,7 +18,8 @@ func NewStreamProfileHandler(repo *repository.StreamProfileRepository) *StreamPr
 	return &StreamProfileHandler{repo: repo}
 }
 
-var validSourceTypes = map[string]bool{"direct": true, "satip": true, "m3u": true}
+var validStreamModes = map[string]bool{"direct": true, "proxy": true, "ffmpeg": true}
+var validSourceTypes = map[string]bool{"satip": true, "m3u": true}
 var validHWAccels = map[string]bool{"none": true, "qsv": true, "nvenc": true, "vaapi": true, "videotoolbox": true}
 var validVideoCodecs = map[string]bool{"copy": true, "h264": true, "h265": true, "av1": true}
 var validContainers = map[string]bool{"mpegts": true, "matroska": true, "mp4": true, "webm": true}
@@ -38,6 +39,7 @@ func (h *StreamProfileHandler) List(w http.ResponseWriter, r *http.Request) {
 func (h *StreamProfileHandler) Create(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Name          string `json:"name"`
+		StreamMode    string `json:"stream_mode"`
 		SourceType    string `json:"source_type"`
 		HWAccel       string `json:"hwaccel"`
 		VideoCodec    string `json:"video_codec"`
@@ -56,9 +58,18 @@ func (h *StreamProfileHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Default stream mode to "ffmpeg" if not provided
+	if req.StreamMode == "" {
+		req.StreamMode = "ffmpeg"
+	}
+	if !validStreamModes[req.StreamMode] {
+		respondError(w, http.StatusBadRequest, "invalid stream_mode")
+		return
+	}
+
 	// Default dropdown values if not provided
 	if req.SourceType == "" {
-		req.SourceType = "direct"
+		req.SourceType = "m3u"
 	}
 	if req.HWAccel == "" {
 		req.HWAccel = "none"
@@ -100,6 +111,7 @@ func (h *StreamProfileHandler) Create(w http.ResponseWriter, r *http.Request) {
 
 	profile := &models.StreamProfile{
 		Name:          req.Name,
+		StreamMode:    req.StreamMode,
 		SourceType:    req.SourceType,
 		HWAccel:       req.HWAccel,
 		VideoCodec:    req.VideoCodec,
@@ -152,6 +164,7 @@ func (h *StreamProfileHandler) Update(w http.ResponseWriter, r *http.Request) {
 
 	var req struct {
 		Name          string `json:"name"`
+		StreamMode    string `json:"stream_mode"`
 		SourceType    string `json:"source_type"`
 		HWAccel       string `json:"hwaccel"`
 		VideoCodec    string `json:"video_codec"`
@@ -167,6 +180,15 @@ func (h *StreamProfileHandler) Update(w http.ResponseWriter, r *http.Request) {
 
 	if req.Name != "" {
 		profile.Name = req.Name
+	}
+
+	// Default stream mode to existing value if not provided
+	if req.StreamMode == "" {
+		req.StreamMode = profile.StreamMode
+	}
+	if !validStreamModes[req.StreamMode] {
+		respondError(w, http.StatusBadRequest, "invalid stream_mode")
+		return
 	}
 
 	// Default dropdown values if not provided
@@ -200,6 +222,7 @@ func (h *StreamProfileHandler) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	profile.StreamMode = req.StreamMode
 	profile.SourceType = req.SourceType
 	profile.HWAccel = req.HWAccel
 	profile.VideoCodec = req.VideoCodec
@@ -230,11 +253,22 @@ func (h *StreamProfileHandler) Update(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, http.StatusOK, profile)
 }
 
-// Delete deletes a stream profile by ID.
+// Delete deletes a stream profile by ID. System profiles cannot be deleted.
 func (h *StreamProfileHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	id, err := urlParamInt64(r, "id")
 	if err != nil {
 		respondError(w, http.StatusBadRequest, "invalid stream profile id")
+		return
+	}
+
+	profile, err := h.repo.GetByID(r.Context(), id)
+	if err != nil {
+		respondError(w, http.StatusNotFound, "stream profile not found")
+		return
+	}
+
+	if profile.IsSystem {
+		respondError(w, http.StatusForbidden, "cannot delete system profile")
 		return
 	}
 

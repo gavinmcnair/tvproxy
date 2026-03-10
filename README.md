@@ -8,9 +8,11 @@ IPTV stream management and proxy server written in Go. Consolidates IPTV sources
 
 - **Stream Management** - Import and manage M3U playlists and Xtream Codes accounts with automatic periodic refresh
 - **Channel Management** - Create channels with multi-stream failover, organize into groups
+- **Stream Profiles** - Configurable transcoding profiles using ffmpeg (hardware-accelerated QSV/VA-API/NVENC/VideoToolbox supported), direct passthrough, or browser-friendly output
+- **Channel Profiles** - Assign stream profiles to groups of channels for consistent transcoding behavior
 - **EPG Support** - Import XMLTV EPG sources, auto-match programs to channels
 - **Stream Proxy** - Fan-out proxy with per-channel connection sharing and automatic failover
-- **HDHomeRun Emulation** - Emulates HDHomeRun devices for native Plex/Emby/Jellyfin DVR integration
+- **HDHomeRun Emulation** - Emulates multiple HDHomeRun devices, each on its own port, for native Plex/Emby/Jellyfin DVR integration. Includes SSDP and UDP discovery.
 - **Output Generation** - Serves M3U playlists and XMLTV EPG for any IPTV player
 - **Web Interface** - Built-in web UI for managing all aspects of the system
 - **Authentication** - JWT-based auth with optional API key support
@@ -21,7 +23,7 @@ IPTV stream management and proxy server written in Go. Consolidates IPTV sources
 
 ```bash
 go build ./cmd/tvproxy/
-./tvproxy
+TVPROXY_BASE_URL=http://192.168.1.100 ./tvproxy
 ```
 
 The server starts on `http://0.0.0.0:8080` by default. On first run, a default admin user is created:
@@ -39,7 +41,7 @@ All configuration is via environment variables:
 | `TVPROXY_DB_PATH` | `tvproxy.db` | SQLite database path |
 | `TVPROXY_JWT_SECRET` | `change-me-in-production` | JWT signing secret |
 | `TVPROXY_API_KEY` | _(empty)_ | Optional API key for X-API-Key header auth |
-| `TVPROXY_BASE_URL` | _(auto-detected)_ | Base URL for SSDP discovery and HDHR links (e.g. `http://192.168.1.100:8080`) |
+| `TVPROXY_BASE_URL` | _(required)_ | Base URL without port (e.g. `http://192.168.1.100`). Server port and per-device HDHR ports are appended automatically. |
 | `TVPROXY_LOG_LEVEL` | `info` | Log level (debug, info, warn, error) |
 | `TVPROXY_LOG_JSON` | `false` | JSON log output |
 | `TVPROXY_M3U_REFRESH_INTERVAL` | `24h` | M3U auto-refresh interval |
@@ -48,18 +50,28 @@ All configuration is via environment variables:
 ## Docker
 
 ```bash
-docker build -t tvproxy .
-docker run -p 8080:8080 -v tvproxy-data:/data tvproxy
+docker run -p 8080:8080 -p 47601-47610:47601-47610 \
+  -e TVPROXY_BASE_URL=http://192.168.1.100 \
+  -v tvproxy-data:/data \
+  gavinmcnair/tvproxy:latest
 ```
+
+Each HDHR device gets its own port starting at 47601. Expose a range of ports to support multiple devices.
 
 For hardware-accelerated transcoding (Intel Arc/QSV or NVIDIA), pass through the GPU devices:
 
 ```bash
 # Intel Arc / QSV
-docker run -p 8080:8080 -v tvproxy-data:/data --device /dev/dri:/dev/dri tvproxy
+docker run -p 8080:8080 -p 47601-47610:47601-47610 \
+  -e TVPROXY_BASE_URL=http://192.168.1.100 \
+  -v tvproxy-data:/data --device /dev/dri:/dev/dri \
+  gavinmcnair/tvproxy:latest
 
 # NVIDIA (requires nvidia-container-toolkit)
-docker run -p 8080:8080 -v tvproxy-data:/data --gpus all tvproxy
+docker run -p 8080:8080 -p 47601-47610:47601-47610 \
+  -e TVPROXY_BASE_URL=http://192.168.1.100 \
+  -v tvproxy-data:/data --gpus all \
+  gavinmcnair/tvproxy:latest
 ```
 
 Or use the provided `docker-compose.yml`:
@@ -92,11 +104,28 @@ docker compose up -d
 ### Channels
 - `GET/POST /api/channels` - List/create channels
 - `GET/PUT/DELETE /api/channels/{id}` - Manage channel
+- `GET /api/channels/{id}/streams` - Get assigned streams
 - `POST /api/channels/{id}/streams` - Assign streams to channel
 
 ### Channel Groups
 - `GET/POST /api/channel-groups` - List/create groups
 - `GET/PUT/DELETE /api/channel-groups/{id}` - Manage group
+
+### Channel Profiles
+- `GET/POST /api/channel-profiles` - List/create channel profiles
+- `GET/PUT/DELETE /api/channel-profiles/{id}` - Manage channel profile
+
+### Stream Profiles
+- `GET/POST /api/stream-profiles` - List/create stream profiles
+- `GET/PUT/DELETE /api/stream-profiles/{id}` - Manage stream profile
+
+### Logos
+- `GET/POST /api/logos` - List/create logos
+- `GET/DELETE /api/logos/{id}` - Get/delete logo
+
+### User Agents
+- `GET/POST /api/user-agents` - List/create user agents
+- `GET/PUT/DELETE /api/user-agents/{id}` - Manage user agent
 
 ### EPG
 - `GET/POST /api/epg/sources` - List/create EPG sources
@@ -116,13 +145,15 @@ docker compose up -d
 - `GET /output/epg` - Generated XMLTV EPG
 
 ### HDHomeRun (no auth required)
-- `GET /hdhr/discover.json` - Device discovery
-- `GET /hdhr/lineup.json` - Channel lineup
-- `GET /hdhr/lineup_status.json` - Lineup status
-- `GET /hdhr/device.xml` - Device description
+These are served on the main port and on each device's dedicated port:
+- `GET /discover.json` - Device discovery
+- `GET /lineup.json` - Channel lineup
+- `GET /lineup_status.json` - Lineup status
+- `GET /device.xml` - Device description
 
 ### Stream Proxy (no auth required)
-- `GET /proxy/stream/{channelID}` - Proxy stream for channel
+- `GET /channel/{channelID}` - Proxy stream for channel
+- `GET /stream/{streamID}` - Direct stream proxy
 
 ### OpenAPI
 - `GET /api/openapi.yaml` - OpenAPI 3.0 specification
@@ -130,14 +161,12 @@ docker compose up -d
 ## Development
 
 ```bash
-# Run tests
-go test ./...
-
-# Build
-go build ./cmd/tvproxy/
-
-# Run
-./tvproxy
+make build          # Local binary
+make test           # Run all tests
+make docker-build   # Multi-arch build (amd64+arm64) and push to Docker Hub
+make docker-local   # Build for current arch only (no push)
+make run            # docker compose up -d
+make logs           # docker compose logs -f
 ```
 
 ## Architecture
@@ -147,12 +176,13 @@ TVProxy follows a clean layered architecture:
 - **`cmd/tvproxy/`** - Application entry point and dependency wiring
 - **`pkg/config/`** - Environment-based configuration
 - **`pkg/database/`** - SQLite connection and migrations
+- **`pkg/ffmpeg/`** - Stream profile ffmpeg argument composition
 - **`pkg/models/`** - Domain structs
 - **`pkg/repository/`** - Data access layer
 - **`pkg/service/`** - Business logic layer
 - **`pkg/handler/`** - HTTP handlers
 - **`pkg/middleware/`** - Auth, logging, recovery middleware
-- **`pkg/worker/`** - Background refresh workers
+- **`pkg/worker/`** - Background workers (M3U/EPG refresh, SSDP, HDHR discovery, per-device HTTP servers)
 - **`pkg/m3u/`** - M3U playlist parser
 - **`pkg/xmltv/`** - XMLTV/EPG parser
 - **`pkg/xtream/`** - Xtream Codes API client

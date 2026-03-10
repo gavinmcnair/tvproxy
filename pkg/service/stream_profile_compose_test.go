@@ -11,14 +11,6 @@ func TestComposeStreamProfileArgs(t *testing.T) {
 		container  string
 		want       string
 	}{
-		{
-			name:       "direct returns empty",
-			sourceType: "direct",
-			hwaccel:    "none",
-			videoCodec: "copy",
-			container:  "mpegts",
-			want:       "",
-		},
 		// No HW accel - copy
 		{
 			name:       "satip copy no hwaccel",

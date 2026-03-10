@@ -1,7 +1,9 @@
 package handler
 
 import (
+	"context"
 	"encoding/xml"
+	"fmt"
 	"net/http"
 
 	"github.com/gavinmcnair/tvproxy/pkg/config"
@@ -11,17 +13,23 @@ import (
 
 // HDHRHandler handles HDHomeRun device emulation and device management HTTP requests.
 type HDHRHandler struct {
-	hdhrService  *service.HDHRService
+	hdhrService    *service.HDHRService
+	hdhrDeviceRepo interface {
+		NextAvailablePort(ctx context.Context) (int, error)
+	}
 	proxyService *service.ProxyService
 	cfg          *config.Config
 }
 
 // NewHDHRHandler creates a new HDHRHandler.
-func NewHDHRHandler(hdhrService *service.HDHRService, proxyService *service.ProxyService, cfg *config.Config) *HDHRHandler {
+func NewHDHRHandler(hdhrService *service.HDHRService, hdhrDeviceRepo interface {
+	NextAvailablePort(ctx context.Context) (int, error)
+}, proxyService *service.ProxyService, cfg *config.Config) *HDHRHandler {
 	return &HDHRHandler{
-		hdhrService:  hdhrService,
-		proxyService: proxyService,
-		cfg:          cfg,
+		hdhrService:    hdhrService,
+		hdhrDeviceRepo: hdhrDeviceRepo,
+		proxyService:   proxyService,
+		cfg:            cfg,
 	}
 }
 
@@ -34,8 +42,9 @@ type lineupStatusResponse struct {
 }
 
 // resolveBaseURL returns the externally reachable base URL for HDHR responses.
+// BaseURL is portless (e.g. http://192.168.1.149), so we append the main server port.
 func (h *HDHRHandler) resolveBaseURL(r *http.Request) string {
-	return h.cfg.BaseURL
+	return fmt.Sprintf("%s:%d", h.cfg.BaseURL, h.cfg.Port)
 }
 
 // Discover returns the HDHomeRun discover.json response.
@@ -110,6 +119,7 @@ func (h *HDHRHandler) CreateDevice(w http.ResponseWriter, r *http.Request) {
 		DeviceAuth       string `json:"device_auth"`
 		FirmwareVersion  string `json:"firmware_version"`
 		TunerCount       int    `json:"tuner_count"`
+		Port             int    `json:"port"`
 		ChannelProfileID *int64 `json:"channel_profile_id"`
 		IsEnabled        bool   `json:"is_enabled"`
 	}
@@ -123,12 +133,24 @@ func (h *HDHRHandler) CreateDevice(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Auto-assign port if not provided
+	port := req.Port
+	if port == 0 {
+		nextPort, err := h.hdhrDeviceRepo.NextAvailablePort(r.Context())
+		if err != nil {
+			respondError(w, http.StatusInternalServerError, "failed to assign port")
+			return
+		}
+		port = nextPort
+	}
+
 	device := &models.HDHRDevice{
 		Name:             req.Name,
 		DeviceID:         req.DeviceID,
 		DeviceAuth:       req.DeviceAuth,
 		FirmwareVersion:  req.FirmwareVersion,
 		TunerCount:       req.TunerCount,
+		Port:             port,
 		ChannelProfileID: req.ChannelProfileID,
 		IsEnabled:        req.IsEnabled,
 	}
@@ -178,6 +200,7 @@ func (h *HDHRHandler) UpdateDevice(w http.ResponseWriter, r *http.Request) {
 		DeviceAuth       string `json:"device_auth"`
 		FirmwareVersion  string `json:"firmware_version"`
 		TunerCount       int    `json:"tuner_count"`
+		Port             int    `json:"port"`
 		ChannelProfileID *int64 `json:"channel_profile_id"`
 		IsEnabled        bool   `json:"is_enabled"`
 	}
@@ -195,6 +218,9 @@ func (h *HDHRHandler) UpdateDevice(w http.ResponseWriter, r *http.Request) {
 	device.DeviceAuth = req.DeviceAuth
 	device.FirmwareVersion = req.FirmwareVersion
 	device.TunerCount = req.TunerCount
+	if req.Port != 0 {
+		device.Port = req.Port
+	}
 	device.ChannelProfileID = req.ChannelProfileID
 	device.IsEnabled = req.IsEnabled
 
