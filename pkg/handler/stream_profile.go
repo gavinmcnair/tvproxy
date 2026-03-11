@@ -162,6 +162,11 @@ func (h *StreamProfileHandler) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if profile.IsSystem {
+		respondError(w, http.StatusForbidden, "cannot edit system profile")
+		return
+	}
+
 	var req struct {
 		Name          string `json:"name"`
 		StreamMode    string `json:"stream_mode"`
@@ -267,8 +272,8 @@ func (h *StreamProfileHandler) Delete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if profile.IsSystem {
-		respondError(w, http.StatusForbidden, "cannot delete system profile")
+	if profile.IsSystem || profile.IsClient {
+		respondError(w, http.StatusForbidden, "cannot delete system or client profile")
 		return
 	}
 

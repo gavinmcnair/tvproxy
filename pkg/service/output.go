@@ -50,22 +50,6 @@ func NewOutputService(
 	}
 }
 
-// resolveSourceURL returns the URL of the first active stream for the channel.
-func (s *OutputService) resolveSourceURL(ctx context.Context, channelID int64) string {
-	streams, err := s.channelRepo.GetStreams(ctx, channelID)
-	if err != nil || len(streams) == 0 {
-		return ""
-	}
-	for _, cs := range streams {
-		stream, err := s.streamRepo.GetByID(ctx, cs.StreamID)
-		if err != nil || !stream.IsActive {
-			continue
-		}
-		return stream.URL
-	}
-	return ""
-}
-
 // placeholderLogo is a minimal SVG data URI used when a channel has no logo assigned.
 const placeholderLogo = `data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='200' viewBox='0 0 200 200'%3E%3Crect width='200' height='200' rx='20' fill='%23374151'/%3E%3Ctext x='100' y='115' font-family='sans-serif' font-size='80' fill='%239CA3AF' text-anchor='middle'%3ETV%3C/text%3E%3C/svg%3E`
 
@@ -138,7 +122,7 @@ func (s *OutputService) GenerateM3U(ctx context.Context) (string, error) {
 		streamURL := fmt.Sprintf("%s/channel/%d", baseURL, ch.ID)
 		mode, _ := ResolveStreamMode(ctx, &ch, s.channelProfileRepo, s.streamProfileRepo, s.log)
 		if mode == "direct" {
-			if src := s.resolveSourceURL(ctx, ch.ID); src != "" {
+			if src := ResolveSourceURL(ctx, ch.ID, s.channelRepo, s.streamRepo); src != "" {
 				streamURL = src
 			}
 		}
@@ -321,7 +305,7 @@ func (s *OutputService) GenerateM3UForGroups(ctx context.Context, groupIDs []int
 		streamURL := fmt.Sprintf("%s/channel/%d", baseURL, ch.ID)
 		mode, _ := ResolveStreamMode(ctx, &ch, s.channelProfileRepo, s.streamProfileRepo, s.log)
 		if mode == "direct" {
-			if src := s.resolveSourceURL(ctx, ch.ID); src != "" {
+			if src := ResolveSourceURL(ctx, ch.ID, s.channelRepo, s.streamRepo); src != "" {
 				streamURL = src
 			}
 		}

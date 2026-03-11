@@ -2,11 +2,13 @@ package service
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"strings"
 
 	"github.com/rs/zerolog"
 
+	"github.com/gavinmcnair/tvproxy/pkg/ffmpeg"
 	"github.com/gavinmcnair/tvproxy/pkg/models"
 	"github.com/gavinmcnair/tvproxy/pkg/repository"
 )
@@ -55,6 +57,91 @@ func (s *ClientService) MatchClient(ctx context.Context, r *http.Request) (*mode
 	}
 
 	return nil, nil
+}
+
+// ListClients returns all clients with their match rules.
+func (s *ClientService) ListClients(ctx context.Context) ([]models.Client, error) {
+	return s.clientRepo.List(ctx)
+}
+
+// GetClient returns a client by ID.
+func (s *ClientService) GetClient(ctx context.Context, id int64) (*models.Client, error) {
+	return s.clientRepo.GetByID(ctx, id)
+}
+
+// CreateClient creates a new client with an auto-created stream profile.
+// The profile is created first; if client creation fails, the profile is cleaned up.
+func (s *ClientService) CreateClient(ctx context.Context, client *models.Client, rules []models.ClientMatchRule) error {
+	// Auto-create a stream profile for this client
+	args := ffmpeg.ComposeStreamProfileArgs("m3u", "none", "copy", "mpegts")
+	profile := &models.StreamProfile{
+		Name:       client.Name,
+		StreamMode: "ffmpeg",
+		SourceType: "m3u",
+		HWAccel:    "none",
+		VideoCodec: "copy",
+		Container:  "mpegts",
+		Command:    "ffmpeg",
+		Args:       args,
+		IsClient:   true,
+	}
+	if err := s.streamProfileRepo.Create(ctx, profile); err != nil {
+		return fmt.Errorf("creating stream profile: %w", err)
+	}
+
+	client.StreamProfileID = profile.ID
+
+	if err := s.clientRepo.Create(ctx, client); err != nil {
+		// Clean up the auto-created profile since client creation failed
+		s.streamProfileRepo.Delete(ctx, profile.ID) //nolint:errcheck // best-effort cleanup
+		return fmt.Errorf("creating client: %w", err)
+	}
+
+	if err := s.clientRepo.SetMatchRules(ctx, client.ID, rules); err != nil {
+		return fmt.Errorf("setting match rules: %w", err)
+	}
+
+	return nil
+}
+
+// UpdateClient updates a client and optionally its match rules.
+func (s *ClientService) UpdateClient(ctx context.Context, client *models.Client, rules []models.ClientMatchRule) error {
+	if err := s.clientRepo.Update(ctx, client); err != nil {
+		return fmt.Errorf("updating client: %w", err)
+	}
+
+	if rules != nil {
+		if err := s.clientRepo.SetMatchRules(ctx, client.ID, rules); err != nil {
+			return fmt.Errorf("updating match rules: %w", err)
+		}
+	}
+
+	return nil
+}
+
+// DeleteClient deletes a client and cleans up the orphaned stream profile if applicable.
+func (s *ClientService) DeleteClient(ctx context.Context, id int64) error {
+	client, err := s.clientRepo.GetByID(ctx, id)
+	if err != nil {
+		return fmt.Errorf("getting client: %w", err)
+	}
+
+	profileID := client.StreamProfileID
+
+	if err := s.clientRepo.Delete(ctx, id); err != nil {
+		return fmt.Errorf("deleting client: %w", err)
+	}
+
+	// Clean up orphaned stream profile (only if not referenced by other clients and not a system profile)
+	profile, profileErr := s.streamProfileRepo.GetByID(ctx, profileID)
+	if profileErr == nil && !profile.IsSystem {
+		referenced, refErr := s.clientRepo.IsStreamProfileReferenced(ctx, profileID)
+		if refErr == nil && !referenced {
+			s.streamProfileRepo.Delete(ctx, profileID) //nolint:errcheck // best-effort cleanup
+		}
+	}
+
+	return nil
 }
 
 // matchesAllRules checks if all match rules are satisfied by the request headers (AND logic).

@@ -21,9 +21,9 @@ func NewStreamProfileRepository(db *database.DB) *StreamProfileRepository {
 func (r *StreamProfileRepository) Create(ctx context.Context, profile *models.StreamProfile) error {
 	now := time.Now()
 	result, err := r.db.ExecContext(ctx,
-		`INSERT INTO stream_profiles (name, stream_mode, source_type, hwaccel, video_codec, container, use_custom_args, custom_args, command, args, is_default, is_system, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		profile.Name, profile.StreamMode, profile.SourceType, profile.HWAccel, profile.VideoCodec, profile.Container, profile.UseCustomArgs, profile.CustomArgs, profile.Command, profile.Args, profile.IsDefault, profile.IsSystem, now, now,
+		`INSERT INTO stream_profiles (name, stream_mode, source_type, hwaccel, video_codec, container, use_custom_args, custom_args, command, args, is_default, is_system, is_client, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		profile.Name, profile.StreamMode, profile.SourceType, profile.HWAccel, profile.VideoCodec, profile.Container, profile.UseCustomArgs, profile.CustomArgs, profile.Command, profile.Args, profile.IsDefault, profile.IsSystem, profile.IsClient, now, now,
 	)
 	if err != nil {
 		return fmt.Errorf("creating stream profile: %w", err)
@@ -41,9 +41,9 @@ func (r *StreamProfileRepository) Create(ctx context.Context, profile *models.St
 func (r *StreamProfileRepository) GetByID(ctx context.Context, id int64) (*models.StreamProfile, error) {
 	profile := &models.StreamProfile{}
 	err := r.db.QueryRowContext(ctx,
-		`SELECT id, name, stream_mode, source_type, hwaccel, video_codec, container, use_custom_args, custom_args, command, args, is_default, is_system, created_at, updated_at
+		`SELECT id, name, stream_mode, source_type, hwaccel, video_codec, container, use_custom_args, custom_args, command, args, is_default, is_system, is_client, created_at, updated_at
 		FROM stream_profiles WHERE id = ?`, id,
-	).Scan(&profile.ID, &profile.Name, &profile.StreamMode, &profile.SourceType, &profile.HWAccel, &profile.VideoCodec, &profile.Container, &profile.UseCustomArgs, &profile.CustomArgs, &profile.Command, &profile.Args, &profile.IsDefault, &profile.IsSystem, &profile.CreatedAt, &profile.UpdatedAt)
+	).Scan(&profile.ID, &profile.Name, &profile.StreamMode, &profile.SourceType, &profile.HWAccel, &profile.VideoCodec, &profile.Container, &profile.UseCustomArgs, &profile.CustomArgs, &profile.Command, &profile.Args, &profile.IsDefault, &profile.IsSystem, &profile.IsClient, &profile.CreatedAt, &profile.UpdatedAt)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return nil, fmt.Errorf("stream profile not found: %w", err)
@@ -55,8 +55,8 @@ func (r *StreamProfileRepository) GetByID(ctx context.Context, id int64) (*model
 
 func (r *StreamProfileRepository) List(ctx context.Context) ([]models.StreamProfile, error) {
 	rows, err := r.db.QueryContext(ctx,
-		`SELECT id, name, stream_mode, source_type, hwaccel, video_codec, container, use_custom_args, custom_args, command, args, is_default, is_system, created_at, updated_at
-		FROM stream_profiles ORDER BY id`,
+		`SELECT id, name, stream_mode, source_type, hwaccel, video_codec, container, use_custom_args, custom_args, command, args, is_default, is_system, is_client, created_at, updated_at
+		FROM stream_profiles ORDER BY CASE WHEN is_system=1 THEN 0 WHEN is_client=1 THEN 1 ELSE 2 END, name`,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("listing stream profiles: %w", err)
@@ -66,7 +66,7 @@ func (r *StreamProfileRepository) List(ctx context.Context) ([]models.StreamProf
 	var profiles []models.StreamProfile
 	for rows.Next() {
 		var p models.StreamProfile
-		if err := rows.Scan(&p.ID, &p.Name, &p.StreamMode, &p.SourceType, &p.HWAccel, &p.VideoCodec, &p.Container, &p.UseCustomArgs, &p.CustomArgs, &p.Command, &p.Args, &p.IsDefault, &p.IsSystem, &p.CreatedAt, &p.UpdatedAt); err != nil {
+		if err := rows.Scan(&p.ID, &p.Name, &p.StreamMode, &p.SourceType, &p.HWAccel, &p.VideoCodec, &p.Container, &p.UseCustomArgs, &p.CustomArgs, &p.Command, &p.Args, &p.IsDefault, &p.IsSystem, &p.IsClient, &p.CreatedAt, &p.UpdatedAt); err != nil {
 			return nil, fmt.Errorf("scanning stream profile: %w", err)
 		}
 		profiles = append(profiles, p)
@@ -80,9 +80,9 @@ func (r *StreamProfileRepository) List(ctx context.Context) ([]models.StreamProf
 func (r *StreamProfileRepository) Update(ctx context.Context, profile *models.StreamProfile) error {
 	now := time.Now()
 	_, err := r.db.ExecContext(ctx,
-		`UPDATE stream_profiles SET name = ?, stream_mode = ?, source_type = ?, hwaccel = ?, video_codec = ?, container = ?, use_custom_args = ?, custom_args = ?, command = ?, args = ?, is_default = ?, is_system = ?, updated_at = ?
+		`UPDATE stream_profiles SET name = ?, stream_mode = ?, source_type = ?, hwaccel = ?, video_codec = ?, container = ?, use_custom_args = ?, custom_args = ?, command = ?, args = ?, is_default = ?, is_system = ?, is_client = ?, updated_at = ?
 		WHERE id = ?`,
-		profile.Name, profile.StreamMode, profile.SourceType, profile.HWAccel, profile.VideoCodec, profile.Container, profile.UseCustomArgs, profile.CustomArgs, profile.Command, profile.Args, profile.IsDefault, profile.IsSystem, now, profile.ID,
+		profile.Name, profile.StreamMode, profile.SourceType, profile.HWAccel, profile.VideoCodec, profile.Container, profile.UseCustomArgs, profile.CustomArgs, profile.Command, profile.Args, profile.IsDefault, profile.IsSystem, profile.IsClient, now, profile.ID,
 	)
 	if err != nil {
 		return fmt.Errorf("updating stream profile: %w", err)
@@ -102,9 +102,9 @@ func (r *StreamProfileRepository) Delete(ctx context.Context, id int64) error {
 func (r *StreamProfileRepository) GetByName(ctx context.Context, name string) (*models.StreamProfile, error) {
 	profile := &models.StreamProfile{}
 	err := r.db.QueryRowContext(ctx,
-		`SELECT id, name, stream_mode, source_type, hwaccel, video_codec, container, use_custom_args, custom_args, command, args, is_default, is_system, created_at, updated_at
+		`SELECT id, name, stream_mode, source_type, hwaccel, video_codec, container, use_custom_args, custom_args, command, args, is_default, is_system, is_client, created_at, updated_at
 		FROM stream_profiles WHERE name = ?`, name,
-	).Scan(&profile.ID, &profile.Name, &profile.StreamMode, &profile.SourceType, &profile.HWAccel, &profile.VideoCodec, &profile.Container, &profile.UseCustomArgs, &profile.CustomArgs, &profile.Command, &profile.Args, &profile.IsDefault, &profile.IsSystem, &profile.CreatedAt, &profile.UpdatedAt)
+	).Scan(&profile.ID, &profile.Name, &profile.StreamMode, &profile.SourceType, &profile.HWAccel, &profile.VideoCodec, &profile.Container, &profile.UseCustomArgs, &profile.CustomArgs, &profile.Command, &profile.Args, &profile.IsDefault, &profile.IsSystem, &profile.IsClient, &profile.CreatedAt, &profile.UpdatedAt)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return nil, fmt.Errorf("stream profile not found: %w", err)
@@ -117,9 +117,9 @@ func (r *StreamProfileRepository) GetByName(ctx context.Context, name string) (*
 func (r *StreamProfileRepository) GetDefault(ctx context.Context) (*models.StreamProfile, error) {
 	profile := &models.StreamProfile{}
 	err := r.db.QueryRowContext(ctx,
-		`SELECT id, name, stream_mode, source_type, hwaccel, video_codec, container, use_custom_args, custom_args, command, args, is_default, is_system, created_at, updated_at
+		`SELECT id, name, stream_mode, source_type, hwaccel, video_codec, container, use_custom_args, custom_args, command, args, is_default, is_system, is_client, created_at, updated_at
 		FROM stream_profiles WHERE is_default = 1 LIMIT 1`,
-	).Scan(&profile.ID, &profile.Name, &profile.StreamMode, &profile.SourceType, &profile.HWAccel, &profile.VideoCodec, &profile.Container, &profile.UseCustomArgs, &profile.CustomArgs, &profile.Command, &profile.Args, &profile.IsDefault, &profile.IsSystem, &profile.CreatedAt, &profile.UpdatedAt)
+	).Scan(&profile.ID, &profile.Name, &profile.StreamMode, &profile.SourceType, &profile.HWAccel, &profile.VideoCodec, &profile.Container, &profile.UseCustomArgs, &profile.CustomArgs, &profile.Command, &profile.Args, &profile.IsDefault, &profile.IsSystem, &profile.IsClient, &profile.CreatedAt, &profile.UpdatedAt)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return nil, fmt.Errorf("default stream profile not found: %w", err)

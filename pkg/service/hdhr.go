@@ -180,22 +180,6 @@ func (s *HDHRService) GetDiscoverData(ctx context.Context, baseURL string) (*Dis
 	}, nil
 }
 
-// resolveSourceURL returns the URL of the first active stream for the channel.
-func (s *HDHRService) resolveSourceURL(ctx context.Context, channelID int64) string {
-	streams, err := s.channelRepo.GetStreams(ctx, channelID)
-	if err != nil || len(streams) == 0 {
-		return ""
-	}
-	for _, cs := range streams {
-		stream, err := s.streamRepo.GetByID(ctx, cs.StreamID)
-		if err != nil || !stream.IsActive {
-			continue
-		}
-		return stream.URL
-	}
-	return ""
-}
-
 // GetLineup returns the lineup.json response for the given HDHR device.
 func (s *HDHRService) GetLineup(ctx context.Context, baseURL string) ([]LineupEntry, error) {
 	channels, err := s.channelRepo.List(ctx)
@@ -214,7 +198,7 @@ func (s *HDHRService) GetLineup(ctx context.Context, baseURL string) ([]LineupEn
 		// For direct channels, point Plex straight at the source
 		mode, _ := ResolveStreamMode(ctx, &ch, s.channelProfileRepo, s.streamProfileRepo, s.log)
 		if mode == "direct" {
-			if src := s.resolveSourceURL(ctx, ch.ID); src != "" {
+			if src := ResolveSourceURL(ctx, ch.ID, s.channelRepo, s.streamRepo); src != "" {
 				streamURL = src
 			}
 		}
@@ -279,6 +263,15 @@ func (s *HDHRService) GetLineupForDevice(ctx context.Context, device *models.HDH
 		return nil, fmt.Errorf("listing channels: %w", err)
 	}
 
+	// Build group filter set once, outside the loop
+	var groupSet map[int64]bool
+	if len(device.ChannelGroupIDs) > 0 {
+		groupSet = make(map[int64]bool, len(device.ChannelGroupIDs))
+		for _, gid := range device.ChannelGroupIDs {
+			groupSet[gid] = true
+		}
+	}
+
 	lineup := make([]LineupEntry, 0, len(channels))
 	for _, ch := range channels {
 		if !ch.IsEnabled {
@@ -286,11 +279,7 @@ func (s *HDHRService) GetLineupForDevice(ctx context.Context, device *models.HDH
 		}
 
 		// Filter by channel groups if device has any set
-		if len(device.ChannelGroupIDs) > 0 {
-			groupSet := make(map[int64]bool, len(device.ChannelGroupIDs))
-			for _, gid := range device.ChannelGroupIDs {
-				groupSet[gid] = true
-			}
+		if groupSet != nil {
 			if ch.ChannelGroupID == nil || !groupSet[*ch.ChannelGroupID] {
 				continue
 			}
@@ -300,7 +289,7 @@ func (s *HDHRService) GetLineupForDevice(ctx context.Context, device *models.HDH
 
 		mode, _ := ResolveStreamMode(ctx, &ch, s.channelProfileRepo, s.streamProfileRepo, s.log)
 		if mode == "direct" {
-			if src := s.resolveSourceURL(ctx, ch.ID); src != "" {
+			if src := ResolveSourceURL(ctx, ch.ID, s.channelRepo, s.streamRepo); src != "" {
 				streamURL = src
 			}
 		}

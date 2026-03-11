@@ -909,4 +909,29 @@ var migrations = []migration{
 			return nil
 		},
 	},
+	{
+		name: "add_is_client_to_stream_profiles",
+		fn: func(ctx context.Context, db *sql.DB) error {
+			// Add is_client column
+			if _, err := db.ExecContext(ctx, `ALTER TABLE stream_profiles ADD COLUMN is_client INTEGER NOT NULL DEFAULT 0`); err != nil {
+				return err
+			}
+			// Mark existing client-linked profiles
+			if _, err := db.ExecContext(ctx, `UPDATE stream_profiles SET is_client = 1 WHERE id IN (SELECT stream_profile_id FROM clients)`); err != nil {
+				return err
+			}
+			// Remove is_system from Browser (now handled by client detection)
+			if _, err := db.ExecContext(ctx, `UPDATE stream_profiles SET is_system = 0 WHERE name = 'Browser' AND is_system = 1`); err != nil {
+				return err
+			}
+			// Set Proxy as the default profile instead of Direct
+			if _, err := db.ExecContext(ctx, `UPDATE stream_profiles SET is_default = 0`); err != nil {
+				return err
+			}
+			if _, err := db.ExecContext(ctx, `UPDATE stream_profiles SET is_default = 1 WHERE name = 'Proxy' AND is_system = 1`); err != nil {
+				return err
+			}
+			return nil
+		},
+	},
 }

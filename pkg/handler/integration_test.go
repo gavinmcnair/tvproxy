@@ -105,7 +105,7 @@ func setupFullEnv(t *testing.T) *fullTestEnv {
 	outputHandler := NewOutputHandler(outputService)
 	settingsHandler := NewSettingsHandler(settingsService)
 	userAgentHandler := NewUserAgentHandler(userAgentRepo)
-	clientHandler := NewClientHandler(clientRepo, streamProfileRepo)
+	clientHandler := NewClientHandler(clientService)
 
 	// Router (mirrors main.go)
 	r := chi.NewRouter()
@@ -651,7 +651,7 @@ func TestIntegration_StreamProfileCRUD(t *testing.T) {
 		assert.Equal(t, http.StatusOK, rec.Code)
 		var profiles []map[string]interface{}
 		decodeResponse(t, rec, &profiles)
-		// 7 seeded system profiles + 3 client-detection profiles (Plex, VLC, Browser) + 3 created above = 13
+		// 2 system (Direct, Proxy) + 5 regular (Browser, SAT>IP Copy, M3U Copy, M3U→MP4, M3U→Matroska) + 3 client (Plex, VLC, Browser) + 3 created above = 13
 		assert.Len(t, profiles, 13)
 	})
 
@@ -688,15 +688,77 @@ func TestIntegration_StreamProfileCRUD(t *testing.T) {
 		assert.Equal(t, http.StatusForbidden, rec.Code)
 	})
 
-	t.Run("browser profile is system", func(t *testing.T) {
-		rec := doRequest(t, env, "GET", "/api/stream-profiles/3", nil, env.adminToken)
+	t.Run("proxy profile is system and default", func(t *testing.T) {
+		rec := doRequest(t, env, "GET", "/api/stream-profiles/2", nil, env.adminToken)
+		assert.Equal(t, http.StatusOK, rec.Code)
+		var profile map[string]interface{}
+		decodeResponse(t, rec, &profile)
+		assert.Equal(t, "Proxy", profile["name"])
+		assert.Equal(t, true, profile["is_system"])
+		assert.Equal(t, true, profile["is_default"])
+		assert.Equal(t, false, profile["is_client"])
+	})
+
+	t.Run("browser profile is client not system", func(t *testing.T) {
+		// Browser profile (ID 3) lost is_system in the migration, but the client-created
+		// Browser profile (ID 10) has is_client=true from the migration
+		rec := doRequest(t, env, "GET", "/api/stream-profiles/10", nil, env.adminToken)
 		assert.Equal(t, http.StatusOK, rec.Code)
 		var profile map[string]interface{}
 		decodeResponse(t, rec, &profile)
 		assert.Equal(t, "Browser", profile["name"])
-		assert.Equal(t, true, profile["is_system"])
-		assert.Equal(t, "ffmpeg", profile["stream_mode"])
-		assert.Equal(t, "mp4", profile["container"])
+		assert.Equal(t, false, profile["is_system"])
+		assert.Equal(t, true, profile["is_client"])
+	})
+
+	t.Run("delete client profile is forbidden", func(t *testing.T) {
+		// Profile 8 is the Plex client profile (is_client=true)
+		rec := doRequest(t, env, "DELETE", "/api/stream-profiles/8", nil, env.adminToken)
+		assert.Equal(t, http.StatusForbidden, rec.Code)
+	})
+
+	t.Run("update system profile is forbidden", func(t *testing.T) {
+		rec := doRequest(t, env, "PUT", "/api/stream-profiles/1", map[string]interface{}{
+			"name": "Renamed Direct",
+		}, env.adminToken)
+		assert.Equal(t, http.StatusForbidden, rec.Code)
+	})
+
+	t.Run("update client profile is allowed", func(t *testing.T) {
+		rec := doRequest(t, env, "PUT", "/api/stream-profiles/8", map[string]interface{}{
+			"name": "Plex Custom", "source_type": "m3u", "hwaccel": "qsv", "video_codec": "h264",
+		}, env.adminToken)
+		assert.Equal(t, http.StatusOK, rec.Code)
+		var profile map[string]interface{}
+		decodeResponse(t, rec, &profile)
+		assert.Equal(t, "Plex Custom", profile["name"])
+		assert.Equal(t, "qsv", profile["hwaccel"])
+		assert.Equal(t, true, profile["is_client"])
+	})
+
+	t.Run("list ordering: system first, then client, then regular", func(t *testing.T) {
+		rec := doRequest(t, env, "GET", "/api/stream-profiles/", nil, env.adminToken)
+		assert.Equal(t, http.StatusOK, rec.Code)
+		var profiles []map[string]interface{}
+		decodeResponse(t, rec, &profiles)
+		// Verify system profiles come first
+		assert.Equal(t, true, profiles[0]["is_system"])
+		assert.Equal(t, true, profiles[1]["is_system"])
+		// Then client profiles
+		foundClient := false
+		for i := 2; i < len(profiles); i++ {
+			if profiles[i]["is_client"] == true {
+				foundClient = true
+			}
+			// Once we see a non-client, non-system profile, no more clients should follow
+			if profiles[i]["is_system"] != true && profiles[i]["is_client"] != true && foundClient {
+				// Verify no more client profiles after this
+				for j := i + 1; j < len(profiles); j++ {
+					assert.NotEqual(t, true, profiles[j]["is_client"], "client profile found after regular profile")
+				}
+				break
+			}
+		}
 	})
 
 	t.Run("create missing name", func(t *testing.T) {

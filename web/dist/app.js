@@ -641,7 +641,7 @@
             }
             const actionsTd = document.createElement('td');
             actionsTd.className = 'actions-cell';
-            if (config.update) {
+            if (config.update !== false && (typeof config.update !== 'function' || config.update(item))) {
               const editBtn = document.createElement('button');
               editBtn.className = 'btn btn-secondary btn-sm';
               editBtn.textContent = 'Edit';
@@ -1531,8 +1531,8 @@
       singular: 'Stream Profile',
       apiPath: '/api/stream-profiles',
       create: true,
-      update: true,
-      delete: item => !item.is_system,
+      update: item => !item.is_system,
+      delete: item => !item.is_system && !item.is_client,
       columns: [
         { key: 'name', label: 'Name' },
         { key: 'stream_mode', label: 'Mode', render: item => ({direct:'Direct',proxy:'Proxy',ffmpeg:'FFmpeg'})[item.stream_mode] || item.stream_mode },
@@ -1543,6 +1543,7 @@
         { key: 'is_default', label: 'Default', render: item => {
           const badges = [];
           if (item.is_system) badges.push(h('span', { className: 'badge badge-info', style: 'margin-right:4px' }, 'System'));
+          if (item.is_client) badges.push(h('span', { className: 'badge badge-warning', style: 'margin-right:4px' }, 'Client'));
           if (item.is_default) badges.push(h('span', { className: 'badge badge-success' }, 'Default'));
           if (badges.length === 0) return '';
           const container = document.createElement('span');

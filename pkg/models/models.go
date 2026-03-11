@@ -102,6 +102,7 @@ type StreamProfile struct {
 	Args          string    `json:"args,omitempty"`
 	IsDefault     bool      `json:"is_default"`
 	IsSystem      bool      `json:"is_system"`
+	IsClient      bool      `json:"is_client"`
 	CreatedAt     time.Time `json:"created_at"`
 	UpdatedAt     time.Time `json:"updated_at"`
 }

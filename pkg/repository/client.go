@@ -120,15 +120,19 @@ func (r *ClientRepository) SetMatchRules(ctx context.Context, clientID int64, ru
 	if _, err := r.db.ExecContext(ctx, `DELETE FROM client_match_rules WHERE client_id = ?`, clientID); err != nil {
 		return fmt.Errorf("clearing match rules: %w", err)
 	}
-	for _, rule := range rules {
+	for i := range rules {
 		result, err := r.db.ExecContext(ctx,
 			`INSERT INTO client_match_rules (client_id, header_name, match_type, match_value) VALUES (?, ?, ?, ?)`,
-			clientID, rule.HeaderName, rule.MatchType, rule.MatchValue)
+			clientID, rules[i].HeaderName, rules[i].MatchType, rules[i].MatchValue)
 		if err != nil {
 			return fmt.Errorf("inserting match rule: %w", err)
 		}
-		id, _ := result.LastInsertId()
-		rule.ID = id
+		id, err := result.LastInsertId()
+		if err != nil {
+			return fmt.Errorf("getting match rule id: %w", err)
+		}
+		rules[i].ID = id
+		rules[i].ClientID = clientID
 	}
 	return nil
 }

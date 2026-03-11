@@ -34,6 +34,23 @@ func ResolveStreamMode(
 	return "proxy", nil
 }
 
+// ResolveSourceURL returns the URL of the first active stream for the channel.
+// Returns empty string if no active stream is found.
+func ResolveSourceURL(ctx context.Context, channelID int64, channelRepo *repository.ChannelRepository, streamRepo *repository.StreamRepository) string {
+	streams, err := channelRepo.GetStreams(ctx, channelID)
+	if err != nil || len(streams) == 0 {
+		return ""
+	}
+	for _, cs := range streams {
+		stream, err := streamRepo.GetByID(ctx, cs.StreamID)
+		if err != nil || !stream.IsActive {
+			continue
+		}
+		return stream.URL
+	}
+	return ""
+}
+
 // lookupStreamProfile follows Channel → ChannelProfile → StreamProfile.
 // Returns nil if no profile is assigned or cannot be found.
 func lookupStreamProfile(

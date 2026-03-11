@@ -108,7 +108,7 @@ func main() {
 	proxyHandler := handler.NewProxyHandler(proxyService, log)
 	settingsHandler := handler.NewSettingsHandler(settingsService)
 	userAgentHandler := handler.NewUserAgentHandler(userAgentRepo)
-	clientHandler := handler.NewClientHandler(clientRepo, streamProfileRepo)
+	clientHandler := handler.NewClientHandler(clientService)
 
 	// Router
 	r := chi.NewRouter()

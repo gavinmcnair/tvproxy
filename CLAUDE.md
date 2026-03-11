@@ -1,6 +1,6 @@
 # TVProxy
 
-IPTV stream management and proxy server written in Go. Inspired by Dispatcharr and Threadfin. Manages channels, streams, EPG data, and emulates HDHomeRun devices for Plex/Emby/Jellyfin.
+IPTV stream management and proxy server written in Go. Inspired by Dispatcharr and Threadfin. Manages channels, streams (M3U and SAT>IP), EPG data, and emulates HDHomeRun devices for Plex/Emby/Jellyfin. SAT>IP stream support is complete; integration testing is ongoing.
 
 ## Build & Test
 
@@ -51,7 +51,8 @@ entrypoint.sh           — Docker entrypoint (UID/GID handling, GPU device grou
 - **Stream profiles**: Dropdown-driven composition (source_type + hwaccel + video_codec + container -> custom_args). `custom_args` is the single source of truth — dropdowns compose initial args, users can then edit directly. Composition logic in pkg/ffmpeg/compose.go.
 - **Proxy**: Profile resolution chain: (1) `?profile=Name` query param, (2) client header detection, (3) Channel -> ChannelProfile -> StreamProfile, (4) default "proxy" fallback. If custom_args is empty (Direct profiles), uses HTTP passthrough. Otherwise spawns ffmpeg with the stored args.
 - **Client detection**: Generic, data-driven header matching. Users define "clients" with HTTP header match rules (any header, any pattern). Each client auto-creates a linked stream profile. Match engine checks rules in priority order (AND logic per client). Zero hardcoded header analysis — all matching driven by database rows. Code: pkg/service/client.go, pkg/repository/client.go, pkg/handler/client.go.
-- **Migration seeds**: 1 VLC user agent, 7 system stream profiles (Direct, Proxy, Browser + SAT>IP Copy, M3U Copy, M3U->MP4, M3U->Matroska), 3 client-detection profiles (Plex, VLC, Browser) with 3 seeded clients.
+- **Stream profile categories**: `is_system` (Direct, Proxy — undeletable, uneditable), `is_client` (auto-created per client — undeletable via API, editable, removed when parent client is deleted), regular (user-created, fully editable). List sorts: system first, client second, regular last (alphabetical within each).
+- **Migration seeds**: 1 VLC user agent, 2 system stream profiles (Direct, Proxy) + 5 regular (Browser, SAT>IP Copy, M3U Copy, M3U->MP4, M3U->Matroska) + 3 client-detection profiles (Plex, VLC, Browser) with 3 seeded clients. Default profile is Proxy.
 
 ## Common Pitfalls
 
