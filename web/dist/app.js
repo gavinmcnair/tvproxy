@@ -202,7 +202,8 @@
     }
   }
   DataCache._listeners = [];
-  DataCache.onChange = function(fn) { DataCache._listeners.push(fn); };
+  DataCache.onChange = function(fn) { DataCache._listeners.push(fn); return fn; };
+  DataCache.offChange = function(fn) { DataCache._listeners = DataCache._listeners.filter(function(f) { return f !== fn; }); };
   DataCache._notify = function() { DataCache._listeners.forEach(function(fn) { fn(); }); };
 
   // ─── Data Caches ──────────────────────────────────────────────────────
@@ -287,6 +288,8 @@
     );
     overlay.appendChild(modal);
     overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+    function onEscape(e) { if (e.key === 'Escape') { overlay.remove(); document.removeEventListener('keydown', onEscape); } }
+    document.addEventListener('keydown', onEscape);
     document.body.appendChild(overlay);
     const firstInput = bodyEl.querySelector('input, select, textarea');
     if (firstInput) firstInput.focus();
@@ -561,17 +564,21 @@
       var nowBtn = h('button', { className: 'btn btn-primary btn-sm', onClick: navigate.bind(null, 0) }, 'Now');
       var nextBtn = h('button', { className: 'btn btn-secondary btn-sm', onClick: navigate.bind(null, 3) }, 'Later \u2192');
 
+      var guideLoading = false;
+
       function navigate(offsetDelta) {
+        if (guideLoading) return;
         if (offsetDelta === 0) {
           windowOffset = 0;
         } else {
           windowOffset += offsetDelta;
         }
-        // Reload with new time window by adjusting hours parameter
         loadGuide();
       }
 
       async function loadGuide() {
+        if (guideLoading) return;
+        guideLoading = true;
         container.innerHTML = '';
         container.appendChild(h('div', { className: 'loading-page' }, h('div', { className: 'spinner' }), 'Loading guide...'));
         try {
@@ -589,8 +596,10 @@
           totalWidth = windowMinutes * PX_PER_MIN;
           programs = guideData.programs || {};
           now = Date.now();
+          guideLoading = false;
           renderFull();
         } catch (err) {
+          guideLoading = false;
           container.innerHTML = '';
           container.appendChild(h('p', { style: 'color: var(--danger)' }, 'Failed to load: ' + err.message));
         }
@@ -915,9 +924,8 @@
       return el;
     });
 
-    // Data status indicator (lives in sidebar footer, updates reactively)
-    const caches = [streamsCache, epgCache, logosCache];
-    const statusEl = h('div', { className: 'data-status' });
+    var caches = [streamsCache, epgCache, logosCache];
+    var statusEl = h('div', { className: 'data-status' });
 
     function updateStatus() {
       var loading = caches.filter(function(c) { return c.state === 'loading'; });
@@ -932,6 +940,8 @@
         statusEl.innerHTML = '';
       }
     }
+    if (renderSidebar._prevListener) DataCache.offChange(renderSidebar._prevListener);
+    renderSidebar._prevListener = updateStatus;
     DataCache.onChange(updateStatus);
     updateStatus();
 
@@ -1064,6 +1074,8 @@
           if (barEl) barEl.className = 'data-status-bar-fill' + (c.state === 'loading' ? ' loading' : c.state === 'ready' ? ' ready' : '');
         });
       }
+      if (renderDashboard._prevListener) DataCache.offChange(renderDashboard._prevListener);
+      renderDashboard._prevListener = updateDashCache;
       DataCache.onChange(updateDashCache);
 
       container.appendChild(grid);
@@ -1635,6 +1647,8 @@
       if (retryTimeout) { clearTimeout(retryTimeout); retryTimeout = null; }
       if (statsInterval) { clearInterval(statsInterval); statsInterval = null; }
       destroyPlayer();
+      video.oncanplay = null;
+      video.onerror = null;
       video.pause();
       video.removeAttribute('src');
       video.load();
@@ -1645,7 +1659,7 @@
     const overlay = document.createElement('div');
     overlay.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.8);z-index:10000;display:flex;align-items:center;justify-content:center;';
     const modal = document.createElement('div');
-    modal.style.cssText = 'background:#1a1a2e;border-radius:8px;padding:16px;max-width:800px;width:90%;position:relative;';
+    modal.style.cssText = 'background:var(--bg-card);border-radius:8px;padding:16px;max-width:800px;width:90%;position:relative;';
 
     // Header with title + buttons
     const header = document.createElement('div');
@@ -2272,7 +2286,7 @@
               h('button', { className: 'btn btn-sm btn-danger', onClick: async () => {
                 if (!confirm('Delete client "' + c.name + '"?')) return;
                 try {
-                  await api.delete('/api/clients/' + c.id);
+                  await api.del('/api/clients/' + c.id);
                   clients = clients.filter(x => x.id !== c.id);
                   toast.success('Client deleted');
                   renderList();

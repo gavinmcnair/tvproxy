@@ -10,7 +10,6 @@ import (
 	"github.com/gavinmcnair/tvproxy/pkg/models"
 )
 
-// GuideProgram represents a program with its EPG channel_id for guide display.
 type GuideProgram struct {
 	ChannelID   string    `json:"channel_id"`
 	Title       string    `json:"title"`
@@ -144,8 +143,6 @@ func (r *ProgramDataRepository) GetNowByChannelID(ctx context.Context, channelID
 	return &p, nil
 }
 
-// ListForGuide returns programs within a time window with their EPG channel_id.
-// Used by the EPG guide grid to display programs across channels.
 func (r *ProgramDataRepository) ListForGuide(ctx context.Context, start, stop time.Time) ([]GuideProgram, error) {
 	rows, err := r.db.QueryContext(ctx,
 		`SELECT e.channel_id, p.title, p.description, p.start, p.stop, p.category

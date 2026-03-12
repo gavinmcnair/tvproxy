@@ -18,30 +18,24 @@ import (
 )
 
 const (
-	// tsPacketSize is the size of an MPEG-TS packet.
 	tsPacketSize = 188
-	// tsReadChunks is the number of TS packets to read at a time.
 	tsReadChunks = 7
-	// tsBufferSize is the total buffer size for reading TS data.
 	tsBufferSize = tsPacketSize * tsReadChunks
 )
 
-// client represents a connected downstream viewer.
-type client struct {
+type streamClient struct {
 	w       http.ResponseWriter
 	flusher http.Flusher
 	done    chan struct{}
 }
 
-// channelConnection tracks an active upstream connection and its downstream clients.
 type channelConnection struct {
 	streamURL string
-	clients   []*client
+	clients   []*streamClient
 	cancel    context.CancelFunc
 	mu        sync.Mutex
 }
 
-// ProxyService handles stream proxying with connection sharing and failover.
 type ProxyService struct {
 	channelRepo        *repository.ChannelRepository
 	streamRepo         *repository.StreamRepository
@@ -56,7 +50,6 @@ type ProxyService struct {
 	connections map[int64]*channelConnection
 }
 
-// NewProxyService creates a new ProxyService.
 func NewProxyService(
 	channelRepo *repository.ChannelRepository,
 	streamRepo *repository.StreamRepository,
@@ -80,184 +73,151 @@ func NewProxyService(
 	}
 }
 
-// ProxyStream proxies a live stream for the given channel to the HTTP response writer.
-// If another client is already watching the same channel, the new client shares
-// the existing upstream connection. When the last client disconnects, the upstream
-// connection is closed.
-//
-// profileOverride optionally overrides the channel's configured profile by name
-// (e.g. "Browser"). When set, connection sharing is skipped to avoid mixing formats.
-func (s *ProxyService) ProxyStream(ctx context.Context, w http.ResponseWriter, r *http.Request, channelID int64, profileOverride string) error {
-	// Verify channel exists
-	channel, err := s.channelRepo.GetByID(ctx, channelID)
-	if err != nil {
-		return fmt.Errorf("channel not found: %w", err)
-	}
-
-	if !channel.IsEnabled {
-		return fmt.Errorf("channel %d is disabled", channelID)
-	}
-
-	// Resolve stream mode and profile
-	var mode string
-	var streamProfile *models.StreamProfile
-
-	skipConnectionSharing := false
-	if profileOverride != "" {
-		// Priority 1: explicit query param
-		sp, err := s.streamProfileRepo.GetByName(ctx, profileOverride)
-		if err != nil {
-			return fmt.Errorf("profile %q not found: %w", profileOverride, err)
-		}
-		mode = sp.StreamMode
-		streamProfile = sp
-		skipConnectionSharing = true
-		s.log.Info().Int64("channel_id", channelID).Str("profile_override", profileOverride).Str("mode", mode).Msg("using profile override")
-	} else if s.clientService != nil {
-		// Priority 2: client header detection
-		matched, err := s.clientService.MatchClient(ctx, r)
-		if err != nil {
-			s.log.Warn().Err(err).Msg("client detection error")
-		}
-		if matched != nil {
-			mode = matched.StreamMode
-			streamProfile = matched
-			skipConnectionSharing = true
-		}
-	}
-	if mode == "" {
-		// Priority 3+4: channel profile chain + fallback
-		mode, streamProfile = ResolveStreamMode(ctx, channel, s.channelProfileRepo, s.streamProfileRepo, s.log)
-	}
-
-	contentType := "video/mp2t"
-	if streamProfile != nil && mode == "ffmpeg" {
-		switch streamProfile.Container {
+func contentTypeForProfile(mode string, profile *models.StreamProfile) string {
+	if profile != nil && mode == "ffmpeg" {
+		switch profile.Container {
 		case "mp4":
-			contentType = "video/mp4"
+			return "video/mp4"
 		case "matroska":
-			contentType = "video/x-matroska"
+			return "video/x-matroska"
 		case "webm":
-			contentType = "video/webm"
+			return "video/webm"
 		}
 	}
+	return "video/mp2t"
+}
 
-	// Create client
-	flusher, ok := w.(http.Flusher)
-	if !ok {
-		return fmt.Errorf("streaming not supported")
-	}
-
-	c := &client{
-		w:       w,
-		flusher: flusher,
-		done:    make(chan struct{}),
-	}
-
-	// Set response headers and flush immediately so the client receives
-	// the HTTP 200 response before the upstream connection is established.
-	// Without this, clients like Plex timeout waiting for a response while
-	// ffmpeg starts up.
+func writeStreamHeaders(w http.ResponseWriter, contentType string) {
 	w.Header().Set("Content-Type", contentType)
 	w.Header().Set("Connection", "close")
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 	w.Header().Set("Cache-Control", "no-cache, no-store")
 	w.WriteHeader(http.StatusOK)
+}
+
+// ProxyStream proxies a live stream for the given channel. When another client
+// is already watching the same channel with the default profile, the new client
+// shares the existing upstream connection. Profile overrides and client-detected
+// profiles get dedicated connections to avoid mixing output formats.
+func (s *ProxyService) ProxyStream(ctx context.Context, w http.ResponseWriter, r *http.Request, channelID int64, profileOverride string) error {
+	channel, err := s.channelRepo.GetByID(ctx, channelID)
+	if err != nil {
+		return fmt.Errorf("channel not found: %w", err)
+	}
+	if !channel.IsEnabled {
+		return fmt.Errorf("channel %d is disabled", channelID)
+	}
+
+	mode, streamProfile, dedicated := s.resolveProfile(ctx, r, channel, profileOverride)
+	contentType := contentTypeForProfile(mode, streamProfile)
+
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		return fmt.Errorf("streaming not supported")
+	}
+
+	c := &streamClient{
+		w:       w,
+		flusher: flusher,
+		done:    make(chan struct{}),
+	}
+
+	// Flush 200 OK immediately so clients like Plex don't timeout during ffmpeg startup
+	writeStreamHeaders(w, contentType)
 	flusher.Flush()
 
-	// Profile overrides and client-detected profiles skip connection sharing (different format, can't mix)
-	if !skipConnectionSharing {
-		// Check if there is already an active connection for this channel
-		s.mu.RLock()
-		conn, exists := s.connections[channelID]
-		s.mu.RUnlock()
-
-		if exists {
-			// Join existing connection
-			conn.mu.Lock()
-			conn.clients = append(conn.clients, c)
-			conn.mu.Unlock()
-
-			s.log.Info().Int64("channel_id", channelID).Msg("client joined existing stream")
-
-			// Wait for client to disconnect
-			select {
-			case <-c.done:
-			case <-r.Context().Done():
-			}
-
-			s.removeClient(channelID, c)
+	if !dedicated {
+		if joined := s.tryJoinExisting(channelID, c, r); joined {
 			return nil
 		}
 	}
 
-	// No existing connection (or profile override) - start a new upstream connection
-	// Headers have already been sent (200 OK) so we cannot return an error
-	// to the handler — it would try to write JSON on top of the stream response.
+	// Headers already sent — cannot return HTTP errors after this point
 	if err := s.startUpstream(ctx, r, channelID, c, mode, streamProfile); err != nil {
 		s.log.Error().Err(err).Int64("channel_id", channelID).Msg("all streams failed for channel")
 	}
 	return nil
 }
 
-// startUpstream initiates an upstream connection for the channel and begins proxying data.
-func (s *ProxyService) startUpstream(ctx context.Context, r *http.Request, channelID int64, c *client, mode string, profile *models.StreamProfile) error {
-	// Get channel streams in priority order
+func (s *ProxyService) resolveProfile(ctx context.Context, r *http.Request, channel *models.Channel, profileOverride string) (string, *models.StreamProfile, bool) {
+	if profileOverride != "" {
+		sp, err := s.streamProfileRepo.GetByName(ctx, profileOverride)
+		if err == nil {
+			s.log.Info().Int64("channel_id", channel.ID).Str("profile", profileOverride).Str("mode", sp.StreamMode).Msg("using profile override")
+			return sp.StreamMode, sp, true
+		}
+	}
+
+	if s.clientService != nil {
+		matched, err := s.clientService.MatchClient(ctx, r)
+		if err != nil {
+			s.log.Warn().Err(err).Msg("client detection error")
+		}
+		if matched != nil {
+			return matched.StreamMode, matched, true
+		}
+	}
+
+	mode, sp := ResolveStreamMode(ctx, channel, s.channelProfileRepo, s.streamProfileRepo, s.log)
+	return mode, sp, false
+}
+
+func (s *ProxyService) tryJoinExisting(channelID int64, c *streamClient, r *http.Request) bool {
+	s.mu.RLock()
+	conn, exists := s.connections[channelID]
+	s.mu.RUnlock()
+
+	if !exists {
+		return false
+	}
+
+	conn.mu.Lock()
+	conn.clients = append(conn.clients, c)
+	conn.mu.Unlock()
+
+	s.log.Info().Int64("channel_id", channelID).Msg("client joined existing stream")
+
+	select {
+	case <-c.done:
+	case <-r.Context().Done():
+	}
+
+	s.removeClient(channelID, c)
+	return true
+}
+
+func (s *ProxyService) startUpstream(ctx context.Context, r *http.Request, channelID int64, c *streamClient, mode string, profile *models.StreamProfile) error {
 	channelStreams, err := s.channelRepo.GetStreams(ctx, channelID)
 	if err != nil {
 		return fmt.Errorf("getting channel streams: %w", err)
 	}
-
 	if len(channelStreams) == 0 {
 		return fmt.Errorf("no streams assigned to channel %d", channelID)
 	}
 
-	// Try each stream in priority order (failover)
 	for _, cs := range channelStreams {
 		stream, err := s.streamRepo.GetByID(ctx, cs.StreamID)
 		if err != nil {
 			s.log.Warn().Err(err).Int64("stream_id", cs.StreamID).Msg("stream not found, trying next")
 			continue
 		}
-
 		if !stream.IsActive {
 			s.log.Warn().Int64("stream_id", stream.ID).Msg("stream inactive, trying next")
 			continue
 		}
 
 		upstreamCtx, cancel := context.WithCancel(context.Background())
-
 		conn := &channelConnection{
 			streamURL: stream.URL,
-			clients:   []*client{c},
+			clients:   []*streamClient{c},
 			cancel:    cancel,
 		}
 
-		// Register the connection
 		s.mu.Lock()
 		s.connections[channelID] = conn
 		s.mu.Unlock()
 
-		var reader io.ReadCloser
-		var startErr error
-
-		switch mode {
-		case "ffmpeg":
-			// Use profile args if available, otherwise use fallback copy args
-			ffmpegProfile := profile
-			if ffmpegProfile == nil || ffmpegProfile.Args == "" {
-				ffmpegProfile = &models.StreamProfile{
-					Name:    "fallback-copy",
-					Command: "ffmpeg",
-					Args:    "-hide_banner -loglevel warning -i {input} -c copy -f mpegts pipe:1",
-				}
-			}
-			reader, startErr = s.startFFmpeg(upstreamCtx, channelID, stream, ffmpegProfile)
-		default:
-			// "proxy" and "direct" both use HTTP passthrough at the proxy endpoint
-			reader, startErr = s.startHTTPPassthrough(upstreamCtx, channelID, stream)
-		}
-
+		reader, startErr := s.openUpstream(upstreamCtx, channelID, stream, mode, profile)
 		if startErr != nil {
 			cancel()
 			s.cleanupConnection(channelID)
@@ -265,10 +225,8 @@ func (s *ProxyService) startUpstream(ctx context.Context, r *http.Request, chann
 			continue
 		}
 
-		// Successfully connected - start proxying in a goroutine
 		go s.proxyLoop(channelID, reader, cancel)
 
-		// Wait for this client to disconnect
 		select {
 		case <-c.done:
 		case <-r.Context().Done():
@@ -281,27 +239,36 @@ func (s *ProxyService) startUpstream(ctx context.Context, r *http.Request, chann
 	return fmt.Errorf("all streams failed for channel %d", channelID)
 }
 
-// startHTTPPassthrough opens a direct HTTP connection to the upstream (no transcoding).
-func (s *ProxyService) startHTTPPassthrough(ctx context.Context, channelID int64, stream *models.Stream) (io.ReadCloser, error) {
-	s.log.Info().
-		Int64("channel_id", channelID).
-		Int64("stream_id", stream.ID).
-		Str("url", stream.URL).
-		Str("mode", "direct passthrough").
-		Msg("starting upstream connection")
+func (s *ProxyService) openUpstream(ctx context.Context, channelID int64, stream *models.Stream, mode string, profile *models.StreamProfile) (io.ReadCloser, error) {
+	switch mode {
+	case "ffmpeg":
+		p := profile
+		if p == nil || p.Args == "" {
+			p = &models.StreamProfile{
+				Name:    "fallback-copy",
+				Command: "ffmpeg",
+				Args:    "-hide_banner -loglevel warning -i {input} -c copy -f mpegts pipe:1",
+			}
+		}
+		return s.startFFmpeg(ctx, channelID, stream, p)
+	default:
+		return s.startHTTPPassthrough(ctx, channelID, stream)
+	}
+}
 
-	upstreamReq, err := http.NewRequestWithContext(ctx, http.MethodGet, stream.URL, nil)
+func (s *ProxyService) startHTTPPassthrough(ctx context.Context, channelID int64, stream *models.Stream) (io.ReadCloser, error) {
+	s.log.Info().Int64("channel_id", channelID).Int64("stream_id", stream.ID).Str("url", stream.URL).Msg("starting HTTP passthrough")
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, stream.URL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("creating upstream request: %w", err)
 	}
+	req.Header.Set("User-Agent", s.config.UserAgent)
 
-	upstreamReq.Header.Set("User-Agent", s.config.UserAgent)
-
-	resp, err := http.DefaultClient.Do(upstreamReq)
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("upstream connection failed: %w", err)
 	}
-
 	if resp.StatusCode != http.StatusOK {
 		resp.Body.Close()
 		return nil, fmt.Errorf("upstream returned %d", resp.StatusCode)
@@ -310,12 +277,10 @@ func (s *ProxyService) startHTTPPassthrough(ctx context.Context, channelID int64
 	return resp.Body, nil
 }
 
-// shellSplit splits a command string into arguments, respecting double and single quotes.
 func shellSplit(s string) []string {
 	var args []string
 	var current strings.Builder
-	inDouble := false
-	inSingle := false
+	inDouble, inSingle := false, false
 
 	for i := 0; i < len(s); i++ {
 		c := s[i]
@@ -339,42 +304,33 @@ func shellSplit(s string) []string {
 	return args
 }
 
-// startFFmpeg spawns an ffmpeg process to transcode the upstream stream.
-func (s *ProxyService) startFFmpeg(ctx context.Context, channelID int64, stream *models.Stream, profile *models.StreamProfile) (io.ReadCloser, error) {
-	// Build the ffmpeg argument list from the stored args string.
-	// The args contain {input} as a placeholder for the stream URL.
-	argsStr := strings.Replace(profile.Args, "{input}", stream.URL, 1)
-	args := shellSplit(argsStr)
-
-	// Inject user agent before -i if not already present
-	{
-		hasUserAgent := false
-		for _, arg := range args {
-			if arg == "-user_agent" {
-				hasUserAgent = true
-				break
-			}
-		}
-		if !hasUserAgent {
-			for i, arg := range args {
-				if arg == "-i" {
-					newArgs := make([]string, 0, len(args)+2)
-					newArgs = append(newArgs, args[:i]...)
-					newArgs = append(newArgs, "-user_agent", s.config.UserAgent)
-					newArgs = append(newArgs, args[i:]...)
-					args = newArgs
-					break
-				}
-			}
+func (s *ProxyService) injectUserAgent(args []string) []string {
+	for _, arg := range args {
+		if arg == "-user_agent" {
+			return args
 		}
 	}
+	for i, arg := range args {
+		if arg == "-i" {
+			newArgs := make([]string, 0, len(args)+2)
+			newArgs = append(newArgs, args[:i]...)
+			newArgs = append(newArgs, "-user_agent", s.config.UserAgent)
+			newArgs = append(newArgs, args[i:]...)
+			return newArgs
+		}
+	}
+	return args
+}
+
+func (s *ProxyService) startFFmpeg(ctx context.Context, channelID int64, stream *models.Stream, profile *models.StreamProfile) (io.ReadCloser, error) {
+	argsStr := strings.Replace(profile.Args, "{input}", stream.URL, 1)
+	args := s.injectUserAgent(shellSplit(argsStr))
 
 	s.log.Info().
 		Int64("channel_id", channelID).
 		Int64("stream_id", stream.ID).
 		Str("url", stream.URL).
 		Str("profile", profile.Name).
-		Str("command", profile.Command).
 		Strs("args", args).
 		Msg("starting transcoding")
 
@@ -382,77 +338,67 @@ func (s *ProxyService) startFFmpeg(ctx context.Context, channelID int64, stream 
 
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
-		return nil, fmt.Errorf("creating ffmpeg stdout pipe: %w", err)
+		return nil, fmt.Errorf("creating stdout pipe: %w", err)
 	}
 
 	stderr, err := cmd.StderrPipe()
 	if err != nil {
-		return nil, fmt.Errorf("creating ffmpeg stderr pipe: %w", err)
+		return nil, fmt.Errorf("creating stderr pipe: %w", err)
 	}
 
 	if err := cmd.Start(); err != nil {
 		return nil, fmt.Errorf("starting ffmpeg: %w", err)
 	}
 
-	// Log ffmpeg stderr in the background
 	go s.logFFmpegStderr(channelID, stderr)
-
-	// Wait for process exit in background to avoid zombie processes.
-	// We capture the error BEFORE checking ctx so hardware/codec errors aren't masked.
-	go func() {
-		waitErr := cmd.Wait()
-		if waitErr != nil {
-			// Check if this was a genuine ffmpeg error vs a normal shutdown
-			if ctx.Err() != nil && cmd.ProcessState != nil && cmd.ProcessState.ExitCode() == -1 {
-				// Killed by signal (context cancelled) — expected shutdown
-				s.log.Info().Int64("channel_id", channelID).Msg("ffmpeg process stopped")
-			} else {
-				exitCode := -1
-				if cmd.ProcessState != nil {
-					exitCode = cmd.ProcessState.ExitCode()
-				}
-				s.log.Error().Err(waitErr).Int("exit_code", exitCode).Int64("channel_id", channelID).Msg("ffmpeg process exited with error")
-			}
-		} else {
-			s.log.Info().Int64("channel_id", channelID).Msg("ffmpeg process finished")
-		}
-	}()
+	go s.waitFFmpeg(ctx, channelID, cmd)
 
 	return stdout, nil
 }
 
-// logFFmpegStderr reads ffmpeg's stderr and logs each line at WARN level
-// so hardware/codec errors are always visible.
+func (s *ProxyService) waitFFmpeg(ctx context.Context, channelID int64, cmd *exec.Cmd) {
+	waitErr := cmd.Wait()
+	if waitErr == nil {
+		s.log.Info().Int64("channel_id", channelID).Msg("ffmpeg process finished")
+		return
+	}
+	if ctx.Err() != nil && cmd.ProcessState != nil && cmd.ProcessState.ExitCode() == -1 {
+		s.log.Info().Int64("channel_id", channelID).Msg("ffmpeg process stopped")
+		return
+	}
+	exitCode := -1
+	if cmd.ProcessState != nil {
+		exitCode = cmd.ProcessState.ExitCode()
+	}
+	s.log.Error().Err(waitErr).Int("exit_code", exitCode).Int64("channel_id", channelID).Msg("ffmpeg exited with error")
+}
+
 func (s *ProxyService) logFFmpegStderr(channelID int64, stderr io.ReadCloser) {
+	defer stderr.Close()
 	scanner := bufio.NewScanner(stderr)
 	for scanner.Scan() {
-		line := scanner.Text()
-		s.log.Warn().Int64("channel_id", channelID).Str("ffmpeg", line).Msg("ffmpeg output")
+		s.log.Warn().Int64("channel_id", channelID).Str("ffmpeg", scanner.Text()).Msg("ffmpeg output")
 	}
 }
 
-// proxyLoop reads from the upstream and distributes data to all connected clients.
 func (s *ProxyService) proxyLoop(channelID int64, upstream io.ReadCloser, cancel context.CancelFunc) {
 	defer upstream.Close()
 	defer cancel()
 	defer s.cleanupConnection(channelID)
 
 	buf := make([]byte, tsBufferSize)
-
 	for {
 		n, err := upstream.Read(buf)
 		if n > 0 {
 			s.mu.RLock()
 			conn, exists := s.connections[channelID]
 			s.mu.RUnlock()
-
 			if !exists {
 				return
 			}
 
 			conn.mu.Lock()
-			// Write to all connected clients, removing any that fail
-			alive := make([]*client, 0, len(conn.clients))
+			alive := make([]*streamClient, 0, len(conn.clients))
 			for _, c := range conn.clients {
 				if _, writeErr := c.w.Write(buf[:n]); writeErr != nil {
 					close(c.done)
@@ -462,8 +408,6 @@ func (s *ProxyService) proxyLoop(channelID int64, upstream io.ReadCloser, cancel
 				alive = append(alive, c)
 			}
 			conn.clients = alive
-
-			// If no clients remain, stop the upstream
 			if len(conn.clients) == 0 {
 				conn.mu.Unlock()
 				s.log.Info().Int64("channel_id", channelID).Msg("no clients remaining, closing upstream")
@@ -476,30 +420,31 @@ func (s *ProxyService) proxyLoop(channelID int64, upstream io.ReadCloser, cancel
 			if err != io.EOF {
 				s.log.Error().Err(err).Int64("channel_id", channelID).Msg("upstream read error")
 			}
-			// Notify all remaining clients
-			s.mu.RLock()
-			conn, exists := s.connections[channelID]
-			s.mu.RUnlock()
-			if exists {
-				conn.mu.Lock()
-				for _, c := range conn.clients {
-					close(c.done)
-				}
-				conn.clients = nil
-				conn.mu.Unlock()
-			}
+			s.notifyAllClients(channelID)
 			return
 		}
 	}
 }
 
-// removeClient removes a client from the channel connection. If this is the last
-// client, it cancels the upstream connection.
-func (s *ProxyService) removeClient(channelID int64, c *client) {
+func (s *ProxyService) notifyAllClients(channelID int64) {
 	s.mu.RLock()
 	conn, exists := s.connections[channelID]
 	s.mu.RUnlock()
+	if !exists {
+		return
+	}
+	conn.mu.Lock()
+	for _, c := range conn.clients {
+		close(c.done)
+	}
+	conn.clients = nil
+	conn.mu.Unlock()
+}
 
+func (s *ProxyService) removeClient(channelID int64, c *streamClient) {
+	s.mu.RLock()
+	conn, exists := s.connections[channelID]
+	s.mu.RUnlock()
 	if !exists {
 		return
 	}
@@ -522,78 +467,53 @@ func (s *ProxyService) removeClient(channelID int64, c *client) {
 	}
 }
 
-// cleanupConnection removes the connection entry for a channel.
 func (s *ProxyService) cleanupConnection(channelID int64) {
 	s.mu.Lock()
 	delete(s.connections, channelID)
 	s.mu.Unlock()
 }
 
-// ProxyRawStream proxies a raw stream by stream ID.
-// When profileOverride is set (e.g. "Browser"), the stream is transcoded via ffmpeg
-// using the named profile. Otherwise, raw HTTP passthrough is used.
+// ProxyRawStream proxies a single stream by ID, optionally transcoding via the named profile.
 func (s *ProxyService) ProxyRawStream(ctx context.Context, w http.ResponseWriter, r *http.Request, streamID int64, profileOverride string) error {
 	stream, err := s.streamRepo.GetByID(ctx, streamID)
 	if err != nil {
 		return fmt.Errorf("stream not found: %w", err)
 	}
-
 	if !stream.IsActive {
 		return fmt.Errorf("stream %d is inactive", streamID)
 	}
 
-	// Resolve profile if override is specified
-	var streamProfile *models.StreamProfile
+	var profile *models.StreamProfile
 	if profileOverride != "" {
 		sp, err := s.streamProfileRepo.GetByName(ctx, profileOverride)
 		if err != nil {
 			return fmt.Errorf("profile %q not found: %w", profileOverride, err)
 		}
-		streamProfile = sp
+		profile = sp
 	}
 
-	// If we have a profile with args, use ffmpeg transcoding
-	if streamProfile != nil && streamProfile.Args != "" {
-		return s.proxyRawStreamFFmpeg(ctx, w, r, stream, streamProfile)
+	if profile != nil && profile.Args != "" {
+		return s.proxyRawStreamFFmpeg(ctx, w, r, stream, profile)
 	}
-
-	// Otherwise, raw HTTP passthrough
 	return s.proxyRawStreamPassthrough(ctx, w, r, stream)
 }
 
-// proxyRawStreamFFmpeg transcodes a raw stream through ffmpeg.
 func (s *ProxyService) proxyRawStreamFFmpeg(ctx context.Context, w http.ResponseWriter, r *http.Request, stream *models.Stream, profile *models.StreamProfile) error {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		return fmt.Errorf("streaming not supported")
 	}
 
-	contentType := "video/mp2t"
-	switch profile.Container {
-	case "mp4":
-		contentType = "video/mp4"
-	case "matroska":
-		contentType = "video/x-matroska"
-	case "webm":
-		contentType = "video/webm"
-	}
-
-	// Use a background context so ffmpeg isn't killed before we start reading
 	ffmpegCtx, cancel := context.WithCancel(context.Background())
-
 	reader, err := s.startFFmpeg(ffmpegCtx, 0, stream, profile)
 	if err != nil {
 		cancel()
 		return fmt.Errorf("starting ffmpeg: %w", err)
 	}
 
-	s.log.Info().Int64("stream_id", stream.ID).Str("url", stream.URL).Str("profile", profile.Name).Msg("raw stream ffmpeg proxy started")
+	s.log.Info().Int64("stream_id", stream.ID).Str("profile", profile.Name).Msg("raw stream ffmpeg started")
 
-	w.Header().Set("Content-Type", contentType)
-	w.Header().Set("Connection", "close")
-	w.Header().Set("Access-Control-Allow-Origin", "*")
-	w.Header().Set("Cache-Control", "no-cache, no-store")
-	w.WriteHeader(http.StatusOK)
+	writeStreamHeaders(w, contentTypeForProfile("ffmpeg", profile))
 	flusher.Flush()
 
 	buf := make([]byte, tsBufferSize)
@@ -603,13 +523,13 @@ func (s *ProxyService) proxyRawStreamFFmpeg(ctx context.Context, w http.Response
 			if _, writeErr := w.Write(buf[:n]); writeErr != nil {
 				cancel()
 				reader.Close()
-				return nil // client disconnected
+				return nil
 			}
 			flusher.Flush()
 		}
 		if readErr != nil {
 			if readErr != io.EOF {
-				s.log.Error().Err(readErr).Int64("stream_id", stream.ID).Msg("raw stream ffmpeg read error")
+				s.log.Error().Err(readErr).Int64("stream_id", stream.ID).Msg("raw stream read error")
 			}
 			cancel()
 			reader.Close()
@@ -618,21 +538,19 @@ func (s *ProxyService) proxyRawStreamFFmpeg(ctx context.Context, w http.Response
 	}
 }
 
-// proxyRawStreamPassthrough does direct HTTP passthrough of a raw stream.
 func (s *ProxyService) proxyRawStreamPassthrough(ctx context.Context, w http.ResponseWriter, r *http.Request, stream *models.Stream) error {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		return fmt.Errorf("streaming not supported")
 	}
 
-	upstreamReq, err := http.NewRequestWithContext(r.Context(), http.MethodGet, stream.URL, nil)
+	req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, stream.URL, nil)
 	if err != nil {
 		return fmt.Errorf("creating upstream request: %w", err)
 	}
+	req.Header.Set("User-Agent", s.config.UserAgent)
 
-	upstreamReq.Header.Set("User-Agent", s.config.UserAgent)
-
-	resp, err := http.DefaultClient.Do(upstreamReq)
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("upstream connection failed: %w", err)
 	}
@@ -644,11 +562,7 @@ func (s *ProxyService) proxyRawStreamPassthrough(ctx context.Context, w http.Res
 
 	s.log.Info().Int64("stream_id", stream.ID).Str("url", stream.URL).Msg("raw stream passthrough started")
 
-	w.Header().Set("Content-Type", "video/mp2t")
-	w.Header().Set("Connection", "close")
-	w.Header().Set("Access-Control-Allow-Origin", "*")
-	w.Header().Set("Cache-Control", "no-cache, no-store")
-	w.WriteHeader(http.StatusOK)
+	writeStreamHeaders(w, "video/mp2t")
 	flusher.Flush()
 
 	buf := make([]byte, tsBufferSize)
@@ -656,7 +570,7 @@ func (s *ProxyService) proxyRawStreamPassthrough(ctx context.Context, w http.Res
 		n, readErr := resp.Body.Read(buf)
 		if n > 0 {
 			if _, writeErr := w.Write(buf[:n]); writeErr != nil {
-				return nil // client disconnected
+				return nil
 			}
 			flusher.Flush()
 		}
@@ -669,18 +583,15 @@ func (s *ProxyService) proxyRawStreamPassthrough(ctx context.Context, w http.Res
 	}
 }
 
-// ActiveConnections returns the number of channels currently being proxied.
 func (s *ProxyService) ActiveConnections() int {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return len(s.connections)
 }
 
-// ActiveClients returns the total number of connected clients across all channels.
 func (s *ProxyService) ActiveClients() int {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-
 	total := 0
 	for _, conn := range s.connections {
 		conn.mu.Lock()

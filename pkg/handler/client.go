@@ -2,6 +2,7 @@ package handler
 
 import (
 	"net/http"
+	"strings"
 
 	"github.com/gavinmcnair/tvproxy/pkg/models"
 	"github.com/gavinmcnair/tvproxy/pkg/service"
@@ -9,24 +10,20 @@ import (
 
 var validMatchTypes = map[string]bool{"exists": true, "contains": true, "equals": true, "prefix": true}
 
-// ClientHandler handles client detection HTTP requests.
 type ClientHandler struct {
 	clientService *service.ClientService
 }
 
-// NewClientHandler creates a new ClientHandler.
 func NewClientHandler(clientService *service.ClientService) *ClientHandler {
 	return &ClientHandler{clientService: clientService}
 }
 
-// List returns all clients with their match rules.
 func (h *ClientHandler) List(w http.ResponseWriter, r *http.Request) {
 	clients, err := h.clientService.ListClients(r.Context())
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, "failed to list clients")
 		return
 	}
-
 	respondJSON(w, http.StatusOK, clients)
 }
 
@@ -43,14 +40,12 @@ type clientMatchRuleRequest struct {
 	MatchValue string `json:"match_value"`
 }
 
-// Create creates a new client with auto-created stream profile.
 func (h *ClientHandler) Create(w http.ResponseWriter, r *http.Request) {
 	var req clientCreateRequest
 	if err := decodeJSON(r, &req); err != nil {
 		respondError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-
 	if req.Name == "" {
 		respondError(w, http.StatusBadRequest, "name is required")
 		return
@@ -69,7 +64,6 @@ func (h *ClientHandler) Create(w http.ResponseWriter, r *http.Request) {
 		Priority:  req.Priority,
 		IsEnabled: req.IsEnabled,
 	}
-
 	rules := toMatchRules(0, req.Rules)
 
 	if err := h.clientService.CreateClient(r.Context(), client, rules); err != nil {
@@ -77,17 +71,14 @@ func (h *ClientHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Reload to get hydrated rules
 	client, err := h.clientService.GetClient(r.Context(), client.ID)
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, "failed to reload client")
 		return
 	}
-
 	respondJSON(w, http.StatusCreated, client)
 }
 
-// Get returns a client by ID.
 func (h *ClientHandler) Get(w http.ResponseWriter, r *http.Request) {
 	id, err := urlParamInt64(r, "id")
 	if err != nil {
@@ -100,11 +91,9 @@ func (h *ClientHandler) Get(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusNotFound, "client not found")
 		return
 	}
-
 	respondJSON(w, http.StatusOK, client)
 }
 
-// Update updates a client by ID.
 func (h *ClientHandler) Update(w http.ResponseWriter, r *http.Request) {
 	id, err := urlParamInt64(r, "id")
 	if err != nil {
@@ -130,7 +119,6 @@ func (h *ClientHandler) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Validate rules BEFORE making any changes
 	if req.Rules != nil {
 		if len(req.Rules) == 0 {
 			respondError(w, http.StatusBadRequest, "at least one match rule is required")
@@ -165,17 +153,14 @@ func (h *ClientHandler) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Reload
 	client, err = h.clientService.GetClient(r.Context(), client.ID)
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, "failed to reload client")
 		return
 	}
-
 	respondJSON(w, http.StatusOK, client)
 }
 
-// Delete deletes a client by ID. Also cleans up the linked stream profile if orphaned.
 func (h *ClientHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	id, err := urlParamInt64(r, "id")
 	if err != nil {
@@ -184,10 +169,13 @@ func (h *ClientHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.clientService.DeleteClient(r.Context(), id); err != nil {
-		respondError(w, http.StatusNotFound, "client not found")
+		if strings.Contains(err.Error(), "getting client") {
+			respondError(w, http.StatusNotFound, "client not found")
+		} else {
+			respondError(w, http.StatusInternalServerError, "failed to delete client")
+		}
 		return
 	}
-
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -206,7 +194,6 @@ func validateRules(rules []clientMatchRuleRequest) string {
 	return ""
 }
 
-// toMatchRules converts request rule DTOs to model objects.
 func toMatchRules(clientID int64, reqs []clientMatchRuleRequest) []models.ClientMatchRule {
 	rules := make([]models.ClientMatchRule, len(reqs))
 	for i, rr := range reqs {
