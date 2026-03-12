@@ -86,6 +86,7 @@ func main() {
 	proxyService := service.NewProxyService(channelRepo, streamRepo, m3uAccountRepo, channelProfileRepo, streamProfileRepo, clientService, cfg, log)
 	hdhrService := service.NewHDHRService(hdhrDeviceRepo, channelRepo, streamRepo, channelProfileRepo, streamProfileRepo, cfg, log)
 	outputService := service.NewOutputService(channelRepo, channelGroupRepo, streamRepo, channelProfileRepo, streamProfileRepo, epgDataRepo, programDataRepo, cfg, log)
+	vodService := service.NewVODService(channelRepo, streamRepo, streamProfileRepo, cfg, log)
 
 	// Auth middleware
 	authMW := middleware.NewAuthMiddleware(authService, cfg.APIKey)
@@ -105,6 +106,7 @@ func main() {
 	hdhrHandler := handler.NewHDHRHandler(hdhrService, hdhrDeviceRepo, proxyService, cfg)
 	outputHandler := handler.NewOutputHandler(outputService)
 	proxyHandler := handler.NewProxyHandler(proxyService, log)
+	vodHandler := handler.NewVODHandler(vodService, log)
 	settingsHandler := handler.NewSettingsHandler(settingsService)
 	clientHandler := handler.NewClientHandler(clientService)
 
@@ -145,6 +147,14 @@ func main() {
 	// Stream routes (no auth for player access)
 	r.Get("/channel/{channelID}", proxyHandler.Stream)
 	r.Get("/stream/{streamID}", proxyHandler.RawStream)
+
+	// VOD routes (no auth for player access)
+	r.Get("/stream/{streamID}/probe", vodHandler.ProbeStream)
+	r.Post("/stream/{streamID}/vod", vodHandler.CreateSession)
+	r.Post("/channel/{channelID}/vod", vodHandler.CreateChannelSession)
+	r.Get("/vod/{sessionID}/status", vodHandler.Status)
+	r.Get("/vod/{sessionID}/seek", vodHandler.Seek)
+	r.Delete("/vod/{sessionID}", vodHandler.DeleteSession)
 
 	// Authenticated API routes
 	r.Group(func(r chi.Router) {
@@ -286,6 +296,7 @@ func main() {
 	wm.Add("ssdp", worker.NewSSDPWorker(hdhrDeviceRepo, baseURL, log))
 	wm.Add("hdhr_discover", worker.NewHDHRDiscoverWorker(hdhrDeviceRepo, baseURL, log))
 	wm.Add("hdhr_servers", worker.NewHDHRServerWorker(hdhrDeviceRepo, hdhrService, proxyService, outputService, cfg, log))
+	wm.Add("vod_cleanup", worker.NewVODCleanupWorker(vodService, 60*time.Second, log))
 
 	wm.Start(ctx)
 

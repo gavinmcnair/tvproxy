@@ -78,6 +78,7 @@ func setupFullEnv(t *testing.T) *fullTestEnv {
 	proxyService := service.NewProxyService(channelRepo, streamRepo, m3uAccountRepo, channelProfileRepo, streamProfileRepo, clientService, cfg, log)
 	hdhrService := service.NewHDHRService(hdhrDeviceRepo, channelRepo, streamRepo, channelProfileRepo, streamProfileRepo, cfg, log)
 	outputService := service.NewOutputService(channelRepo, channelGroupRepo, streamRepo, channelProfileRepo, streamProfileRepo, epgDataRepo, programDataRepo, cfg, log)
+	vodService := service.NewVODService(channelRepo, streamRepo, streamProfileRepo, cfg, log)
 
 	// Create test users
 	_, err = authService.CreateUser(context.Background(), "admin", "adminpass", true)
@@ -102,6 +103,7 @@ func setupFullEnv(t *testing.T) *fullTestEnv {
 	epgDataHandler := NewEPGDataHandler(epgDataRepo, programDataRepo)
 	hdhrHandler := NewHDHRHandler(hdhrService, hdhrDeviceRepo, proxyService, cfg)
 	outputHandler := NewOutputHandler(outputService)
+	vodHandler := NewVODHandler(vodService, log)
 	settingsHandler := NewSettingsHandler(settingsService)
 	clientHandler := NewClientHandler(clientService)
 
@@ -121,6 +123,14 @@ func setupFullEnv(t *testing.T) *fullTestEnv {
 	// Output routes (no auth)
 	r.Get("/output/m3u", outputHandler.M3U)
 	r.Get("/output/epg", outputHandler.EPG)
+
+	// VOD routes (no auth)
+	r.Get("/stream/{streamID}/probe", vodHandler.ProbeStream)
+	r.Post("/stream/{streamID}/vod", vodHandler.CreateSession)
+	r.Post("/channel/{channelID}/vod", vodHandler.CreateChannelSession)
+	r.Get("/vod/{sessionID}/status", vodHandler.Status)
+	r.Get("/vod/{sessionID}/seek", vodHandler.Seek)
+	r.Delete("/vod/{sessionID}", vodHandler.DeleteSession)
 
 	// Authenticated API routes
 	r.Group(func(r chi.Router) {

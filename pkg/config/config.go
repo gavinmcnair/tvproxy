@@ -35,6 +35,10 @@ type Config struct {
 	// Workers
 	M3URefreshInterval time.Duration
 	EPGRefreshInterval time.Duration
+
+	// VOD
+	VODTempDir        string
+	VODSessionTimeout time.Duration
 }
 
 func Load() *Config {
@@ -52,6 +56,8 @@ func Load() *Config {
 		LogJSON:            envBool("TVPROXY_LOG_JSON", false),
 		M3URefreshInterval: envDuration("TVPROXY_M3U_REFRESH_INTERVAL", 24*time.Hour),
 		EPGRefreshInterval: envDuration("TVPROXY_EPG_REFRESH_INTERVAL", 12*time.Hour),
+		VODTempDir:         envStr("TVPROXY_VOD_TEMP_DIR", "/tmp/tvproxy-vod"),
+		VODSessionTimeout:  envDuration("TVPROXY_VOD_SESSION_TIMEOUT", 5*time.Minute),
 	}
 }
 

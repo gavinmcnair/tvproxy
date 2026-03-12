@@ -277,7 +277,7 @@ func (s *ProxyService) startHTTPPassthrough(ctx context.Context, channelID int64
 	return resp.Body, nil
 }
 
-func shellSplit(s string) []string {
+func ShellSplit(s string) []string {
 	var args []string
 	var current strings.Builder
 	inDouble, inSingle := false, false
@@ -304,7 +304,7 @@ func shellSplit(s string) []string {
 	return args
 }
 
-func (s *ProxyService) injectUserAgent(args []string) []string {
+func InjectUserAgent(args []string, userAgent string) []string {
 	for _, arg := range args {
 		if arg == "-user_agent" {
 			return args
@@ -314,7 +314,7 @@ func (s *ProxyService) injectUserAgent(args []string) []string {
 		if arg == "-i" {
 			newArgs := make([]string, 0, len(args)+2)
 			newArgs = append(newArgs, args[:i]...)
-			newArgs = append(newArgs, "-user_agent", s.config.UserAgent)
+			newArgs = append(newArgs, "-user_agent", userAgent)
 			newArgs = append(newArgs, args[i:]...)
 			return newArgs
 		}
@@ -324,7 +324,7 @@ func (s *ProxyService) injectUserAgent(args []string) []string {
 
 func (s *ProxyService) startFFmpeg(ctx context.Context, channelID int64, stream *models.Stream, profile *models.StreamProfile) (io.ReadCloser, error) {
 	argsStr := strings.Replace(profile.Args, "{input}", stream.URL, 1)
-	args := s.injectUserAgent(shellSplit(argsStr))
+	args := InjectUserAgent(ShellSplit(argsStr), s.config.UserAgent)
 
 	s.log.Info().
 		Int64("channel_id", channelID).

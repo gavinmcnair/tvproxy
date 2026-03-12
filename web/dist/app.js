@@ -685,7 +685,7 @@
         scrollEl.addEventListener('click', function(e) {
           var ch = e.target.closest('.epg-channel');
           if (ch) {
-            openVideoPlayer(ch.dataset.chname, '/channel/' + ch.dataset.chid + '?profile=Browser', ch.dataset.tvgid || undefined);
+            playChannelWithDVR(ch.dataset.chid, ch.dataset.chname, ch.dataset.tvgid || undefined);
             return;
           }
           var prog = e.target.closest('.epg-program');
@@ -694,7 +694,7 @@
             if (!row) return;
             ch = row.querySelector('.epg-channel');
             if (!ch) return;
-            openVideoPlayer(ch.dataset.chname, '/channel/' + ch.dataset.chid + '?profile=Browser', ch.dataset.tvgid || undefined);
+            playChannelWithDVR(ch.dataset.chid, ch.dataset.chname, ch.dataset.tvgid || undefined);
           }
         });
 
@@ -823,7 +823,7 @@
       groupsContainer.addEventListener('click', (e) => {
         const btn = e.target.closest('button[data-sid]');
         if (!btn) return;
-        openVideoPlayer(btn.dataset.sname, '/stream/' + btn.dataset.sid + '?profile=Browser', btn.dataset.tvgid || undefined);
+        playStreamWithVODDetection(btn.dataset.sid, btn.dataset.sname, btn.dataset.tvgid || undefined);
       });
 
       function renderGroups() {
@@ -1764,16 +1764,44 @@
   };
   function codecName(s) { if (!s) return '?'; return CODEC_NAMES[s.split('.')[0].toLowerCase()] || s; }
 
-  function openVideoPlayer(title, url, tvgId) {
+  async function playStreamWithVODDetection(streamID, name, tvgId) {
+    let session = null;
+    try {
+      const resp = await fetch('/stream/' + streamID + '/vod?profile=Browser', { method: 'POST' }).then(r => r.json());
+      if (resp.session_id) {
+        session = { id: resp.session_id, duration: resp.duration };
+      }
+    } catch(e) {}
+    openVideoPlayer(name, '/stream/' + streamID + '?profile=Browser', tvgId, session);
+  }
+
+  async function playChannelWithDVR(channelID, name, tvgId) {
+    let session = null;
+    try {
+      const resp = await fetch('/channel/' + channelID + '/vod?profile=Browser', { method: 'POST' }).then(r => r.json());
+      if (resp.session_id) {
+        session = { id: resp.session_id, duration: resp.duration };
+      }
+    } catch(e) {}
+    openVideoPlayer(name, '/channel/' + channelID + '?profile=Browser', tvgId, session);
+  }
+
+  function openVideoPlayer(title, url, tvgId, dvr) {
     let mpegtsPlayer = null;
     let retryCount = 0;
     const MAX_RETRIES = 3;
     let retryTimeout = null;
     let statsInterval = null;
     let progInterval = null;
+    let dvrPollInterval = null;
+    let dvrPosInterval = null;
     let nowProgram = null;
     let currentContainer = '';
     let currentCodec = '';
+    let dvrBuffered = 0;
+    let dvrSeeking = false;
+    let dvrSeekOffset = 0;
+    const isLive = !dvr || !dvr.duration;
 
     function destroyPlayer() {
       if (mpegtsPlayer) {
@@ -1789,7 +1817,12 @@
       if (retryTimeout) { clearTimeout(retryTimeout); retryTimeout = null; }
       if (statsInterval) { clearInterval(statsInterval); statsInterval = null; }
       if (progInterval) { clearInterval(progInterval); progInterval = null; }
+      if (dvrPollInterval) { clearInterval(dvrPollInterval); dvrPollInterval = null; }
+      if (dvrPosInterval) { clearInterval(dvrPosInterval); dvrPosInterval = null; }
       destroyPlayer();
+      if (dvr) {
+        fetch('/vod/' + dvr.id, { method: 'DELETE' }).catch(() => {});
+      }
       video.oncanplay = null;
       video.onerror = null;
       video.pause();
@@ -1798,59 +1831,43 @@
       overlay.remove();
     }
 
+    function fmtTime(secs) {
+      const h = Math.floor(secs / 3600);
+      const m = Math.floor((secs % 3600) / 60);
+      const s = Math.floor(secs % 60);
+      return h > 0 ? h + ':' + String(m).padStart(2,'0') + ':' + String(s).padStart(2,'0')
+                    : m + ':' + String(s).padStart(2,'0');
+    }
+
     // ── Build UI ──
     const overlay = document.createElement('div');
     overlay.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.8);z-index:10000;display:flex;align-items:center;justify-content:center;';
     const modal = document.createElement('div');
     modal.style.cssText = 'background:var(--bg-card);border-radius:8px;padding:16px;max-width:800px;width:90%;position:relative;';
 
-    // Header with title + buttons
+    // Header: title + stats/close buttons
     const header = document.createElement('div');
-    header.style.cssText = 'display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;';
+    header.style.cssText = 'display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;';
     const titleEl = document.createElement('h3');
-    titleEl.style.cssText = 'margin:0;color:#e0e0e0;font-size:16px;flex:1;';
+    titleEl.style.cssText = 'margin:0;color:#e0e0e0;font-size:16px;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;';
     titleEl.textContent = title;
-
-    const btnGroup = document.createElement('div');
-    btnGroup.style.cssText = 'display:flex;gap:6px;';
-
+    const hdrBtns = document.createElement('div');
+    hdrBtns.style.cssText = 'display:flex;gap:6px;flex-shrink:0;';
     const statsBtn = document.createElement('button');
-    statsBtn.className = 'btn btn-sm';
-    statsBtn.textContent = 'Stats';
-    statsBtn.title = 'Toggle stream statistics';
-
-    const refreshBtn = document.createElement('button');
-    refreshBtn.className = 'btn btn-sm';
-    refreshBtn.textContent = 'Refresh';
-    refreshBtn.title = 'Restart stream';
-    refreshBtn.onclick = () => { retryCount = 0; startPlayback(); };
-
+    statsBtn.className = 'btn btn-sm'; statsBtn.textContent = 'Stats'; statsBtn.title = 'Toggle stream statistics';
     const closeBtn = document.createElement('button');
-    closeBtn.className = 'btn btn-danger btn-sm';
-    closeBtn.textContent = 'Close';
-    closeBtn.onclick = cleanup;
-
-    btnGroup.appendChild(statsBtn);
-    btnGroup.appendChild(refreshBtn);
-    btnGroup.appendChild(closeBtn);
+    closeBtn.className = 'btn btn-danger btn-sm'; closeBtn.textContent = 'Close'; closeBtn.onclick = cleanup;
+    hdrBtns.appendChild(statsBtn);
+    hdrBtns.appendChild(closeBtn);
     header.appendChild(titleEl);
-    header.appendChild(btnGroup);
+    header.appendChild(hdrBtns);
     modal.appendChild(header);
 
-    // Programme progress bar
-    const progBar = document.createElement('div');
-    progBar.style.cssText = 'height:2px;background:var(--border);border-radius:1px;overflow:hidden;display:none;';
-    const progFill = document.createElement('div');
-    progFill.style.cssText = 'height:100%;background:var(--accent);width:0%;transition:width 1s linear;';
-    progBar.appendChild(progFill);
-    modal.appendChild(progBar);
-
-    // Video container (relative for stats overlay)
+    // Video container
     const videoWrap = document.createElement('div');
-    videoWrap.style.cssText = 'position:relative;';
+    videoWrap.style.cssText = 'position:relative;background:#000;border-radius:4px;overflow:hidden;';
     const video = document.createElement('video');
-    video.style.cssText = 'width:100%;max-height:450px;background:#000;border-radius:4px;';
-    video.controls = true;
+    video.style.cssText = 'width:100%;max-height:450px;display:block;';
     video.autoplay = true;
     video.volume = parseFloat(localStorage.getItem('tvproxy_volume') || '0.5');
     video.addEventListener('volumechange', () => localStorage.setItem('tvproxy_volume', video.volume));
@@ -1858,21 +1875,222 @@
     // Stats overlay
     const statsOverlay = document.createElement('div');
     statsOverlay.style.cssText = 'display:none;position:absolute;top:8px;left:8px;background:rgba(0,0,0,0.75);color:#fff;padding:8px 10px;border-radius:6px;font-size:11px;font-family:monospace;pointer-events:none;line-height:1.6;z-index:10;';
-    statsBtn.onclick = () => {
-      statsOverlay.style.display = statsOverlay.style.display === 'none' ? 'block' : 'none';
-    };
+    statsBtn.onclick = () => { statsOverlay.style.display = statsOverlay.style.display === 'none' ? 'block' : 'none'; };
+
     videoWrap.appendChild(video);
     videoWrap.appendChild(statsOverlay);
     modal.appendChild(videoWrap);
 
-    // Status bar
+    // ── Custom Controls ──
+    const controls = document.createElement('div');
+    controls.style.cssText = 'background:var(--bg-card);padding:6px 0 0;';
+
+    // Seek bar
+    const seekOuter = document.createElement('div');
+    seekOuter.style.cssText = 'height:6px;background:var(--border);border-radius:3px;cursor:pointer;position:relative;margin-bottom:6px;';
+    const seekBuf = document.createElement('div');
+    seekBuf.style.cssText = 'height:100%;background:rgba(76,175,80,0.3);border-radius:3px;width:0%;position:absolute;top:0;left:0;transition:width 1s linear;';
+    const seekPos = document.createElement('div');
+    seekPos.style.cssText = 'height:100%;background:var(--accent);border-radius:3px;width:0%;position:absolute;top:0;left:0;';
+    const epgMarker = document.createElement('div');
+    epgMarker.style.cssText = 'display:none;position:absolute;top:-2px;bottom:-2px;width:2px;background:#ffa726;border-radius:1px;z-index:2;pointer-events:none;';
+    seekOuter.appendChild(seekBuf);
+    seekOuter.appendChild(seekPos);
+    seekOuter.appendChild(epgMarker);
+    controls.appendChild(seekOuter);
+
+    // Button row: play/pause | time | spacer | live badge | volume | fullscreen
+    const btnRow = document.createElement('div');
+    btnRow.style.cssText = 'display:flex;align-items:center;gap:8px;font-size:12px;color:#ccc;';
+
+    const playPauseBtn = document.createElement('button');
+    playPauseBtn.style.cssText = 'background:none;border:none;color:#ccc;font-size:16px;cursor:pointer;padding:0 2px;line-height:1;';
+    playPauseBtn.innerHTML = '&#9646;&#9646;';
+    playPauseBtn.onclick = () => { video.paused ? video.play() : video.pause(); };
+    video.onpause = () => { playPauseBtn.innerHTML = '&#9654;'; };
+    video.onplay = () => { playPauseBtn.innerHTML = '&#9646;&#9646;'; };
+
+    const timeLabel = document.createElement('span');
+    timeLabel.style.cssText = 'font-family:monospace;font-size:11px;min-width:80px;';
+    timeLabel.textContent = '0:00';
+
+    const spacer = document.createElement('div');
+    spacer.style.cssText = 'flex:1;';
+
+    const liveBadge = document.createElement('span');
+    liveBadge.style.cssText = 'display:none;background:#e53935;color:#fff;font-size:10px;font-weight:bold;padding:1px 6px;border-radius:3px;cursor:pointer;';
+    liveBadge.textContent = 'LIVE';
+    liveBadge.title = 'Jump to live';
+
+    const volWrap = document.createElement('div');
+    volWrap.style.cssText = 'display:flex;align-items:center;gap:4px;';
+    const volIcon = document.createElement('span');
+    volIcon.style.cssText = 'font-size:14px;cursor:pointer;';
+    volIcon.textContent = '\u{1F50A}';
+    let savedVol = video.volume;
+    volIcon.onclick = () => {
+      if (video.volume > 0) { savedVol = video.volume; video.volume = 0; volIcon.textContent = '\u{1F507}'; }
+      else { video.volume = savedVol || 0.5; volIcon.textContent = '\u{1F50A}'; }
+    };
+    const volSlider = document.createElement('input');
+    volSlider.type = 'range'; volSlider.min = '0'; volSlider.max = '1'; volSlider.step = '0.05';
+    volSlider.value = video.volume;
+    volSlider.style.cssText = 'width:60px;height:4px;accent-color:var(--accent);';
+    volSlider.oninput = () => {
+      video.volume = parseFloat(volSlider.value);
+      volIcon.textContent = video.volume > 0 ? '\u{1F50A}' : '\u{1F507}';
+    };
+    video.addEventListener('volumechange', () => { volSlider.value = video.volume; });
+    volWrap.appendChild(volIcon);
+    volWrap.appendChild(volSlider);
+
+    const fsBtn = document.createElement('button');
+    fsBtn.style.cssText = 'background:none;border:none;color:#ccc;font-size:14px;cursor:pointer;padding:0 2px;';
+    fsBtn.innerHTML = '&#x26F6;';
+    fsBtn.title = 'Fullscreen';
+    fsBtn.onclick = () => {
+      if (document.fullscreenElement) document.exitFullscreen();
+      else videoWrap.requestFullscreen().catch(() => {});
+    };
+
+    btnRow.appendChild(playPauseBtn);
+    btnRow.appendChild(timeLabel);
+    btnRow.appendChild(spacer);
+    btnRow.appendChild(liveBadge);
+    btnRow.appendChild(volWrap);
+    btnRow.appendChild(fsBtn);
+    controls.appendChild(btnRow);
+    modal.appendChild(controls);
+
+    // Status bar (EPG info, codec info)
     const statusEl = document.createElement('div');
-    statusEl.style.cssText = 'color:#999;font-size:12px;margin-top:8px;';
+    statusEl.style.cssText = 'color:#999;font-size:12px;margin-top:6px;';
     modal.appendChild(statusEl);
 
     overlay.appendChild(modal);
     overlay.onclick = (e) => { if (e.target === overlay) cleanup(); };
     document.body.appendChild(overlay);
+
+    // ── DVR seek bar logic ──
+    function seekTo(seekTime) {
+      if (dvrSeeking || !dvr) return;
+      if (seekTime > dvrBuffered) return;
+      dvrSeeking = true;
+      dvrSeekOffset = seekTime;
+      statusEl.style.color = '#ffa726';
+      statusEl.textContent = 'Seeking to ' + fmtTime(seekTime) + '...';
+      videoWrap.style.minHeight = videoWrap.offsetHeight + 'px';
+      destroyPlayer();
+      video.pause();
+      video.removeAttribute('src');
+      video.src = '/vod/' + dvr.id + '/seek?t=' + seekTime.toFixed(1);
+      video.oncanplay = () => {
+        videoWrap.style.minHeight = '';
+        dvrSeeking = false;
+        statusEl.style.color = '#4caf50';
+        currentContainer = 'fMP4';
+        updateStatusText();
+      };
+      video.play().catch(() => { dvrSeeking = false; });
+    }
+
+    seekOuter.onclick = (e) => {
+      if (!dvr || dvrBuffered <= 0) return;
+      const rect = seekOuter.getBoundingClientRect();
+      const pct = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+      const epg = getEpgTiming();
+      let seekTime;
+      if (isLive && epg) {
+        const progTime = pct * epg.duration;
+        const bufStart = epg.elapsed - dvrBuffered;
+        seekTime = progTime - bufStart;
+        if (seekTime < 0 || seekTime > dvrBuffered) return;
+      } else {
+        const totalEnd = isLive ? dvrBuffered : (dvr.duration || dvrBuffered);
+        seekTime = pct * totalEnd;
+        if (seekTime > dvrBuffered) return;
+      }
+      seekTo(seekTime);
+    };
+
+    liveBadge.onclick = () => {
+      if (!dvr) return;
+      videoWrap.style.minHeight = videoWrap.offsetHeight + 'px';
+      destroyPlayer();
+      video.pause();
+      video.removeAttribute('src');
+      dvrSeekOffset = 0;
+      dvrSeeking = false;
+      video.src = url;
+      video.oncanplay = () => {
+        videoWrap.style.minHeight = '';
+        statusEl.style.color = '#4caf50';
+        currentContainer = 'fMP4';
+        updateStatusText();
+      };
+      video.play().catch(() => {});
+    };
+
+    function getEpgTiming() {
+      if (!nowProgram || !nowProgram.start || !nowProgram.stop) return null;
+      const start = new Date(nowProgram.start).getTime();
+      const stop = new Date(nowProgram.stop).getTime();
+      const dur = (stop - start) / 1000;
+      if (dur <= 0) return null;
+      const elapsed = (Date.now() - start) / 1000;
+      return { duration: dur, elapsed: Math.max(0, Math.min(dur, elapsed)) };
+    }
+
+    if (dvr) {
+      dvrPollInterval = setInterval(async () => {
+        try {
+          const st = await fetch('/vod/' + dvr.id + '/status').then(r => r.json());
+          dvrBuffered = st.buffered;
+          const epg = getEpgTiming();
+          if (isLive && epg) {
+            const bufStartPct = Math.max(0, ((epg.elapsed - dvrBuffered) / epg.duration) * 100);
+            const bufWidthPct = Math.min(100 - bufStartPct, (dvrBuffered / epg.duration) * 100);
+            seekBuf.style.left = bufStartPct + '%';
+            seekBuf.style.width = bufWidthPct + '%';
+            epgMarker.style.display = 'block';
+            epgMarker.style.left = Math.min(100, (epg.elapsed / epg.duration) * 100) + '%';
+          } else if (!isLive) {
+            const total = dvr.duration || dvrBuffered;
+            if (total > 0) seekBuf.style.width = Math.min(100, (dvrBuffered / total) * 100) + '%';
+            if (st.ready) {
+              seekBuf.style.width = '100%';
+              seekBuf.style.background = 'rgba(76,175,80,0.5)';
+            }
+          } else {
+            seekBuf.style.width = '100%';
+          }
+        } catch(e) {}
+      }, 2000);
+
+      dvrPosInterval = setInterval(() => {
+        if (!video || dvrSeeking) return;
+        const pos = dvrSeekOffset + (video.currentTime || 0);
+        const epg = getEpgTiming();
+
+        if (isLive && epg) {
+          const progPos = epg.elapsed - dvrBuffered + pos;
+          seekPos.style.width = Math.min(100, Math.max(0, (progPos / epg.duration) * 100)) + '%';
+          const progRemain = Math.max(0, epg.duration - epg.elapsed);
+          timeLabel.textContent = fmtTime(pos) + ' / ' + fmtTime(dvrBuffered) + ' (' + fmtTime(progRemain) + ' left)';
+          liveBadge.style.display = 'inline-block';
+          liveBadge.style.opacity = (dvrSeekOffset > 0) ? '1' : '0.5';
+        } else if (isLive) {
+          if (dvrBuffered > 0) seekPos.style.width = Math.min(100, (pos / dvrBuffered) * 100) + '%';
+          timeLabel.textContent = fmtTime(pos) + ' / ' + fmtTime(dvrBuffered);
+          liveBadge.style.display = 'inline-block';
+          liveBadge.style.opacity = (dvrSeekOffset > 0) ? '1' : '0.5';
+        } else {
+          const total = dvr.duration || dvrBuffered;
+          if (total > 0) seekPos.style.width = Math.min(100, (pos / total) * 100) + '%';
+          timeLabel.textContent = fmtTime(pos) + ' / ' + fmtTime(dvr.duration || dvrBuffered);
+        }
+      }, 500);
+    }
 
     // ── Stats updater ──
     function updateStats() {
@@ -1918,54 +2136,36 @@
       statusEl.textContent = 'Playing' + (codecInfo ? ' ' + codecInfo : '') + buildStatusSuffix();
     }
 
-    function updateProgress() {
-      if (!nowProgram || !nowProgram.start || !nowProgram.stop) return;
-      const start = new Date(nowProgram.start).getTime();
-      const stop = new Date(nowProgram.stop).getTime();
-      const now = Date.now();
-      const pct = Math.max(0, Math.min(100, ((now - start) / (stop - start)) * 100));
-      progFill.style.width = pct + '%';
-      progBar.style.display = 'block';
-      if (pct >= 100 && progInterval) {
-        clearInterval(progInterval);
-        progInterval = null;
-        fetchNowPlaying();
-      }
-    }
-
     function fetchNowPlaying() {
       if (!tvgId) return;
       api.get('/api/epg/now?channel_id=' + encodeURIComponent(tvgId)).then(program => {
         if (program && program.title) {
           nowProgram = program;
           updateStatusText();
-          updateProgress();
-          if (progInterval) clearInterval(progInterval);
-          progInterval = setInterval(updateProgress, 10000);
         }
       }).catch(() => {});
     }
 
+    fetchNowPlaying();
+    if (tvgId) {
+      progInterval = setInterval(fetchNowPlaying, 60000);
+    }
+
     // ── Playback ──
-    // Detect if the URL uses a profile that outputs fMP4/MP4 (native playback)
     const isBrowserProfile = url.includes('profile=Browser');
 
     function startPlayback() {
       destroyPlayer();
       if (retryTimeout) { clearTimeout(retryTimeout); retryTimeout = null; }
       if (statsInterval) { clearInterval(statsInterval); statsInterval = null; }
-      if (progInterval) { clearInterval(progInterval); progInterval = null; }
       currentContainer = '';
       currentCodec = '';
       nowProgram = null;
-      progBar.style.display = 'none';
-      progFill.style.width = '0%';
       video.removeAttribute('src');
 
       if (isBrowserProfile) {
-        // Browser profile outputs fMP4 — use native HTML5 video
         statusEl.style.color = '#999';
-        statusEl.textContent = 'Connecting (fMP4)...';
+        statusEl.textContent = 'Connecting...';
         video.src = url;
         video.oncanplay = () => {
           statusEl.style.color = '#4caf50';
@@ -1976,33 +2176,21 @@
         };
         video.play().catch(() => handleRetry());
       } else if (typeof mpegts !== 'undefined' && mpegts.isSupported()) {
-        // MPEG-TS streams — use mpegts.js
         statusEl.style.color = '#999';
-        statusEl.textContent = 'Connecting via mpegts.js...';
+        statusEl.textContent = 'Connecting...';
         mpegtsPlayer = mpegts.createPlayer({
-          type: 'mse',
-          isLive: true,
-          url: url,
+          type: 'mse', isLive: true, url: url,
         }, {
-          enableStashBuffer: true,
-          stashInitialSize: 4096,
-          liveBufferLatency: 2.0,
+          enableStashBuffer: true, stashInitialSize: 4096, liveBufferLatency: 2.0,
         });
-
         mpegtsPlayer.attachMediaElement(video);
         mpegtsPlayer.load();
         mpegtsPlayer.play();
-
         mpegtsPlayer.on(mpegts.Events.ERROR, (errorType, errorDetail) => {
           console.warn('mpegts.js error:', errorType, errorDetail);
-          if (errorType === 'NetworkError' || errorType === 'MediaError') {
-            handleRetry();
-          } else {
-            statusEl.style.color = '#ff6b6b';
-            statusEl.textContent = 'Error: ' + errorDetail;
-          }
+          if (errorType === 'NetworkError' || errorType === 'MediaError') handleRetry();
+          else { statusEl.style.color = '#ff6b6b'; statusEl.textContent = 'Error: ' + errorDetail; }
         });
-
         mpegtsPlayer.on(mpegts.Events.MEDIA_INFO, () => {
           retryCount = 0;
           if (retryTimeout) { clearTimeout(retryTimeout); retryTimeout = null; }
@@ -2013,16 +2201,14 @@
           updateStatusText();
           fetchNowPlaying();
         });
-
         statsInterval = setInterval(updateStats, 2000);
       } else {
-        // No mpegts.js — try native video as last resort
         statusEl.style.color = '#999';
-        statusEl.textContent = 'Trying native playback...';
+        statusEl.textContent = 'Connecting...';
         video.src = url;
         video.play().catch(() => {
           statusEl.style.color = '#ff6b6b';
-          statusEl.textContent = 'Playback failed. Try a Browser (fMP4) profile.';
+          statusEl.textContent = 'Playback failed.';
         });
       }
     }
@@ -2042,9 +2228,9 @@
     }
 
     video.onerror = () => {
-      if (!mpegtsPlayer) {
+      if (!mpegtsPlayer && !dvrSeeking) {
         statusEl.style.color = '#ff6b6b';
-        statusEl.textContent = 'Playback failed. Try a Browser (fMP4) profile.';
+        statusEl.textContent = 'Playback failed.';
       }
     };
 
@@ -2184,7 +2370,7 @@
         { key: 'is_enabled', label: 'Enabled', type: 'checkbox', default: true },
       ],
       rowActions: (item) => [
-        { label: 'Play', handler: () => openVideoPlayer(item.name, '/channel/' + item.id + '?profile=Browser', item.tvg_id || undefined) },
+        { label: 'Play', handler: () => playChannelWithDVR(item.id, item.name, item.tvg_id || undefined) },
       ],
       postFormSetup: (inputs, isEdit, item) => {
         // Load existing stream assignment when editing
