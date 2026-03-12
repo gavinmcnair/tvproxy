@@ -527,7 +527,42 @@ tbody tr:last-child td { border-bottom: none; }
 /* Actions column */
 .actions-cell {
   display: flex;
-  gap: 4px;
+  gap: 8px;
+}
+
+.btn-icon {
+  padding: 8px 12px;
+  font-size: 16px;
+  line-height: 1;
+  min-width: 40px;
+  min-height: 36px;
+  text-align: center;
+  justify-content: center;
+}
+
+.btn-icon-circle {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  padding: 0;
+  font-size: 15px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.play-fail-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 1px 6px;
+  border-radius: 10px;
+  background: rgba(245, 158, 11, 0.2);
+  color: #f59e0b;
+  font-size: 11px;
+  font-weight: 600;
+  margin-left: 6px;
+  vertical-align: middle;
 }
 
 /* Responsive */
@@ -660,6 +695,31 @@ tbody tr:last-child td { border-bottom: none; }
 }
 
 .stream-group summary:hover { background: var(--bg-hover); }
+
+.group-header-row td {
+  padding: 10px 16px;
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--text-primary);
+  background: var(--bg-secondary);
+  border-top: 1px solid var(--border);
+}
+
+.group-header-row:first-child td { border-top: none; }
+
+.group-header-row:hover td { background: var(--bg-hover); }
+
+.group-header-arrow {
+  font-size: 10px;
+  color: var(--text-muted);
+  display: inline-block;
+  width: 14px;
+  margin-right: 6px;
+  transition: transform 0.15s;
+}
+
+.group-header-arrow.open { transform: rotate(90deg); }
 
 .stream-group-count {
   display: inline-block;
@@ -874,6 +934,25 @@ tbody tr:last-child td { border-bottom: none; }
   font-size: 10px;
   color: var(--text-muted);
 }
+
+.epg-record-btn {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  background: none;
+  border: none;
+  color: #999;
+  font-size: 10px;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.2s;
+  padding: 0 2px;
+  line-height: 1;
+  z-index: 1;
+}
+.epg-program:hover .epg-record-btn { opacity: 1; }
+.epg-record-btn:hover { color: #e53935; }
+.epg-record-btn.recording { color: #e53935; opacity: 1; }
 
 .epg-now-line {
   position: absolute;

@@ -3,20 +3,19 @@ package handler
 import (
 	"net/http"
 
+	"github.com/go-chi/chi/v5"
+
 	"github.com/gavinmcnair/tvproxy/pkg/service"
 )
 
-// UserHandler handles user management HTTP requests.
 type UserHandler struct {
 	authService *service.AuthService
 }
 
-// NewUserHandler creates a new UserHandler.
 func NewUserHandler(authService *service.AuthService) *UserHandler {
 	return &UserHandler{authService: authService}
 }
 
-// List returns all users.
 func (h *UserHandler) List(w http.ResponseWriter, r *http.Request) {
 	users, err := h.authService.ListUsers(r.Context())
 	if err != nil {
@@ -27,7 +26,6 @@ func (h *UserHandler) List(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, http.StatusOK, users)
 }
 
-// Create creates a new user.
 func (h *UserHandler) Create(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Username string `json:"username"`
@@ -53,13 +51,8 @@ func (h *UserHandler) Create(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, http.StatusCreated, user)
 }
 
-// Get returns a user by ID.
 func (h *UserHandler) Get(w http.ResponseWriter, r *http.Request) {
-	id, err := urlParamInt64(r, "id")
-	if err != nil {
-		respondError(w, http.StatusBadRequest, "invalid user id")
-		return
-	}
+	id := chi.URLParam(r, "id")
 
 	user, err := h.authService.GetUser(r.Context(), id)
 	if err != nil {
@@ -70,13 +63,8 @@ func (h *UserHandler) Get(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, http.StatusOK, user)
 }
 
-// Update updates a user by ID.
 func (h *UserHandler) Update(w http.ResponseWriter, r *http.Request) {
-	id, err := urlParamInt64(r, "id")
-	if err != nil {
-		respondError(w, http.StatusBadRequest, "invalid user id")
-		return
-	}
+	id := chi.URLParam(r, "id")
 
 	var req struct {
 		Username string `json:"username"`
@@ -107,13 +95,8 @@ func (h *UserHandler) Update(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, http.StatusOK, user)
 }
 
-// Delete deletes a user by ID.
 func (h *UserHandler) Delete(w http.ResponseWriter, r *http.Request) {
-	id, err := urlParamInt64(r, "id")
-	if err != nil {
-		respondError(w, http.StatusBadRequest, "invalid user id")
-		return
-	}
+	id := chi.URLParam(r, "id")
 
 	if err := h.authService.DeleteUser(r.Context(), id); err != nil {
 		respondError(w, http.StatusInternalServerError, "failed to delete user")
@@ -121,4 +104,27 @@ func (h *UserHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *UserHandler) Invite(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Username string `json:"username"`
+	}
+	if err := decodeJSON(r, &req); err != nil {
+		respondError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	if req.Username == "" {
+		respondError(w, http.StatusBadRequest, "username is required")
+		return
+	}
+
+	user, err := h.authService.CreateInvite(r.Context(), req.Username)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "failed to create invite")
+		return
+	}
+
+	respondJSON(w, http.StatusCreated, user)
 }

@@ -4,21 +4,20 @@ import (
 	"context"
 	"net/http"
 
+	"github.com/go-chi/chi/v5"
+
 	"github.com/gavinmcnair/tvproxy/pkg/models"
 	"github.com/gavinmcnair/tvproxy/pkg/service"
 )
 
-// M3UAccountHandler handles M3U account HTTP requests.
 type M3UAccountHandler struct {
 	m3uService *service.M3UService
 }
 
-// NewM3UAccountHandler creates a new M3UAccountHandler.
 func NewM3UAccountHandler(m3uService *service.M3UService) *M3UAccountHandler {
 	return &M3UAccountHandler{m3uService: m3uService}
 }
 
-// List returns all M3U accounts.
 func (h *M3UAccountHandler) List(w http.ResponseWriter, r *http.Request) {
 	accounts, err := h.m3uService.ListAccounts(r.Context())
 	if err != nil {
@@ -29,7 +28,6 @@ func (h *M3UAccountHandler) List(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, http.StatusOK, accounts)
 }
 
-// Create creates a new M3U account.
 func (h *M3UAccountHandler) Create(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Name            string `json:"name"`
@@ -70,13 +68,8 @@ func (h *M3UAccountHandler) Create(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, http.StatusCreated, account)
 }
 
-// Get returns an M3U account by ID.
 func (h *M3UAccountHandler) Get(w http.ResponseWriter, r *http.Request) {
-	id, err := urlParamInt64(r, "id")
-	if err != nil {
-		respondError(w, http.StatusBadRequest, "invalid account id")
-		return
-	}
+	id := chi.URLParam(r, "id")
 
 	account, err := h.m3uService.GetAccount(r.Context(), id)
 	if err != nil {
@@ -87,13 +80,8 @@ func (h *M3UAccountHandler) Get(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, http.StatusOK, account)
 }
 
-// Update updates an M3U account by ID.
 func (h *M3UAccountHandler) Update(w http.ResponseWriter, r *http.Request) {
-	id, err := urlParamInt64(r, "id")
-	if err != nil {
-		respondError(w, http.StatusBadRequest, "invalid account id")
-		return
-	}
+	id := chi.URLParam(r, "id")
 
 	account, err := h.m3uService.GetAccount(r.Context(), id)
 	if err != nil {
@@ -139,13 +127,8 @@ func (h *M3UAccountHandler) Update(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, http.StatusOK, account)
 }
 
-// Delete deletes an M3U account by ID.
 func (h *M3UAccountHandler) Delete(w http.ResponseWriter, r *http.Request) {
-	id, err := urlParamInt64(r, "id")
-	if err != nil {
-		respondError(w, http.StatusBadRequest, "invalid account id")
-		return
-	}
+	id := chi.URLParam(r, "id")
 
 	if err := h.m3uService.DeleteAccount(r.Context(), id); err != nil {
 		respondError(w, http.StatusInternalServerError, "failed to delete m3u account")
@@ -155,17 +138,12 @@ func (h *M3UAccountHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// Refresh triggers a refresh of the M3U account's stream data.
 func (h *M3UAccountHandler) Refresh(w http.ResponseWriter, r *http.Request) {
-	id, err := urlParamInt64(r, "id")
-	if err != nil {
-		respondError(w, http.StatusBadRequest, "invalid account id")
-		return
-	}
+	id := chi.URLParam(r, "id")
 
 	go func() {
 		if err := h.m3uService.RefreshAccount(context.Background(), id); err != nil {
-			h.m3uService.Log().Error().Err(err).Int64("account_id", id).Msg("background m3u refresh failed")
+			h.m3uService.Log().Error().Err(err).Str("account_id", id).Msg("background m3u refresh failed")
 		}
 	}()
 

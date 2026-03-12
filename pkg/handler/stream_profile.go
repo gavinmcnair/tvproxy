@@ -3,17 +3,17 @@ package handler
 import (
 	"net/http"
 
+	"github.com/go-chi/chi/v5"
+
 	"github.com/gavinmcnair/tvproxy/pkg/ffmpeg"
 	"github.com/gavinmcnair/tvproxy/pkg/models"
 	"github.com/gavinmcnair/tvproxy/pkg/repository"
 )
 
-// StreamProfileHandler handles stream profile HTTP requests.
 type StreamProfileHandler struct {
 	repo *repository.StreamProfileRepository
 }
 
-// NewStreamProfileHandler creates a new StreamProfileHandler.
 func NewStreamProfileHandler(repo *repository.StreamProfileRepository) *StreamProfileHandler {
 	return &StreamProfileHandler{repo: repo}
 }
@@ -24,7 +24,6 @@ var validHWAccels = map[string]bool{"none": true, "qsv": true, "nvenc": true, "v
 var validVideoCodecs = map[string]bool{"copy": true, "h264": true, "h265": true, "av1": true}
 var validContainers = map[string]bool{"mpegts": true, "matroska": true, "mp4": true, "webm": true}
 
-// List returns all stream profiles.
 func (h *StreamProfileHandler) List(w http.ResponseWriter, r *http.Request) {
 	profiles, err := h.repo.List(r.Context())
 	if err != nil {
@@ -35,7 +34,6 @@ func (h *StreamProfileHandler) List(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, http.StatusOK, profiles)
 }
 
-// Create creates a new stream profile.
 func (h *StreamProfileHandler) Create(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Name          string `json:"name"`
@@ -131,13 +129,8 @@ func (h *StreamProfileHandler) Create(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, http.StatusCreated, profile)
 }
 
-// Get returns a stream profile by ID.
 func (h *StreamProfileHandler) Get(w http.ResponseWriter, r *http.Request) {
-	id, err := urlParamInt64(r, "id")
-	if err != nil {
-		respondError(w, http.StatusBadRequest, "invalid stream profile id")
-		return
-	}
+	id := chi.URLParam(r, "id")
 
 	profile, err := h.repo.GetByID(r.Context(), id)
 	if err != nil {
@@ -148,13 +141,8 @@ func (h *StreamProfileHandler) Get(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, http.StatusOK, profile)
 }
 
-// Update updates a stream profile by ID.
 func (h *StreamProfileHandler) Update(w http.ResponseWriter, r *http.Request) {
-	id, err := urlParamInt64(r, "id")
-	if err != nil {
-		respondError(w, http.StatusBadRequest, "invalid stream profile id")
-		return
-	}
+	id := chi.URLParam(r, "id")
 
 	profile, err := h.repo.GetByID(r.Context(), id)
 	if err != nil {
@@ -258,13 +246,8 @@ func (h *StreamProfileHandler) Update(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, http.StatusOK, profile)
 }
 
-// Delete deletes a stream profile by ID. System profiles cannot be deleted.
 func (h *StreamProfileHandler) Delete(w http.ResponseWriter, r *http.Request) {
-	id, err := urlParamInt64(r, "id")
-	if err != nil {
-		respondError(w, http.StatusBadRequest, "invalid stream profile id")
-		return
-	}
+	id := chi.URLParam(r, "id")
 
 	profile, err := h.repo.GetByID(r.Context(), id)
 	if err != nil {

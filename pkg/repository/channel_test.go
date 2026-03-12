@@ -7,14 +7,24 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/gavinmcnair/tvproxy/pkg/database"
 	"github.com/gavinmcnair/tvproxy/pkg/models"
 )
+
+func createTestUser(t *testing.T, db *database.DB) string {
+	t.Helper()
+	repo := NewUserRepository(db)
+	user := &models.User{Username: "testowner", PasswordHash: "hash", IsAdmin: true}
+	require.NoError(t, repo.Create(context.Background(), user))
+	return user.ID
+}
 
 func TestChannelCRUD(t *testing.T) {
 	db := setupTestDB(t)
 	repo := NewChannelRepository(db)
 	logoRepo := NewLogoRepository(db)
 	ctx := context.Background()
+	userID := createTestUser(t, db)
 
 	// Create a logo first
 	logo := &models.Logo{Name: "Test Logo", URL: "http://example.com/logo.png"}
@@ -23,11 +33,11 @@ func TestChannelCRUD(t *testing.T) {
 
 	// Create
 	channel := &models.Channel{
-		ChannelNumber: 1,
-		Name:          "Test Channel",
-		LogoID:        &logo.ID,
-		TvgID:         "test.channel",
-		IsEnabled:     true,
+		UserID:    userID,
+		Name:      "Test Channel",
+		LogoID:    &logo.ID,
+		TvgID:     "test.channel",
+		IsEnabled: true,
 	}
 	err = repo.Create(ctx, channel)
 	require.NoError(t, err)
@@ -39,7 +49,6 @@ func TestChannelCRUD(t *testing.T) {
 	fetched, err := repo.GetByID(ctx, channel.ID)
 	require.NoError(t, err)
 	assert.Equal(t, channel.ID, fetched.ID)
-	assert.Equal(t, 1, fetched.ChannelNumber)
 	assert.Equal(t, "Test Channel", fetched.Name)
 	require.NotNil(t, fetched.LogoID)
 	assert.Equal(t, logo.ID, *fetched.LogoID)
@@ -48,11 +57,6 @@ func TestChannelCRUD(t *testing.T) {
 	assert.True(t, fetched.IsEnabled)
 	assert.Nil(t, fetched.ChannelGroupID)
 	assert.Nil(t, fetched.ChannelProfileID)
-
-	// Read by number
-	fetchedByNum, err := repo.GetByNumber(ctx, 1)
-	require.NoError(t, err)
-	assert.Equal(t, channel.ID, fetchedByNum.ID)
 
 	// Update logo URL
 	logo2 := &models.Logo{Name: "New Logo", URL: "http://example.com/newlogo.png"}
@@ -75,9 +79,9 @@ func TestChannelCRUD(t *testing.T) {
 
 	// List
 	channel2 := &models.Channel{
-		ChannelNumber: 2,
-		Name:          "Channel Two",
-		IsEnabled:     true,
+		UserID:    userID,
+		Name:      "Channel Two",
+		IsEnabled: true,
 	}
 	err = repo.Create(ctx, channel2)
 	require.NoError(t, err)
@@ -85,9 +89,6 @@ func TestChannelCRUD(t *testing.T) {
 	channels, err := repo.List(ctx)
 	require.NoError(t, err)
 	assert.Len(t, channels, 2)
-	// Ordered by channel_number
-	assert.Equal(t, 1, channels[0].ChannelNumber)
-	assert.Equal(t, 2, channels[1].ChannelNumber)
 
 	// Delete
 	err = repo.Delete(ctx, channel.ID)
@@ -108,54 +109,9 @@ func TestChannelGetByIDNotFound(t *testing.T) {
 	repo := NewChannelRepository(db)
 	ctx := context.Background()
 
-	_, err := repo.GetByID(ctx, 99999)
+	_, err := repo.GetByID(ctx, "nonexistent")
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "channel not found")
-}
-
-func TestChannelGetByNumberNotFound(t *testing.T) {
-	db := setupTestDB(t)
-	repo := NewChannelRepository(db)
-	ctx := context.Background()
-
-	_, err := repo.GetByNumber(ctx, 99999)
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "channel not found")
-}
-
-func TestChannelGetNextNumber(t *testing.T) {
-	db := setupTestDB(t)
-	repo := NewChannelRepository(db)
-	ctx := context.Background()
-
-	// When no channels exist, next number should be 1
-	next, err := repo.GetNextChannelNumber(ctx)
-	require.NoError(t, err)
-	assert.Equal(t, 1, next)
-
-	// Create channel 1
-	err = repo.Create(ctx, &models.Channel{
-		ChannelNumber: 1,
-		Name:          "Channel One",
-		IsEnabled:     true,
-	})
-	require.NoError(t, err)
-
-	next, err = repo.GetNextChannelNumber(ctx)
-	require.NoError(t, err)
-	assert.Equal(t, 2, next)
-
-	// Create channel 5 (with a gap)
-	err = repo.Create(ctx, &models.Channel{
-		ChannelNumber: 5,
-		Name:          "Channel Five",
-		IsEnabled:     true,
-	})
-	require.NoError(t, err)
-
-	next, err = repo.GetNextChannelNumber(ctx)
-	require.NoError(t, err)
-	assert.Equal(t, 6, next, "next number should be max + 1, regardless of gaps")
 }
 
 func TestChannelWithGroupAndProfile(t *testing.T) {
@@ -164,9 +120,11 @@ func TestChannelWithGroupAndProfile(t *testing.T) {
 	groupRepo := NewChannelGroupRepository(db)
 	profileRepo := NewChannelProfileRepository(db)
 	ctx := context.Background()
+	userID := createTestUser(t, db)
 
 	// Create a channel group
 	group := &models.ChannelGroup{
+		UserID:    userID,
 		Name:      "Sports",
 		IsEnabled: true,
 		SortOrder: 1,
@@ -184,7 +142,7 @@ func TestChannelWithGroupAndProfile(t *testing.T) {
 
 	// Create a channel with group and profile
 	channel := &models.Channel{
-		ChannelNumber:    1,
+		UserID:           userID,
 		Name:             "ESPN",
 		IsEnabled:        true,
 		ChannelGroupID:   &group.ID,
@@ -207,6 +165,7 @@ func TestChannelAssignStreams(t *testing.T) {
 	m3uRepo := NewM3UAccountRepository(db)
 	streamRepo := NewStreamRepository(db)
 	ctx := context.Background()
+	userID := createTestUser(t, db)
 
 	// Create an M3U account (needed as FK for streams)
 	account := &models.M3UAccount{
@@ -242,15 +201,15 @@ func TestChannelAssignStreams(t *testing.T) {
 
 	// Create a channel
 	channel := &models.Channel{
-		ChannelNumber: 1,
-		Name:          "Sports Channel",
-		IsEnabled:     true,
+		UserID:    userID,
+		Name:      "Sports Channel",
+		IsEnabled: true,
 	}
 	err = channelRepo.Create(ctx, channel)
 	require.NoError(t, err)
 
 	// Assign streams with priorities
-	err = channelRepo.AssignStreams(ctx, channel.ID, []int64{stream1.ID, stream2.ID}, []int{1, 2})
+	err = channelRepo.AssignStreams(ctx, channel.ID, []string{stream1.ID, stream2.ID}, []int{1, 2})
 	require.NoError(t, err)
 
 	// Verify stream assignments
@@ -263,7 +222,7 @@ func TestChannelAssignStreams(t *testing.T) {
 	assert.Equal(t, 2, channelStreams[1].Priority)
 
 	// Re-assign with different streams/priorities (should replace)
-	err = channelRepo.AssignStreams(ctx, channel.ID, []int64{stream2.ID}, []int{1})
+	err = channelRepo.AssignStreams(ctx, channel.ID, []string{stream2.ID}, []int{1})
 	require.NoError(t, err)
 
 	channelStreams, err = channelRepo.GetStreams(ctx, channel.ID)
@@ -278,7 +237,7 @@ func TestChannelAssignStreamsMismatchedLengths(t *testing.T) {
 	repo := NewChannelRepository(db)
 	ctx := context.Background()
 
-	err := repo.AssignStreams(ctx, 1, []int64{1, 2}, []int{1})
+	err := repo.AssignStreams(ctx, "some-id", []string{"a", "b"}, []int{1})
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "same length")
 }
@@ -289,6 +248,7 @@ func TestChannelAssignStreamsEmpty(t *testing.T) {
 	m3uRepo := NewM3UAccountRepository(db)
 	streamRepo := NewStreamRepository(db)
 	ctx := context.Background()
+	userID := createTestUser(t, db)
 
 	// Create prerequisites
 	account := &models.M3UAccount{
@@ -311,19 +271,19 @@ func TestChannelAssignStreamsEmpty(t *testing.T) {
 	require.NoError(t, err)
 
 	channel := &models.Channel{
-		ChannelNumber: 1,
-		Name:          "Test Channel",
-		IsEnabled:     true,
+		UserID:    userID,
+		Name:      "Test Channel",
+		IsEnabled: true,
 	}
 	err = channelRepo.Create(ctx, channel)
 	require.NoError(t, err)
 
 	// Assign a stream first
-	err = channelRepo.AssignStreams(ctx, channel.ID, []int64{stream1.ID}, []int{1})
+	err = channelRepo.AssignStreams(ctx, channel.ID, []string{stream1.ID}, []int{1})
 	require.NoError(t, err)
 
 	// Now assign empty to clear all assignments
-	err = channelRepo.AssignStreams(ctx, channel.ID, []int64{}, []int{})
+	err = channelRepo.AssignStreams(ctx, channel.ID, []string{}, []int{})
 	require.NoError(t, err)
 
 	channelStreams, err := channelRepo.GetStreams(ctx, channel.ID)
@@ -335,11 +295,12 @@ func TestChannelGetStreamsEmpty(t *testing.T) {
 	db := setupTestDB(t)
 	channelRepo := NewChannelRepository(db)
 	ctx := context.Background()
+	userID := createTestUser(t, db)
 
 	channel := &models.Channel{
-		ChannelNumber: 1,
-		Name:          "Empty Channel",
-		IsEnabled:     true,
+		UserID:    userID,
+		Name:      "Empty Channel",
+		IsEnabled: true,
 	}
 	err := channelRepo.Create(ctx, channel)
 	require.NoError(t, err)
@@ -357,24 +318,4 @@ func TestChannelListEmpty(t *testing.T) {
 	channels, err := repo.List(ctx)
 	require.NoError(t, err)
 	assert.Empty(t, channels)
-}
-
-func TestChannelUniqueNumber(t *testing.T) {
-	db := setupTestDB(t)
-	repo := NewChannelRepository(db)
-	ctx := context.Background()
-
-	err := repo.Create(ctx, &models.Channel{
-		ChannelNumber: 1,
-		Name:          "Channel One",
-		IsEnabled:     true,
-	})
-	require.NoError(t, err)
-
-	err = repo.Create(ctx, &models.Channel{
-		ChannelNumber: 1,
-		Name:          "Duplicate Channel",
-		IsEnabled:     true,
-	})
-	assert.Error(t, err, "creating a channel with a duplicate channel_number should fail due to UNIQUE constraint")
 }

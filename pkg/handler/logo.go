@@ -3,21 +3,20 @@ package handler
 import (
 	"net/http"
 
+	"github.com/go-chi/chi/v5"
+
 	"github.com/gavinmcnair/tvproxy/pkg/models"
 	"github.com/gavinmcnair/tvproxy/pkg/repository"
 )
 
-// LogoHandler handles logo-related HTTP requests.
 type LogoHandler struct {
 	repo *repository.LogoRepository
 }
 
-// NewLogoHandler creates a new LogoHandler.
 func NewLogoHandler(repo *repository.LogoRepository) *LogoHandler {
 	return &LogoHandler{repo: repo}
 }
 
-// List returns all logos.
 func (h *LogoHandler) List(w http.ResponseWriter, r *http.Request) {
 	logos, err := h.repo.List(r.Context())
 	if err != nil {
@@ -28,7 +27,6 @@ func (h *LogoHandler) List(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, http.StatusOK, logos)
 }
 
-// Create creates a new logo.
 func (h *LogoHandler) Create(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Name string `json:"name"`
@@ -57,13 +55,8 @@ func (h *LogoHandler) Create(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, http.StatusCreated, logo)
 }
 
-// Get returns a logo by ID.
 func (h *LogoHandler) Get(w http.ResponseWriter, r *http.Request) {
-	id, err := urlParamInt64(r, "id")
-	if err != nil {
-		respondError(w, http.StatusBadRequest, "invalid logo id")
-		return
-	}
+	id := chi.URLParam(r, "id")
 
 	logo, err := h.repo.GetByID(r.Context(), id)
 	if err != nil {
@@ -74,13 +67,8 @@ func (h *LogoHandler) Get(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, http.StatusOK, logo)
 }
 
-// Update updates a logo by ID.
 func (h *LogoHandler) Update(w http.ResponseWriter, r *http.Request) {
-	id, err := urlParamInt64(r, "id")
-	if err != nil {
-		respondError(w, http.StatusBadRequest, "invalid logo id")
-		return
-	}
+	id := chi.URLParam(r, "id")
 
 	logo, err := h.repo.GetByID(r.Context(), id)
 	if err != nil {
@@ -112,13 +100,8 @@ func (h *LogoHandler) Update(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, http.StatusOK, logo)
 }
 
-// Delete deletes a logo by ID.
 func (h *LogoHandler) Delete(w http.ResponseWriter, r *http.Request) {
-	id, err := urlParamInt64(r, "id")
-	if err != nil {
-		respondError(w, http.StatusBadRequest, "invalid logo id")
-		return
-	}
+	id := chi.URLParam(r, "id")
 
 	if err := h.repo.Delete(r.Context(), id); err != nil {
 		respondError(w, http.StatusInternalServerError, "failed to delete logo")

@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"io/fs"
 	"net/http"
 	"os"
@@ -63,6 +62,9 @@ func main() {
 	settingsRepo := repository.NewCoreSettingsRepository(db)
 	clientRepo := repository.NewClientRepository(db)
 
+	// Services
+	authService := service.NewAuthService(userRepo, cfg.JWTSecret, cfg.AccessTokenExpiry, cfg.RefreshTokenExpiry)
+
 	// Create default admin user if no users exist
 	users, err := userRepo.List(ctx)
 	if err != nil {
@@ -70,26 +72,29 @@ func main() {
 	}
 	if len(users) == 0 {
 		log.Info().Msg("no users found, creating default admin user (admin/admin)")
-		tmpAuth := service.NewAuthService(userRepo, cfg.JWTSecret, cfg.AccessTokenExpiry, cfg.RefreshTokenExpiry)
-		if _, err := tmpAuth.CreateUser(ctx, "admin", "admin", true); err != nil {
+		if _, err := authService.CreateUser(ctx, "admin", "admin", true); err != nil {
 			log.Fatal().Err(err).Msg("failed to create default admin user")
 		}
 	}
 
-	// Services
-	authService := service.NewAuthService(userRepo, cfg.JWTSecret, cfg.AccessTokenExpiry, cfg.RefreshTokenExpiry)
+	adminUser, err := authService.FindFirstAdmin(ctx)
+	var adminUserID string
+	if err == nil && adminUser != nil {
+		adminUserID = adminUser.ID
+	}
 	m3uService := service.NewM3UService(m3uAccountRepo, streamRepo, cfg, log)
 	channelService := service.NewChannelService(channelRepo, channelGroupRepo, streamRepo, log)
 	epgService := service.NewEPGService(epgSourceRepo, epgDataRepo, programDataRepo, cfg, log)
 	settingsService := service.NewSettingsService(settingsRepo)
 	clientService := service.NewClientService(clientRepo, streamProfileRepo, log)
 	proxyService := service.NewProxyService(channelRepo, streamRepo, m3uAccountRepo, channelProfileRepo, streamProfileRepo, clientService, cfg, log)
-	hdhrService := service.NewHDHRService(hdhrDeviceRepo, channelRepo, streamRepo, channelProfileRepo, streamProfileRepo, cfg, log)
-	outputService := service.NewOutputService(channelRepo, channelGroupRepo, streamRepo, channelProfileRepo, streamProfileRepo, epgDataRepo, programDataRepo, cfg, log)
-	vodService := service.NewVODService(channelRepo, streamRepo, streamProfileRepo, cfg, log)
+	hdhrService := service.NewHDHRService(hdhrDeviceRepo, channelRepo, streamRepo, channelProfileRepo, streamProfileRepo, adminUserID, cfg, log)
+	outputService := service.NewOutputService(channelRepo, channelGroupRepo, streamRepo, channelProfileRepo, streamProfileRepo, epgDataRepo, programDataRepo, adminUserID, cfg, log)
+	ffmpegMgr := service.NewFFmpegManager(cfg, log)
+	vodService := service.NewVODService(channelRepo, streamRepo, streamProfileRepo, ffmpegMgr, cfg, log)
 
 	// Auth middleware
-	authMW := middleware.NewAuthMiddleware(authService, cfg.APIKey)
+	authMW := middleware.NewAuthMiddleware(authService, cfg.APIKey, adminUserID)
 
 	// Handlers
 	authHandler := handler.NewAuthHandler(authService)
@@ -97,7 +102,7 @@ func main() {
 	m3uAccountHandler := handler.NewM3UAccountHandler(m3uService)
 	streamHandler := handler.NewStreamHandler(streamRepo)
 	channelHandler := handler.NewChannelHandler(channelService, logoRepo)
-	channelGroupHandler := handler.NewChannelGroupHandler(channelGroupRepo)
+	channelGroupHandler := handler.NewChannelGroupHandler(channelService)
 	channelProfileHandler := handler.NewChannelProfileHandler(channelProfileRepo)
 	logoHandler := handler.NewLogoHandler(logoRepo)
 	streamProfileHandler := handler.NewStreamProfileHandler(streamProfileRepo)
@@ -131,14 +136,14 @@ func main() {
 	// Public routes
 	r.Post("/api/auth/login", authHandler.Login)
 	r.Post("/api/auth/refresh", authHandler.Refresh)
+	r.Post("/api/auth/invite/{token}", authHandler.AcceptInvite)
 
 	// HDHomeRun routes at root (no auth - Plex/Emby/Jellyfin need direct access)
-	// Matches Threadfin's route layout exactly: /device.xml, /discover.json, etc.
 	r.Get("/discover.json", hdhrHandler.Discover)
 	r.Get("/lineup_status.json", hdhrHandler.LineupStatus)
 	r.Get("/lineup.json", hdhrHandler.Lineup)
 	r.Get("/device.xml", hdhrHandler.DeviceXML)
-	r.Get("/capability", hdhrHandler.DeviceXML) // alias used by some clients
+	r.Get("/capability", hdhrHandler.DeviceXML)
 
 	// Output routes (no auth for player access)
 	r.Get("/output/m3u", outputHandler.M3U)
@@ -160,6 +165,12 @@ func main() {
 	r.Group(func(r chi.Router) {
 		r.Use(authMW.Authenticate)
 
+		// Recording routes (any authenticated user)
+		r.Post("/vod/{sessionID}/record", vodHandler.MarkRecording)
+		r.Post("/vod/{sessionID}/stop", vodHandler.StopRecording)
+		r.Post("/vod/{sessionID}/cancel", vodHandler.CancelRecording)
+		r.Post("/channel/{channelID}/record", vodHandler.CreateRecording)
+
 		r.Post("/api/auth/logout", authHandler.Logout)
 		r.Get("/api/auth/me", authHandler.Me)
 
@@ -167,6 +178,7 @@ func main() {
 			r.Use(authMW.RequireAdmin)
 			r.Get("/", userHandler.List)
 			r.Post("/", userHandler.Create)
+			r.Post("/invite", userHandler.Invite)
 			r.Get("/{id}", userHandler.Get)
 			r.Put("/{id}", userHandler.Update)
 			r.Delete("/{id}", userHandler.Delete)
@@ -174,17 +186,23 @@ func main() {
 
 		r.Route("/api/m3u/accounts", func(r chi.Router) {
 			r.Get("/", m3uAccountHandler.List)
-			r.Post("/", m3uAccountHandler.Create)
 			r.Get("/{id}", m3uAccountHandler.Get)
-			r.Put("/{id}", m3uAccountHandler.Update)
-			r.Delete("/{id}", m3uAccountHandler.Delete)
-			r.Post("/{id}/refresh", m3uAccountHandler.Refresh)
+			r.Group(func(r chi.Router) {
+				r.Use(authMW.RequireAdmin)
+				r.Post("/", m3uAccountHandler.Create)
+				r.Put("/{id}", m3uAccountHandler.Update)
+				r.Delete("/{id}", m3uAccountHandler.Delete)
+				r.Post("/{id}/refresh", m3uAccountHandler.Refresh)
+			})
 		})
 
 		r.Route("/api/streams", func(r chi.Router) {
 			r.Get("/", streamHandler.List)
 			r.Get("/{id}", streamHandler.Get)
-			r.Delete("/{id}", streamHandler.Delete)
+			r.Group(func(r chi.Router) {
+				r.Use(authMW.RequireAdmin)
+				r.Delete("/{id}", streamHandler.Delete)
+			})
 		})
 
 		r.Route("/api/channels", func(r chi.Router) {
@@ -195,6 +213,8 @@ func main() {
 			r.Delete("/{id}", channelHandler.Delete)
 			r.Get("/{id}/streams", channelHandler.GetStreams)
 			r.Post("/{id}/streams", channelHandler.AssignStreams)
+			r.Post("/{id}/fail", channelHandler.IncrementFailCount)
+			r.Delete("/{id}/fail", channelHandler.ResetFailCount)
 		})
 
 		r.Route("/api/channel-groups", func(r chi.Router) {
@@ -206,6 +226,7 @@ func main() {
 		})
 
 		r.Route("/api/channel-profiles", func(r chi.Router) {
+			r.Use(authMW.RequireAdmin)
 			r.Get("/", channelProfileHandler.List)
 			r.Post("/", channelProfileHandler.Create)
 			r.Get("/{id}", channelProfileHandler.Get)
@@ -214,6 +235,7 @@ func main() {
 		})
 
 		r.Route("/api/logos", func(r chi.Router) {
+			r.Use(authMW.RequireAdmin)
 			r.Get("/", logoHandler.List)
 			r.Post("/", logoHandler.Create)
 			r.Get("/{id}", logoHandler.Get)
@@ -222,6 +244,7 @@ func main() {
 		})
 
 		r.Route("/api/stream-profiles", func(r chi.Router) {
+			r.Use(authMW.RequireAdmin)
 			r.Get("/", streamProfileHandler.List)
 			r.Post("/", streamProfileHandler.Create)
 			r.Get("/{id}", streamProfileHandler.Get)
@@ -231,17 +254,21 @@ func main() {
 
 		r.Route("/api/epg", func(r chi.Router) {
 			r.Get("/sources", epgSourceHandler.List)
-			r.Post("/sources", epgSourceHandler.Create)
 			r.Get("/sources/{id}", epgSourceHandler.Get)
-			r.Put("/sources/{id}", epgSourceHandler.Update)
-			r.Delete("/sources/{id}", epgSourceHandler.Delete)
-			r.Post("/sources/{id}/refresh", epgSourceHandler.Refresh)
 			r.Get("/data", epgDataHandler.List)
 			r.Get("/now", epgDataHandler.NowPlaying)
 			r.Get("/guide", epgDataHandler.Guide)
+			r.Group(func(r chi.Router) {
+				r.Use(authMW.RequireAdmin)
+				r.Post("/sources", epgSourceHandler.Create)
+				r.Put("/sources/{id}", epgSourceHandler.Update)
+				r.Delete("/sources/{id}", epgSourceHandler.Delete)
+				r.Post("/sources/{id}/refresh", epgSourceHandler.Refresh)
+			})
 		})
 
 		r.Route("/api/hdhr/devices", func(r chi.Router) {
+			r.Use(authMW.RequireAdmin)
 			r.Get("/", hdhrHandler.ListDevices)
 			r.Post("/", hdhrHandler.CreateDevice)
 			r.Get("/{id}", hdhrHandler.GetDevice)
@@ -250,16 +277,25 @@ func main() {
 		})
 
 		r.Route("/api/settings", func(r chi.Router) {
+			r.Use(authMW.RequireAdmin)
 			r.Get("/", settingsHandler.List)
 			r.Put("/", settingsHandler.Update)
 		})
 
 		r.Route("/api/clients", func(r chi.Router) {
+			r.Use(authMW.RequireAdmin)
 			r.Get("/", clientHandler.List)
 			r.Post("/", clientHandler.Create)
 			r.Get("/{id}", clientHandler.Get)
 			r.Put("/{id}", clientHandler.Update)
 			r.Delete("/{id}", clientHandler.Delete)
+		})
+
+		r.Route("/api/recordings", func(r chi.Router) {
+			r.Get("/", vodHandler.ListRecordings)
+			r.Get("/completed", vodHandler.ListCompletedRecordings)
+			r.Get("/completed/{filename}/stream", vodHandler.StreamCompletedRecording)
+			r.Delete("/completed/{filename}", vodHandler.DeleteCompletedRecording)
 		})
 	})
 
@@ -287,14 +323,8 @@ func main() {
 	wm.Add("m3u_refresh", worker.NewM3URefreshWorker(m3uService, cfg.M3URefreshInterval, log))
 	wm.Add("epg_refresh", worker.NewEPGRefreshWorker(epgService, cfg.EPGRefreshInterval, log))
 
-	// SSDP discovery worker — BaseURL is portless (e.g. http://192.168.1.149).
-	// Workers extract the host and append per-device ports.
-	baseURL := cfg.BaseURL
-	if baseURL == "" {
-		baseURL = fmt.Sprintf("http://%s", cfg.Host)
-	}
-	wm.Add("ssdp", worker.NewSSDPWorker(hdhrDeviceRepo, baseURL, log))
-	wm.Add("hdhr_discover", worker.NewHDHRDiscoverWorker(hdhrDeviceRepo, baseURL, log))
+	wm.Add("ssdp", worker.NewSSDPWorker(hdhrDeviceRepo, cfg.BaseURL, log))
+	wm.Add("hdhr_discover", worker.NewHDHRDiscoverWorker(hdhrDeviceRepo, cfg.BaseURL, log))
 	wm.Add("hdhr_servers", worker.NewHDHRServerWorker(hdhrDeviceRepo, hdhrService, proxyService, outputService, cfg, log))
 	wm.Add("vod_cleanup", worker.NewVODCleanupWorker(vodService, 60*time.Second, log))
 
@@ -343,4 +373,3 @@ func setupLogger(cfg *config.Config) zerolog.Logger {
 	return zerolog.New(zerolog.ConsoleWriter{Out: os.Stdout, TimeFormat: time.RFC3339}).
 		With().Timestamp().Logger()
 }
-

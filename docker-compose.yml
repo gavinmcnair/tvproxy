@@ -13,6 +13,7 @@ services:
       - TVPROXY_BASE_URL=http://localhost
     volumes:
       - tvproxy-data:/data
+      - tvproxy-recordings:/record
     # devices:
     #   # Intel GPU (Arc A380, iGPU) - VA-API / QSV
     #   - /dev/dri:/dev/dri
@@ -28,3 +29,4 @@ services:
 volumes:
   tvproxy-data:
     external: true
+  tvproxy-recordings:

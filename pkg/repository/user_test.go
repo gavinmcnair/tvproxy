@@ -124,7 +124,7 @@ func TestUserGetByIDNotFound(t *testing.T) {
 	repo := NewUserRepository(db)
 	ctx := context.Background()
 
-	_, err := repo.GetByID(ctx, 99999)
+	_, err := repo.GetByID(ctx, "nonexistent")
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "user not found")
 }
@@ -229,6 +229,6 @@ func TestUserDeleteNonExistent(t *testing.T) {
 	ctx := context.Background()
 
 	// Deleting a non-existent user should not error (DELETE WHERE id=? affects 0 rows)
-	err := repo.Delete(ctx, 99999)
+	err := repo.Delete(ctx, "nonexistent")
 	assert.NoError(t, err)
 }

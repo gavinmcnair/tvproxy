@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/gavinmcnair/tvproxy/pkg/database"
 	"github.com/gavinmcnair/tvproxy/pkg/models"
 )
@@ -20,25 +22,21 @@ func NewClientRepository(db *database.DB) *ClientRepository {
 
 func (r *ClientRepository) Create(ctx context.Context, client *models.Client) error {
 	now := time.Now()
-	result, err := r.db.ExecContext(ctx,
-		`INSERT INTO clients (name, priority, stream_profile_id, is_enabled, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?)`,
-		client.Name, client.Priority, client.StreamProfileID, client.IsEnabled, now, now,
+	client.ID = uuid.New().String()
+	_, err := r.db.ExecContext(ctx,
+		`INSERT INTO clients (id, name, priority, stream_profile_id, is_enabled, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		client.ID, client.Name, client.Priority, client.StreamProfileID, client.IsEnabled, now, now,
 	)
 	if err != nil {
 		return fmt.Errorf("creating client: %w", err)
 	}
-	id, err := result.LastInsertId()
-	if err != nil {
-		return fmt.Errorf("getting last insert id: %w", err)
-	}
-	client.ID = id
 	client.CreatedAt = now
 	client.UpdatedAt = now
 	return nil
 }
 
-func (r *ClientRepository) GetByID(ctx context.Context, id int64) (*models.Client, error) {
+func (r *ClientRepository) GetByID(ctx context.Context, id string) (*models.Client, error) {
 	client := &models.Client{}
 	err := r.db.QueryRowContext(ctx,
 		`SELECT id, name, priority, stream_profile_id, is_enabled, created_at, updated_at
@@ -62,7 +60,7 @@ func (r *ClientRepository) GetByID(ctx context.Context, id int64) (*models.Clien
 func (r *ClientRepository) List(ctx context.Context) ([]models.Client, error) {
 	rows, err := r.db.QueryContext(ctx,
 		`SELECT id, name, priority, stream_profile_id, is_enabled, created_at, updated_at
-		FROM clients ORDER BY priority, id`,
+		FROM clients ORDER BY priority, created_at`,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("listing clients: %w", err)
@@ -107,7 +105,7 @@ func (r *ClientRepository) Update(ctx context.Context, client *models.Client) er
 	return nil
 }
 
-func (r *ClientRepository) Delete(ctx context.Context, id int64) error {
+func (r *ClientRepository) Delete(ctx context.Context, id string) error {
 	_, err := r.db.ExecContext(ctx, `DELETE FROM clients WHERE id = ?`, id)
 	if err != nil {
 		return fmt.Errorf("deleting client: %w", err)
@@ -115,33 +113,27 @@ func (r *ClientRepository) Delete(ctx context.Context, id int64) error {
 	return nil
 }
 
-// SetMatchRules replaces all match rules for a client (delete-then-insert).
-func (r *ClientRepository) SetMatchRules(ctx context.Context, clientID int64, rules []models.ClientMatchRule) error {
+func (r *ClientRepository) SetMatchRules(ctx context.Context, clientID string, rules []models.ClientMatchRule) error {
 	if _, err := r.db.ExecContext(ctx, `DELETE FROM client_match_rules WHERE client_id = ?`, clientID); err != nil {
 		return fmt.Errorf("clearing match rules: %w", err)
 	}
 	for i := range rules {
-		result, err := r.db.ExecContext(ctx,
-			`INSERT INTO client_match_rules (client_id, header_name, match_type, match_value) VALUES (?, ?, ?, ?)`,
-			clientID, rules[i].HeaderName, rules[i].MatchType, rules[i].MatchValue)
+		rules[i].ID = uuid.New().String()
+		rules[i].ClientID = clientID
+		_, err := r.db.ExecContext(ctx,
+			`INSERT INTO client_match_rules (id, client_id, header_name, match_type, match_value) VALUES (?, ?, ?, ?, ?)`,
+			rules[i].ID, clientID, rules[i].HeaderName, rules[i].MatchType, rules[i].MatchValue)
 		if err != nil {
 			return fmt.Errorf("inserting match rule: %w", err)
 		}
-		id, err := result.LastInsertId()
-		if err != nil {
-			return fmt.Errorf("getting match rule id: %w", err)
-		}
-		rules[i].ID = id
-		rules[i].ClientID = clientID
 	}
 	return nil
 }
 
-// ListEnabledWithRules returns enabled clients ordered by priority with rules pre-loaded.
 func (r *ClientRepository) ListEnabledWithRules(ctx context.Context) ([]models.Client, error) {
 	rows, err := r.db.QueryContext(ctx,
 		`SELECT id, name, priority, stream_profile_id, is_enabled, created_at, updated_at
-		FROM clients WHERE is_enabled = 1 ORDER BY priority, id`,
+		FROM clients WHERE is_enabled = 1 ORDER BY priority, created_at`,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("listing enabled clients: %w", err)
@@ -172,8 +164,7 @@ func (r *ClientRepository) ListEnabledWithRules(ctx context.Context) ([]models.C
 	return clients, nil
 }
 
-// IsStreamProfileReferenced checks if a stream profile is referenced by any client.
-func (r *ClientRepository) IsStreamProfileReferenced(ctx context.Context, profileID int64) (bool, error) {
+func (r *ClientRepository) IsStreamProfileReferenced(ctx context.Context, profileID string) (bool, error) {
 	var count int
 	err := r.db.QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM clients WHERE stream_profile_id = ?`, profileID,
@@ -184,10 +175,10 @@ func (r *ClientRepository) IsStreamProfileReferenced(ctx context.Context, profil
 	return count > 0, nil
 }
 
-func (r *ClientRepository) getMatchRules(ctx context.Context, clientID int64) ([]models.ClientMatchRule, error) {
+func (r *ClientRepository) getMatchRules(ctx context.Context, clientID string) ([]models.ClientMatchRule, error) {
 	rows, err := r.db.QueryContext(ctx,
 		`SELECT id, client_id, header_name, match_type, match_value
-		FROM client_match_rules WHERE client_id = ? ORDER BY id`, clientID,
+		FROM client_match_rules WHERE client_id = ? ORDER BY header_name`, clientID,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("getting match rules: %w", err)

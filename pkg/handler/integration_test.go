@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -68,26 +67,29 @@ func setupFullEnv(t *testing.T) *fullTestEnv {
 	settingsRepo := repository.NewCoreSettingsRepository(db)
 	clientRepo := repository.NewClientRepository(db)
 
-	// Services
+	// Services (auth first, need admin user ID for output/HDHR)
 	authService := service.NewAuthService(userRepo, cfg.JWTSecret, cfg.AccessTokenExpiry, cfg.RefreshTokenExpiry)
+
+	// Create test users BEFORE services that need adminUserID
+	adminUser, err := authService.CreateUser(context.Background(), "admin", "adminpass", true)
+	require.NoError(t, err)
+	_, err = authService.CreateUser(context.Background(), "user", "userpass", false)
+	require.NoError(t, err)
+	adminUserID := adminUser.ID
+
 	m3uService := service.NewM3UService(m3uAccountRepo, streamRepo, cfg, log)
 	channelService := service.NewChannelService(channelRepo, channelGroupRepo, streamRepo, log)
 	epgService := service.NewEPGService(epgSourceRepo, epgDataRepo, programDataRepo, cfg, log)
 	settingsService := service.NewSettingsService(settingsRepo)
 	clientService := service.NewClientService(clientRepo, streamProfileRepo, log)
 	proxyService := service.NewProxyService(channelRepo, streamRepo, m3uAccountRepo, channelProfileRepo, streamProfileRepo, clientService, cfg, log)
-	hdhrService := service.NewHDHRService(hdhrDeviceRepo, channelRepo, streamRepo, channelProfileRepo, streamProfileRepo, cfg, log)
-	outputService := service.NewOutputService(channelRepo, channelGroupRepo, streamRepo, channelProfileRepo, streamProfileRepo, epgDataRepo, programDataRepo, cfg, log)
-	vodService := service.NewVODService(channelRepo, streamRepo, streamProfileRepo, cfg, log)
-
-	// Create test users
-	_, err = authService.CreateUser(context.Background(), "admin", "adminpass", true)
-	require.NoError(t, err)
-	_, err = authService.CreateUser(context.Background(), "user", "userpass", false)
-	require.NoError(t, err)
+	hdhrService := service.NewHDHRService(hdhrDeviceRepo, channelRepo, streamRepo, channelProfileRepo, streamProfileRepo, adminUserID, cfg, log)
+	outputService := service.NewOutputService(channelRepo, channelGroupRepo, streamRepo, channelProfileRepo, streamProfileRepo, epgDataRepo, programDataRepo, adminUserID, cfg, log)
+	ffmpegMgr := service.NewFFmpegManager(cfg, log)
+	vodService := service.NewVODService(channelRepo, streamRepo, streamProfileRepo, ffmpegMgr, cfg, log)
 
 	// Auth middleware
-	authMW := middleware.NewAuthMiddleware(authService, cfg.APIKey)
+	authMW := middleware.NewAuthMiddleware(authService, cfg.APIKey, adminUserID)
 
 	// Handlers
 	authHandler := NewAuthHandler(authService)
@@ -95,7 +97,7 @@ func setupFullEnv(t *testing.T) *fullTestEnv {
 	m3uAccountHandler := NewM3UAccountHandler(m3uService)
 	streamHandler := NewStreamHandler(streamRepo)
 	channelHandler := NewChannelHandler(channelService, logoRepo)
-	channelGroupHandler := NewChannelGroupHandler(channelGroupRepo)
+	channelGroupHandler := NewChannelGroupHandler(channelService)
 	channelProfileHandler := NewChannelProfileHandler(channelProfileRepo)
 	logoHandler := NewLogoHandler(logoRepo)
 	streamProfileHandler := NewStreamProfileHandler(streamProfileRepo)
@@ -113,6 +115,7 @@ func setupFullEnv(t *testing.T) *fullTestEnv {
 	// Public routes
 	r.Post("/api/auth/login", authHandler.Login)
 	r.Post("/api/auth/refresh", authHandler.Refresh)
+	r.Post("/api/auth/invite/{token}", authHandler.AcceptInvite)
 
 	// HDHomeRun routes at root (no auth)
 	r.Get("/discover.json", hdhrHandler.Discover)
@@ -136,6 +139,12 @@ func setupFullEnv(t *testing.T) *fullTestEnv {
 	r.Group(func(r chi.Router) {
 		r.Use(authMW.Authenticate)
 
+		// Recording routes (any authenticated user)
+		r.Post("/vod/{sessionID}/record", vodHandler.MarkRecording)
+		r.Post("/vod/{sessionID}/stop", vodHandler.StopRecording)
+		r.Post("/vod/{sessionID}/cancel", vodHandler.CancelRecording)
+		r.Post("/channel/{channelID}/record", vodHandler.CreateRecording)
+
 		r.Post("/api/auth/logout", authHandler.Logout)
 		r.Get("/api/auth/me", authHandler.Me)
 
@@ -143,6 +152,7 @@ func setupFullEnv(t *testing.T) *fullTestEnv {
 			r.Use(authMW.RequireAdmin)
 			r.Get("/", userHandler.List)
 			r.Post("/", userHandler.Create)
+			r.Post("/invite", userHandler.Invite)
 			r.Get("/{id}", userHandler.Get)
 			r.Put("/{id}", userHandler.Update)
 			r.Delete("/{id}", userHandler.Delete)
@@ -150,17 +160,23 @@ func setupFullEnv(t *testing.T) *fullTestEnv {
 
 		r.Route("/api/m3u/accounts", func(r chi.Router) {
 			r.Get("/", m3uAccountHandler.List)
-			r.Post("/", m3uAccountHandler.Create)
 			r.Get("/{id}", m3uAccountHandler.Get)
-			r.Put("/{id}", m3uAccountHandler.Update)
-			r.Delete("/{id}", m3uAccountHandler.Delete)
-			r.Post("/{id}/refresh", m3uAccountHandler.Refresh)
+			r.Group(func(r chi.Router) {
+				r.Use(authMW.RequireAdmin)
+				r.Post("/", m3uAccountHandler.Create)
+				r.Put("/{id}", m3uAccountHandler.Update)
+				r.Delete("/{id}", m3uAccountHandler.Delete)
+				r.Post("/{id}/refresh", m3uAccountHandler.Refresh)
+			})
 		})
 
 		r.Route("/api/streams", func(r chi.Router) {
 			r.Get("/", streamHandler.List)
 			r.Get("/{id}", streamHandler.Get)
-			r.Delete("/{id}", streamHandler.Delete)
+			r.Group(func(r chi.Router) {
+				r.Use(authMW.RequireAdmin)
+				r.Delete("/{id}", streamHandler.Delete)
+			})
 		})
 
 		r.Route("/api/channels", func(r chi.Router) {
@@ -169,7 +185,10 @@ func setupFullEnv(t *testing.T) *fullTestEnv {
 			r.Get("/{id}", channelHandler.Get)
 			r.Put("/{id}", channelHandler.Update)
 			r.Delete("/{id}", channelHandler.Delete)
+			r.Get("/{id}/streams", channelHandler.GetStreams)
 			r.Post("/{id}/streams", channelHandler.AssignStreams)
+			r.Post("/{id}/fail", channelHandler.IncrementFailCount)
+			r.Delete("/{id}/fail", channelHandler.ResetFailCount)
 		})
 
 		r.Route("/api/channel-groups", func(r chi.Router) {
@@ -181,6 +200,7 @@ func setupFullEnv(t *testing.T) *fullTestEnv {
 		})
 
 		r.Route("/api/channel-profiles", func(r chi.Router) {
+			r.Use(authMW.RequireAdmin)
 			r.Get("/", channelProfileHandler.List)
 			r.Post("/", channelProfileHandler.Create)
 			r.Get("/{id}", channelProfileHandler.Get)
@@ -189,6 +209,7 @@ func setupFullEnv(t *testing.T) *fullTestEnv {
 		})
 
 		r.Route("/api/logos", func(r chi.Router) {
+			r.Use(authMW.RequireAdmin)
 			r.Get("/", logoHandler.List)
 			r.Post("/", logoHandler.Create)
 			r.Get("/{id}", logoHandler.Get)
@@ -197,6 +218,7 @@ func setupFullEnv(t *testing.T) *fullTestEnv {
 		})
 
 		r.Route("/api/stream-profiles", func(r chi.Router) {
+			r.Use(authMW.RequireAdmin)
 			r.Get("/", streamProfileHandler.List)
 			r.Post("/", streamProfileHandler.Create)
 			r.Get("/{id}", streamProfileHandler.Get)
@@ -206,17 +228,21 @@ func setupFullEnv(t *testing.T) *fullTestEnv {
 
 		r.Route("/api/epg", func(r chi.Router) {
 			r.Get("/sources", epgSourceHandler.List)
-			r.Post("/sources", epgSourceHandler.Create)
 			r.Get("/sources/{id}", epgSourceHandler.Get)
-			r.Put("/sources/{id}", epgSourceHandler.Update)
-			r.Delete("/sources/{id}", epgSourceHandler.Delete)
-			r.Post("/sources/{id}/refresh", epgSourceHandler.Refresh)
 			r.Get("/data", epgDataHandler.List)
 			r.Get("/now", epgDataHandler.NowPlaying)
 			r.Get("/guide", epgDataHandler.Guide)
+			r.Group(func(r chi.Router) {
+				r.Use(authMW.RequireAdmin)
+				r.Post("/sources", epgSourceHandler.Create)
+				r.Put("/sources/{id}", epgSourceHandler.Update)
+				r.Delete("/sources/{id}", epgSourceHandler.Delete)
+				r.Post("/sources/{id}/refresh", epgSourceHandler.Refresh)
+			})
 		})
 
 		r.Route("/api/hdhr/devices", func(r chi.Router) {
+			r.Use(authMW.RequireAdmin)
 			r.Get("/", hdhrHandler.ListDevices)
 			r.Post("/", hdhrHandler.CreateDevice)
 			r.Get("/{id}", hdhrHandler.GetDevice)
@@ -225,16 +251,25 @@ func setupFullEnv(t *testing.T) *fullTestEnv {
 		})
 
 		r.Route("/api/settings", func(r chi.Router) {
+			r.Use(authMW.RequireAdmin)
 			r.Get("/", settingsHandler.List)
 			r.Put("/", settingsHandler.Update)
 		})
 
 		r.Route("/api/clients", func(r chi.Router) {
+			r.Use(authMW.RequireAdmin)
 			r.Get("/", clientHandler.List)
 			r.Post("/", clientHandler.Create)
 			r.Get("/{id}", clientHandler.Get)
 			r.Put("/{id}", clientHandler.Update)
 			r.Delete("/{id}", clientHandler.Delete)
+		})
+
+		r.Route("/api/recordings", func(r chi.Router) {
+			r.Get("/", vodHandler.ListRecordings)
+			r.Get("/completed", vodHandler.ListCompletedRecordings)
+			r.Get("/completed/{filename}/stream", vodHandler.StreamCompletedRecording)
+			r.Delete("/completed/{filename}", vodHandler.DeleteCompletedRecording)
 		})
 	})
 
@@ -288,6 +323,21 @@ func doRequest(t *testing.T, env *fullTestEnv, method, path string, body interfa
 func decodeResponse(t *testing.T, rec *httptest.ResponseRecorder, v interface{}) {
 	t.Helper()
 	require.NoError(t, json.NewDecoder(rec.Body).Decode(v))
+}
+
+func findByName(t *testing.T, env *fullTestEnv, endpoint, name, token string) map[string]interface{} {
+	t.Helper()
+	rec := doRequest(t, env, "GET", endpoint, nil, token)
+	require.Equal(t, http.StatusOK, rec.Code)
+	var items []map[string]interface{}
+	decodeResponse(t, rec, &items)
+	for _, item := range items {
+		if item["name"] == name {
+			return item
+		}
+	}
+	t.Fatalf("item with name %q not found in %s", name, endpoint)
+	return nil
 }
 
 // =============================================================================
@@ -346,6 +396,7 @@ func TestIntegration_AuthFlow(t *testing.T) {
 		decodeResponse(t, rec, &resp)
 		assert.Equal(t, "api-key", resp["username"])
 		assert.Equal(t, true, resp["is_admin"])
+		assert.NotEmpty(t, resp["user_id"])
 	})
 
 	t.Run("me with wrong API key", func(t *testing.T) {
@@ -420,7 +471,21 @@ func TestIntegration_UserCRUD(t *testing.T) {
 	})
 
 	t.Run("get user by id", func(t *testing.T) {
-		rec := doRequest(t, env, "GET", "/api/users/1", nil, env.adminToken)
+		// List users and get the admin user's UUID
+		rec := doRequest(t, env, "GET", "/api/users/", nil, env.adminToken)
+		require.Equal(t, http.StatusOK, rec.Code)
+		var users []map[string]interface{}
+		decodeResponse(t, rec, &users)
+		var adminID string
+		for _, u := range users {
+			if u["username"] == "admin" {
+				adminID = u["id"].(string)
+				break
+			}
+		}
+		require.NotEmpty(t, adminID)
+
+		rec = doRequest(t, env, "GET", "/api/users/"+adminID, nil, env.adminToken)
 		assert.Equal(t, http.StatusOK, rec.Code)
 		var user map[string]interface{}
 		decodeResponse(t, rec, &user)
@@ -428,12 +493,26 @@ func TestIntegration_UserCRUD(t *testing.T) {
 	})
 
 	t.Run("get non-existent user", func(t *testing.T) {
-		rec := doRequest(t, env, "GET", "/api/users/999", nil, env.adminToken)
+		rec := doRequest(t, env, "GET", "/api/users/00000000-0000-0000-0000-000000000000", nil, env.adminToken)
 		assert.Equal(t, http.StatusNotFound, rec.Code)
 	})
 
 	t.Run("update user", func(t *testing.T) {
-		rec := doRequest(t, env, "PUT", "/api/users/2", map[string]interface{}{
+		// Find the "user" account's UUID
+		rec := doRequest(t, env, "GET", "/api/users/", nil, env.adminToken)
+		require.Equal(t, http.StatusOK, rec.Code)
+		var users []map[string]interface{}
+		decodeResponse(t, rec, &users)
+		var userID string
+		for _, u := range users {
+			if u["username"] == "user" {
+				userID = u["id"].(string)
+				break
+			}
+		}
+		require.NotEmpty(t, userID)
+
+		rec = doRequest(t, env, "PUT", "/api/users/"+userID, map[string]interface{}{
 			"username": "updateduser", "is_admin": false,
 		}, env.adminToken)
 		assert.Equal(t, http.StatusOK, rec.Code)
@@ -450,7 +529,7 @@ func TestIntegration_UserCRUD(t *testing.T) {
 		require.Equal(t, http.StatusCreated, rec.Code)
 		var user map[string]interface{}
 		decodeResponse(t, rec, &user)
-		id := fmt.Sprintf("%.0f", user["id"].(float64))
+		id := user["id"].(string)
 
 		rec = doRequest(t, env, "DELETE", "/api/users/"+id, nil, env.adminToken)
 		assert.Equal(t, http.StatusNoContent, rec.Code)
@@ -476,6 +555,8 @@ func TestIntegration_ChannelGroupCRUD(t *testing.T) {
 		assert.Len(t, groups, 0)
 	})
 
+	var groupID string
+
 	t.Run("create", func(t *testing.T) {
 		rec := doRequest(t, env, "POST", "/api/channel-groups/", map[string]interface{}{
 			"name": "Sports", "is_enabled": true, "sort_order": 1,
@@ -486,6 +567,7 @@ func TestIntegration_ChannelGroupCRUD(t *testing.T) {
 		assert.Equal(t, "Sports", group["name"])
 		assert.Equal(t, true, group["is_enabled"])
 		assert.Equal(t, float64(1), group["sort_order"])
+		groupID = group["id"].(string)
 	})
 
 	t.Run("create missing name", func(t *testing.T) {
@@ -496,7 +578,7 @@ func TestIntegration_ChannelGroupCRUD(t *testing.T) {
 	})
 
 	t.Run("get by id", func(t *testing.T) {
-		rec := doRequest(t, env, "GET", "/api/channel-groups/1", nil, env.adminToken)
+		rec := doRequest(t, env, "GET", "/api/channel-groups/"+groupID, nil, env.adminToken)
 		assert.Equal(t, http.StatusOK, rec.Code)
 		var group map[string]interface{}
 		decodeResponse(t, rec, &group)
@@ -504,7 +586,7 @@ func TestIntegration_ChannelGroupCRUD(t *testing.T) {
 	})
 
 	t.Run("update", func(t *testing.T) {
-		rec := doRequest(t, env, "PUT", "/api/channel-groups/1", map[string]interface{}{
+		rec := doRequest(t, env, "PUT", "/api/channel-groups/"+groupID, map[string]interface{}{
 			"name": "Sports HD", "is_enabled": true, "sort_order": 2,
 		}, env.adminToken)
 		assert.Equal(t, http.StatusOK, rec.Code)
@@ -530,7 +612,7 @@ func TestIntegration_ChannelGroupCRUD(t *testing.T) {
 		require.Equal(t, http.StatusCreated, rec.Code)
 		var g map[string]interface{}
 		decodeResponse(t, rec, &g)
-		id := fmt.Sprintf("%.0f", g["id"].(float64))
+		id := g["id"].(string)
 
 		rec = doRequest(t, env, "DELETE", "/api/channel-groups/"+id, nil, env.adminToken)
 		assert.Equal(t, http.StatusNoContent, rec.Code)
@@ -540,7 +622,7 @@ func TestIntegration_ChannelGroupCRUD(t *testing.T) {
 	})
 
 	t.Run("get non-existent", func(t *testing.T) {
-		rec := doRequest(t, env, "GET", "/api/channel-groups/999", nil, env.adminToken)
+		rec := doRequest(t, env, "GET", "/api/channel-groups/00000000-0000-0000-0000-000000000000", nil, env.adminToken)
 		assert.Equal(t, http.StatusNotFound, rec.Code)
 	})
 }
@@ -552,6 +634,8 @@ func TestIntegration_ChannelGroupCRUD(t *testing.T) {
 func TestIntegration_ChannelProfileCRUD(t *testing.T) {
 	env := setupFullEnv(t)
 
+	var profileID string
+
 	t.Run("create and get", func(t *testing.T) {
 		rec := doRequest(t, env, "POST", "/api/channel-profiles/", map[string]interface{}{
 			"name": "Default Profile", "stream_profile": "direct", "sort_order": 1,
@@ -560,13 +644,14 @@ func TestIntegration_ChannelProfileCRUD(t *testing.T) {
 		var profile map[string]interface{}
 		decodeResponse(t, rec, &profile)
 		assert.Equal(t, "Default Profile", profile["name"])
+		profileID = profile["id"].(string)
 
-		rec = doRequest(t, env, "GET", "/api/channel-profiles/1", nil, env.adminToken)
+		rec = doRequest(t, env, "GET", "/api/channel-profiles/"+profileID, nil, env.adminToken)
 		assert.Equal(t, http.StatusOK, rec.Code)
 	})
 
 	t.Run("update", func(t *testing.T) {
-		rec := doRequest(t, env, "PUT", "/api/channel-profiles/1", map[string]interface{}{
+		rec := doRequest(t, env, "PUT", "/api/channel-profiles/"+profileID, map[string]interface{}{
 			"name": "Updated Profile", "stream_profile": "transcode", "sort_order": 2,
 		}, env.adminToken)
 		assert.Equal(t, http.StatusOK, rec.Code)
@@ -584,7 +669,7 @@ func TestIntegration_ChannelProfileCRUD(t *testing.T) {
 	})
 
 	t.Run("delete", func(t *testing.T) {
-		rec := doRequest(t, env, "DELETE", "/api/channel-profiles/1", nil, env.adminToken)
+		rec := doRequest(t, env, "DELETE", "/api/channel-profiles/"+profileID, nil, env.adminToken)
 		assert.Equal(t, http.StatusNoContent, rec.Code)
 	})
 
@@ -603,6 +688,9 @@ func TestIntegration_ChannelProfileCRUD(t *testing.T) {
 func TestIntegration_StreamProfileCRUD(t *testing.T) {
 	env := setupFullEnv(t)
 
+	var createdProfileID1 string
+	var createdProfileID2 string
+
 	t.Run("create with dropdowns", func(t *testing.T) {
 		rec := doRequest(t, env, "POST", "/api/stream-profiles/", map[string]interface{}{
 			"name": "SAT>IP QSV H264", "stream_mode": "ffmpeg", "source_type": "satip", "hwaccel": "qsv", "video_codec": "h264", "is_default": false,
@@ -618,6 +706,7 @@ func TestIntegration_StreamProfileCRUD(t *testing.T) {
 		assert.Equal(t, "ffmpeg", profile["command"])
 		assert.Contains(t, profile["args"], "h264_qsv")
 		assert.Nil(t, profile["custom_args"])
+		createdProfileID1 = profile["id"].(string)
 	})
 
 	t.Run("create with custom args", func(t *testing.T) {
@@ -632,6 +721,7 @@ func TestIntegration_StreamProfileCRUD(t *testing.T) {
 		assert.Equal(t, "-b:v 4M", profile["custom_args"])      // extras only
 		assert.Contains(t, profile["args"], "-b:v 4M")           // extras appended to composed
 		assert.Contains(t, profile["args"], "-i {input}")         // composed base present
+		createdProfileID2 = profile["id"].(string)
 	})
 
 	t.Run("create with use_custom_args", func(t *testing.T) {
@@ -653,12 +743,12 @@ func TestIntegration_StreamProfileCRUD(t *testing.T) {
 		assert.Equal(t, http.StatusOK, rec.Code)
 		var profiles []map[string]interface{}
 		decodeResponse(t, rec, &profiles)
-		// 2 system (Direct, Proxy) + 5 regular (Browser, SAT>IP Copy, M3U Copy, M3U→MP4, M3U→Matroska) + 3 client (Plex, VLC, Browser) + 3 created above = 13
+		// 2 system (Direct, Proxy) + 5 regular (Browser, SAT>IP Copy, M3U Copy, M3U->MP4, M3U->Matroska) + 3 client (Plex, VLC, Browser) + 3 created above = 13
 		assert.Len(t, profiles, 13)
 	})
 
 	t.Run("get", func(t *testing.T) {
-		rec := doRequest(t, env, "GET", "/api/stream-profiles/11", nil, env.adminToken)
+		rec := doRequest(t, env, "GET", "/api/stream-profiles/"+createdProfileID1, nil, env.adminToken)
 		assert.Equal(t, http.StatusOK, rec.Code)
 		var profile map[string]interface{}
 		decodeResponse(t, rec, &profile)
@@ -667,7 +757,7 @@ func TestIntegration_StreamProfileCRUD(t *testing.T) {
 	})
 
 	t.Run("update", func(t *testing.T) {
-		rec := doRequest(t, env, "PUT", "/api/stream-profiles/11", map[string]interface{}{
+		rec := doRequest(t, env, "PUT", "/api/stream-profiles/"+createdProfileID1, map[string]interface{}{
 			"name": "SAT>IP NVENC AV1", "source_type": "satip", "hwaccel": "nvenc", "video_codec": "av1", "is_default": false,
 		}, env.adminToken)
 		assert.Equal(t, http.StatusOK, rec.Code)
@@ -680,18 +770,21 @@ func TestIntegration_StreamProfileCRUD(t *testing.T) {
 	})
 
 	t.Run("delete non-system profile", func(t *testing.T) {
-		rec := doRequest(t, env, "DELETE", "/api/stream-profiles/12", nil, env.adminToken)
+		rec := doRequest(t, env, "DELETE", "/api/stream-profiles/"+createdProfileID2, nil, env.adminToken)
 		assert.Equal(t, http.StatusNoContent, rec.Code)
 	})
 
 	t.Run("delete system profile is forbidden", func(t *testing.T) {
-		// Profile 1 is "Direct" (is_system=true)
-		rec := doRequest(t, env, "DELETE", "/api/stream-profiles/1", nil, env.adminToken)
+		directProfile := findByName(t, env, "/api/stream-profiles/", "Direct", env.adminToken)
+		directID := directProfile["id"].(string)
+		rec := doRequest(t, env, "DELETE", "/api/stream-profiles/"+directID, nil, env.adminToken)
 		assert.Equal(t, http.StatusForbidden, rec.Code)
 	})
 
 	t.Run("proxy profile is system and default", func(t *testing.T) {
-		rec := doRequest(t, env, "GET", "/api/stream-profiles/2", nil, env.adminToken)
+		proxyProfile := findByName(t, env, "/api/stream-profiles/", "Proxy", env.adminToken)
+		proxyID := proxyProfile["id"].(string)
+		rec := doRequest(t, env, "GET", "/api/stream-profiles/"+proxyID, nil, env.adminToken)
 		assert.Equal(t, http.StatusOK, rec.Code)
 		var profile map[string]interface{}
 		decodeResponse(t, rec, &profile)
@@ -702,9 +795,21 @@ func TestIntegration_StreamProfileCRUD(t *testing.T) {
 	})
 
 	t.Run("browser profile is client not system", func(t *testing.T) {
-		// Browser profile (ID 3) lost is_system in the migration, but the client-created
-		// Browser profile (ID 10) has is_client=true from the migration
-		rec := doRequest(t, env, "GET", "/api/stream-profiles/10", nil, env.adminToken)
+		// Find the Browser profile that has is_client=true
+		rec := doRequest(t, env, "GET", "/api/stream-profiles/", nil, env.adminToken)
+		require.Equal(t, http.StatusOK, rec.Code)
+		var profiles []map[string]interface{}
+		decodeResponse(t, rec, &profiles)
+		var browserClientID string
+		for _, p := range profiles {
+			if p["name"] == "Browser" && p["is_client"] == true {
+				browserClientID = p["id"].(string)
+				break
+			}
+		}
+		require.NotEmpty(t, browserClientID)
+
+		rec = doRequest(t, env, "GET", "/api/stream-profiles/"+browserClientID, nil, env.adminToken)
 		assert.Equal(t, http.StatusOK, rec.Code)
 		var profile map[string]interface{}
 		decodeResponse(t, rec, &profile)
@@ -714,20 +819,49 @@ func TestIntegration_StreamProfileCRUD(t *testing.T) {
 	})
 
 	t.Run("delete client profile is forbidden", func(t *testing.T) {
-		// Profile 8 is the Plex client profile (is_client=true)
-		rec := doRequest(t, env, "DELETE", "/api/stream-profiles/8", nil, env.adminToken)
+		// Find the Plex client profile (is_client=true)
+		rec := doRequest(t, env, "GET", "/api/stream-profiles/", nil, env.adminToken)
+		require.Equal(t, http.StatusOK, rec.Code)
+		var profiles []map[string]interface{}
+		decodeResponse(t, rec, &profiles)
+		var plexClientProfileID string
+		for _, p := range profiles {
+			if p["name"] == "Plex" && p["is_client"] == true {
+				plexClientProfileID = p["id"].(string)
+				break
+			}
+		}
+		require.NotEmpty(t, plexClientProfileID)
+
+		rec = doRequest(t, env, "DELETE", "/api/stream-profiles/"+plexClientProfileID, nil, env.adminToken)
 		assert.Equal(t, http.StatusForbidden, rec.Code)
 	})
 
 	t.Run("update system profile is forbidden", func(t *testing.T) {
-		rec := doRequest(t, env, "PUT", "/api/stream-profiles/1", map[string]interface{}{
+		directProfile := findByName(t, env, "/api/stream-profiles/", "Direct", env.adminToken)
+		directID := directProfile["id"].(string)
+		rec := doRequest(t, env, "PUT", "/api/stream-profiles/"+directID, map[string]interface{}{
 			"name": "Renamed Direct",
 		}, env.adminToken)
 		assert.Equal(t, http.StatusForbidden, rec.Code)
 	})
 
 	t.Run("update client profile is allowed", func(t *testing.T) {
-		rec := doRequest(t, env, "PUT", "/api/stream-profiles/8", map[string]interface{}{
+		// Find the Plex client profile
+		rec := doRequest(t, env, "GET", "/api/stream-profiles/", nil, env.adminToken)
+		require.Equal(t, http.StatusOK, rec.Code)
+		var profiles []map[string]interface{}
+		decodeResponse(t, rec, &profiles)
+		var plexClientProfileID string
+		for _, p := range profiles {
+			if p["name"] == "Plex" && p["is_client"] == true {
+				plexClientProfileID = p["id"].(string)
+				break
+			}
+		}
+		require.NotEmpty(t, plexClientProfileID)
+
+		rec = doRequest(t, env, "PUT", "/api/stream-profiles/"+plexClientProfileID, map[string]interface{}{
 			"name": "Plex Custom", "source_type": "m3u", "hwaccel": "qsv", "video_codec": "h264",
 		}, env.adminToken)
 		assert.Equal(t, http.StatusOK, rec.Code)
@@ -812,6 +946,8 @@ func TestIntegration_StreamProfileCRUD(t *testing.T) {
 func TestIntegration_LogoCRUD(t *testing.T) {
 	env := setupFullEnv(t)
 
+	var logoID string
+
 	t.Run("create", func(t *testing.T) {
 		rec := doRequest(t, env, "POST", "/api/logos/", map[string]interface{}{
 			"name": "BBC Logo", "url": "https://example.com/bbc.png",
@@ -821,6 +957,7 @@ func TestIntegration_LogoCRUD(t *testing.T) {
 		decodeResponse(t, rec, &logo)
 		assert.Equal(t, "BBC Logo", logo["name"])
 		assert.Equal(t, "https://example.com/bbc.png", logo["url"])
+		logoID = logo["id"].(string)
 	})
 
 	t.Run("create missing fields", func(t *testing.T) {
@@ -839,23 +976,23 @@ func TestIntegration_LogoCRUD(t *testing.T) {
 	})
 
 	t.Run("get", func(t *testing.T) {
-		rec := doRequest(t, env, "GET", "/api/logos/1", nil, env.adminToken)
+		rec := doRequest(t, env, "GET", "/api/logos/"+logoID, nil, env.adminToken)
 		assert.Equal(t, http.StatusOK, rec.Code)
 	})
 
 	t.Run("get non-existent", func(t *testing.T) {
-		rec := doRequest(t, env, "GET", "/api/logos/999", nil, env.adminToken)
+		rec := doRequest(t, env, "GET", "/api/logos/00000000-0000-0000-0000-000000000000", nil, env.adminToken)
 		assert.Equal(t, http.StatusNotFound, rec.Code)
 	})
 
 	t.Run("delete", func(t *testing.T) {
-		rec := doRequest(t, env, "DELETE", "/api/logos/1", nil, env.adminToken)
+		rec := doRequest(t, env, "DELETE", "/api/logos/"+logoID, nil, env.adminToken)
 		assert.Equal(t, http.StatusNoContent, rec.Code)
 	})
 }
 
 // =============================================================================
-// Logo → Channel FK Propagation
+// Logo -> Channel FK Propagation
 // =============================================================================
 
 func TestIntegration_LogoChannelPropagation(t *testing.T) {
@@ -868,7 +1005,7 @@ func TestIntegration_LogoChannelPropagation(t *testing.T) {
 	require.Equal(t, http.StatusCreated, rec.Code)
 	var logo map[string]interface{}
 	decodeResponse(t, rec, &logo)
-	logoID := logo["id"].(float64)
+	logoID := logo["id"].(string)
 
 	// 2. Create channel with logo_id
 	rec = doRequest(t, env, "POST", "/api/channels/", map[string]interface{}{
@@ -880,10 +1017,10 @@ func TestIntegration_LogoChannelPropagation(t *testing.T) {
 	assert.Equal(t, logoID, ch["logo_id"])
 	assert.Equal(t, "https://example.com/bbc.png", ch["logo"])
 
-	channelID := fmt.Sprintf("%.0f", ch["id"].(float64))
+	channelID := ch["id"].(string)
 
 	// 3. Update the logo URL
-	rec = doRequest(t, env, "PUT", "/api/logos/1", map[string]interface{}{
+	rec = doRequest(t, env, "PUT", "/api/logos/"+logoID, map[string]interface{}{
 		"name": "BBC Logo", "url": "https://example.com/bbc-hd.png",
 	}, env.adminToken)
 	require.Equal(t, http.StatusOK, rec.Code)
@@ -894,7 +1031,7 @@ func TestIntegration_LogoChannelPropagation(t *testing.T) {
 	decodeResponse(t, rec, &ch)
 	assert.Equal(t, "https://example.com/bbc-hd.png", ch["logo"])
 
-	// 5. Create channel with logo URL string (backward compat) — auto-creates Logo
+	// 5. Create channel with logo URL string (backward compat) -- auto-creates Logo
 	rec = doRequest(t, env, "POST", "/api/channels/", map[string]interface{}{
 		"name": "ITV", "logo": "https://example.com/itv.png", "is_enabled": true,
 	}, env.adminToken)
@@ -910,8 +1047,8 @@ func TestIntegration_LogoChannelPropagation(t *testing.T) {
 	decodeResponse(t, rec, &logos)
 	assert.Len(t, logos, 2) // BBC Logo + auto-created ITV logo
 
-	// 7. Delete logo — channel logo_id should be nulled
-	rec = doRequest(t, env, "DELETE", "/api/logos/1", nil, env.adminToken)
+	// 7. Delete logo -- channel logo_id should be nulled
+	rec = doRequest(t, env, "DELETE", "/api/logos/"+logoID, nil, env.adminToken)
 	require.Equal(t, http.StatusNoContent, rec.Code)
 
 	rec = doRequest(t, env, "GET", "/api/channels/"+channelID, nil, env.adminToken)
@@ -920,6 +1057,41 @@ func TestIntegration_LogoChannelPropagation(t *testing.T) {
 	decodeResponse(t, rec, &chAfterDelete)
 	assert.Nil(t, chAfterDelete["logo_id"])
 	assert.Nil(t, chAfterDelete["logo"])
+}
+
+// =============================================================================
+// Channel Fail Count
+// =============================================================================
+
+func TestIntegration_ChannelFailCount(t *testing.T) {
+	env := setupFullEnv(t)
+
+	rec := doRequest(t, env, "POST", "/api/channels/", map[string]interface{}{
+		"name": "Fail Test Channel", "is_enabled": true,
+	}, env.adminToken)
+	require.Equal(t, http.StatusCreated, rec.Code)
+	var ch map[string]interface{}
+	decodeResponse(t, rec, &ch)
+	channelID := ch["id"].(string)
+	assert.Equal(t, float64(0), ch["fail_count"])
+
+	rec = doRequest(t, env, "POST", "/api/channels/"+channelID+"/fail", nil, env.adminToken)
+	require.Equal(t, http.StatusOK, rec.Code)
+	decodeResponse(t, rec, &ch)
+	assert.Equal(t, float64(1), ch["fail_count"])
+
+	rec = doRequest(t, env, "POST", "/api/channels/"+channelID+"/fail", nil, env.adminToken)
+	require.Equal(t, http.StatusOK, rec.Code)
+	decodeResponse(t, rec, &ch)
+	assert.Equal(t, float64(2), ch["fail_count"])
+
+	rec = doRequest(t, env, "DELETE", "/api/channels/"+channelID+"/fail", nil, env.adminToken)
+	require.Equal(t, http.StatusNoContent, rec.Code)
+
+	rec = doRequest(t, env, "GET", "/api/channels/"+channelID, nil, env.adminToken)
+	require.Equal(t, http.StatusOK, rec.Code)
+	decodeResponse(t, rec, &ch)
+	assert.Equal(t, float64(0), ch["fail_count"])
 }
 
 // =============================================================================
@@ -981,11 +1153,13 @@ func TestIntegration_Settings(t *testing.T) {
 }
 
 // =============================================================================
-// M3U Account CRUD (no refresh — requires real URL)
+// M3U Account CRUD (no refresh -- requires real URL)
 // =============================================================================
 
 func TestIntegration_M3UAccountCRUD(t *testing.T) {
 	env := setupFullEnv(t)
+
+	var accountID string
 
 	t.Run("list empty", func(t *testing.T) {
 		rec := doRequest(t, env, "GET", "/api/m3u/accounts/", nil, env.adminToken)
@@ -1012,6 +1186,7 @@ func TestIntegration_M3UAccountCRUD(t *testing.T) {
 		assert.Equal(t, "m3u", account["type"])
 		assert.Equal(t, float64(5), account["max_streams"])
 		assert.Equal(t, true, account["is_enabled"])
+		accountID = account["id"].(string)
 	})
 
 	t.Run("create missing fields", func(t *testing.T) {
@@ -1022,7 +1197,7 @@ func TestIntegration_M3UAccountCRUD(t *testing.T) {
 	})
 
 	t.Run("get", func(t *testing.T) {
-		rec := doRequest(t, env, "GET", "/api/m3u/accounts/1", nil, env.adminToken)
+		rec := doRequest(t, env, "GET", "/api/m3u/accounts/"+accountID, nil, env.adminToken)
 		assert.Equal(t, http.StatusOK, rec.Code)
 		var account map[string]interface{}
 		decodeResponse(t, rec, &account)
@@ -1030,12 +1205,12 @@ func TestIntegration_M3UAccountCRUD(t *testing.T) {
 	})
 
 	t.Run("get non-existent", func(t *testing.T) {
-		rec := doRequest(t, env, "GET", "/api/m3u/accounts/999", nil, env.adminToken)
+		rec := doRequest(t, env, "GET", "/api/m3u/accounts/00000000-0000-0000-0000-000000000000", nil, env.adminToken)
 		assert.Equal(t, http.StatusNotFound, rec.Code)
 	})
 
 	t.Run("update", func(t *testing.T) {
-		rec := doRequest(t, env, "PUT", "/api/m3u/accounts/1", map[string]interface{}{
+		rec := doRequest(t, env, "PUT", "/api/m3u/accounts/"+accountID, map[string]interface{}{
 			"name":             "Updated M3U",
 			"url":              "http://example.com/new.m3u",
 			"type":             "m3u",
@@ -1051,6 +1226,8 @@ func TestIntegration_M3UAccountCRUD(t *testing.T) {
 		assert.Equal(t, false, account["is_enabled"])
 	})
 
+	var xtreamID string
+
 	t.Run("create xtream account", func(t *testing.T) {
 		rec := doRequest(t, env, "POST", "/api/m3u/accounts/", map[string]interface{}{
 			"name":       "Xtream",
@@ -1065,6 +1242,7 @@ func TestIntegration_M3UAccountCRUD(t *testing.T) {
 		decodeResponse(t, rec, &account)
 		assert.Equal(t, "xtream", account["type"])
 		assert.Equal(t, "testuser", account["username"])
+		xtreamID = account["id"].(string)
 	})
 
 	t.Run("list after creates", func(t *testing.T) {
@@ -1076,20 +1254,22 @@ func TestIntegration_M3UAccountCRUD(t *testing.T) {
 	})
 
 	t.Run("delete", func(t *testing.T) {
-		rec := doRequest(t, env, "DELETE", "/api/m3u/accounts/2", nil, env.adminToken)
+		rec := doRequest(t, env, "DELETE", "/api/m3u/accounts/"+xtreamID, nil, env.adminToken)
 		assert.Equal(t, http.StatusNoContent, rec.Code)
 
-		rec = doRequest(t, env, "GET", "/api/m3u/accounts/2", nil, env.adminToken)
+		rec = doRequest(t, env, "GET", "/api/m3u/accounts/"+xtreamID, nil, env.adminToken)
 		assert.Equal(t, http.StatusNotFound, rec.Code)
 	})
 }
 
 // =============================================================================
-// EPG Source CRUD (no refresh — requires real URL)
+// EPG Source CRUD (no refresh -- requires real URL)
 // =============================================================================
 
 func TestIntegration_EPGSourceCRUD(t *testing.T) {
 	env := setupFullEnv(t)
+
+	var sourceID string
 
 	t.Run("create", func(t *testing.T) {
 		rec := doRequest(t, env, "POST", "/api/epg/sources", map[string]interface{}{
@@ -1102,6 +1282,7 @@ func TestIntegration_EPGSourceCRUD(t *testing.T) {
 		assert.Equal(t, true, source["is_enabled"])
 		assert.Equal(t, float64(0), source["channel_count"])
 		assert.Equal(t, float64(0), source["program_count"])
+		sourceID = source["id"].(string)
 	})
 
 	t.Run("create missing fields", func(t *testing.T) {
@@ -1112,7 +1293,7 @@ func TestIntegration_EPGSourceCRUD(t *testing.T) {
 	})
 
 	t.Run("get", func(t *testing.T) {
-		rec := doRequest(t, env, "GET", "/api/epg/sources/1", nil, env.adminToken)
+		rec := doRequest(t, env, "GET", "/api/epg/sources/"+sourceID, nil, env.adminToken)
 		assert.Equal(t, http.StatusOK, rec.Code)
 		var source map[string]interface{}
 		decodeResponse(t, rec, &source)
@@ -1120,7 +1301,7 @@ func TestIntegration_EPGSourceCRUD(t *testing.T) {
 	})
 
 	t.Run("update", func(t *testing.T) {
-		rec := doRequest(t, env, "PUT", "/api/epg/sources/1", map[string]interface{}{
+		rec := doRequest(t, env, "PUT", "/api/epg/sources/"+sourceID, map[string]interface{}{
 			"name": "Updated EPG", "url": "http://example.com/new-epg.xml", "is_enabled": false,
 		}, env.adminToken)
 		assert.Equal(t, http.StatusOK, rec.Code)
@@ -1138,10 +1319,10 @@ func TestIntegration_EPGSourceCRUD(t *testing.T) {
 	})
 
 	t.Run("delete", func(t *testing.T) {
-		rec := doRequest(t, env, "DELETE", "/api/epg/sources/1", nil, env.adminToken)
+		rec := doRequest(t, env, "DELETE", "/api/epg/sources/"+sourceID, nil, env.adminToken)
 		assert.Equal(t, http.StatusNoContent, rec.Code)
 
-		rec = doRequest(t, env, "GET", "/api/epg/sources/1", nil, env.adminToken)
+		rec = doRequest(t, env, "GET", "/api/epg/sources/"+sourceID, nil, env.adminToken)
 		assert.Equal(t, http.StatusNotFound, rec.Code)
 	})
 }
@@ -1162,16 +1343,19 @@ func TestIntegration_EPGData(t *testing.T) {
 	})
 
 	t.Run("list with source_id filter", func(t *testing.T) {
-		rec := doRequest(t, env, "GET", "/api/epg/data?source_id=1", nil, env.adminToken)
+		rec := doRequest(t, env, "GET", "/api/epg/data?source_id=00000000-0000-0000-0000-000000000001", nil, env.adminToken)
 		assert.Equal(t, http.StatusOK, rec.Code)
 		var data []map[string]interface{}
 		decodeResponse(t, rec, &data)
 		assert.Len(t, data, 0)
 	})
 
-	t.Run("invalid source_id", func(t *testing.T) {
+	t.Run("source_id string returns empty results", func(t *testing.T) {
 		rec := doRequest(t, env, "GET", "/api/epg/data?source_id=abc", nil, env.adminToken)
-		assert.Equal(t, http.StatusBadRequest, rec.Code)
+		assert.Equal(t, http.StatusOK, rec.Code)
+		var data []map[string]interface{}
+		decodeResponse(t, rec, &data)
+		assert.Len(t, data, 0)
 	})
 }
 
@@ -1181,6 +1365,8 @@ func TestIntegration_EPGData(t *testing.T) {
 
 func TestIntegration_HDHRDeviceCRUD(t *testing.T) {
 	env := setupFullEnv(t)
+
+	var firstDeviceID string
 
 	t.Run("list empty", func(t *testing.T) {
 		rec := doRequest(t, env, "GET", "/api/hdhr/devices/", nil, env.adminToken)
@@ -1206,6 +1392,7 @@ func TestIntegration_HDHRDeviceCRUD(t *testing.T) {
 		assert.Equal(t, "12345678", device["device_id"])
 		assert.Equal(t, float64(2), device["tuner_count"])
 		assert.Equal(t, float64(47601), device["port"]) // auto-assigned
+		firstDeviceID = device["id"].(string)
 	})
 
 	t.Run("create with channel groups", func(t *testing.T) {
@@ -1227,7 +1414,7 @@ func TestIntegration_HDHRDeviceCRUD(t *testing.T) {
 		rec = doRequest(t, env, "POST", "/api/hdhr/devices/", map[string]interface{}{
 			"name": "Multi-Group HDHR", "device_id": "MULTI123", "device_auth": "auth",
 			"tuner_count": 2, "is_enabled": true,
-			"channel_group_ids": []float64{g1["id"].(float64), g2["id"].(float64)},
+			"channel_group_ids": []interface{}{g1["id"].(string), g2["id"].(string)},
 		}, env.adminToken)
 		assert.Equal(t, http.StatusCreated, rec.Code)
 		var device map[string]interface{}
@@ -1237,7 +1424,7 @@ func TestIntegration_HDHRDeviceCRUD(t *testing.T) {
 		assert.Len(t, groupIDs, 2)
 
 		// Verify via GET
-		id := fmt.Sprintf("%.0f", device["id"].(float64))
+		id := device["id"].(string)
 		rec = doRequest(t, env, "GET", "/api/hdhr/devices/"+id, nil, env.adminToken)
 		assert.Equal(t, http.StatusOK, rec.Code)
 		decodeResponse(t, rec, &device)
@@ -1253,19 +1440,19 @@ func TestIntegration_HDHRDeviceCRUD(t *testing.T) {
 	})
 
 	t.Run("get", func(t *testing.T) {
-		rec := doRequest(t, env, "GET", "/api/hdhr/devices/1", nil, env.adminToken)
+		rec := doRequest(t, env, "GET", "/api/hdhr/devices/"+firstDeviceID, nil, env.adminToken)
 		assert.Equal(t, http.StatusOK, rec.Code)
 	})
 
 	t.Run("update", func(t *testing.T) {
-		rec := doRequest(t, env, "PUT", "/api/hdhr/devices/1", map[string]interface{}{
+		rec := doRequest(t, env, "PUT", "/api/hdhr/devices/"+firstDeviceID, map[string]interface{}{
 			"name":              "Updated HDHR",
 			"device_id":         "12345678",
 			"firmware_version":  "20240101",
 			"tuner_count":       4,
 			"port":              47605,
 			"is_enabled":        true,
-			"channel_group_ids": []float64{},
+			"channel_group_ids": []interface{}{},
 		}, env.adminToken)
 		assert.Equal(t, http.StatusOK, rec.Code)
 		var device map[string]interface{}
@@ -1284,7 +1471,7 @@ func TestIntegration_HDHRDeviceCRUD(t *testing.T) {
 	})
 
 	t.Run("delete", func(t *testing.T) {
-		rec := doRequest(t, env, "DELETE", "/api/hdhr/devices/1", nil, env.adminToken)
+		rec := doRequest(t, env, "DELETE", "/api/hdhr/devices/"+firstDeviceID, nil, env.adminToken)
 		assert.Equal(t, http.StatusNoContent, rec.Code)
 	})
 }
@@ -1314,7 +1501,7 @@ func TestIntegration_HDHRDiscovery(t *testing.T) {
 		rec := doRequest(t, env, "POST", "/api/hdhr/devices/", map[string]interface{}{
 			"name": "Test HDHR", "device_id": "ABCD1234", "device_auth": "auth",
 			"firmware_version": "20240101", "tuner_count": 2, "port": 47601, "is_enabled": true,
-			"channel_group_ids": []float64{},
+			"channel_group_ids": []interface{}{},
 		}, env.adminToken)
 		require.Equal(t, http.StatusCreated, rec.Code)
 
@@ -1366,20 +1553,23 @@ func TestIntegration_Streams(t *testing.T) {
 	})
 
 	t.Run("list by account_id", func(t *testing.T) {
-		rec := doRequest(t, env, "GET", "/api/streams/?account_id=1", nil, env.adminToken)
+		rec := doRequest(t, env, "GET", "/api/streams/?account_id=00000000-0000-0000-0000-000000000001", nil, env.adminToken)
 		assert.Equal(t, http.StatusOK, rec.Code)
 		var streams []map[string]interface{}
 		decodeResponse(t, rec, &streams)
 		assert.Len(t, streams, 0)
 	})
 
-	t.Run("invalid account_id", func(t *testing.T) {
+	t.Run("account_id string returns empty results", func(t *testing.T) {
 		rec := doRequest(t, env, "GET", "/api/streams/?account_id=abc", nil, env.adminToken)
-		assert.Equal(t, http.StatusBadRequest, rec.Code)
+		assert.Equal(t, http.StatusOK, rec.Code)
+		var streams []map[string]interface{}
+		decodeResponse(t, rec, &streams)
+		assert.Len(t, streams, 0)
 	})
 
 	t.Run("get non-existent", func(t *testing.T) {
-		rec := doRequest(t, env, "GET", "/api/streams/999", nil, env.adminToken)
+		rec := doRequest(t, env, "GET", "/api/streams/00000000-0000-0000-0000-000000000000", nil, env.adminToken)
 		assert.Equal(t, http.StatusNotFound, rec.Code)
 	})
 }
@@ -1391,6 +1581,8 @@ func TestIntegration_Streams(t *testing.T) {
 func TestIntegration_ChannelCRUD(t *testing.T) {
 	env := setupFullEnv(t)
 
+	var firstChannelID string
+
 	t.Run("list empty", func(t *testing.T) {
 		rec := doRequest(t, env, "GET", "/api/channels/", nil, env.adminToken)
 		assert.Equal(t, http.StatusOK, rec.Code)
@@ -1399,7 +1591,7 @@ func TestIntegration_ChannelCRUD(t *testing.T) {
 		assert.Len(t, channels, 0)
 	})
 
-	t.Run("create with auto channel number", func(t *testing.T) {
+	t.Run("create", func(t *testing.T) {
 		rec := doRequest(t, env, "POST", "/api/channels/", map[string]interface{}{
 			"name": "BBC One", "tvg_id": "bbc1", "is_enabled": true,
 		}, env.adminToken)
@@ -1407,18 +1599,15 @@ func TestIntegration_ChannelCRUD(t *testing.T) {
 		var ch map[string]interface{}
 		decodeResponse(t, rec, &ch)
 		assert.Equal(t, "BBC One", ch["name"])
-		assert.Equal(t, float64(1), ch["channel_number"]) // auto-assigned
 		assert.Equal(t, true, ch["is_enabled"])
+		firstChannelID = ch["id"].(string)
 	})
 
-	t.Run("create with explicit channel number", func(t *testing.T) {
+	t.Run("create second channel", func(t *testing.T) {
 		rec := doRequest(t, env, "POST", "/api/channels/", map[string]interface{}{
-			"name": "BBC Two", "channel_number": 100, "tvg_id": "bbc2", "is_enabled": true,
+			"name": "BBC Two", "tvg_id": "bbc2", "is_enabled": true,
 		}, env.adminToken)
 		assert.Equal(t, http.StatusCreated, rec.Code)
-		var ch map[string]interface{}
-		decodeResponse(t, rec, &ch)
-		assert.Equal(t, float64(100), ch["channel_number"])
 	})
 
 	t.Run("create with channel group", func(t *testing.T) {
@@ -1429,7 +1618,7 @@ func TestIntegration_ChannelCRUD(t *testing.T) {
 		require.Equal(t, http.StatusCreated, rec.Code)
 		var group map[string]interface{}
 		decodeResponse(t, rec, &group)
-		groupID := group["id"].(float64)
+		groupID := group["id"].(string)
 
 		rec = doRequest(t, env, "POST", "/api/channels/", map[string]interface{}{
 			"name": "Sky News", "channel_group_id": groupID, "is_enabled": true,
@@ -1448,7 +1637,7 @@ func TestIntegration_ChannelCRUD(t *testing.T) {
 	})
 
 	t.Run("get", func(t *testing.T) {
-		rec := doRequest(t, env, "GET", "/api/channels/1", nil, env.adminToken)
+		rec := doRequest(t, env, "GET", "/api/channels/"+firstChannelID, nil, env.adminToken)
 		assert.Equal(t, http.StatusOK, rec.Code)
 		var ch map[string]interface{}
 		decodeResponse(t, rec, &ch)
@@ -1456,13 +1645,13 @@ func TestIntegration_ChannelCRUD(t *testing.T) {
 	})
 
 	t.Run("get non-existent", func(t *testing.T) {
-		rec := doRequest(t, env, "GET", "/api/channels/999", nil, env.adminToken)
+		rec := doRequest(t, env, "GET", "/api/channels/00000000-0000-0000-0000-000000000000", nil, env.adminToken)
 		assert.Equal(t, http.StatusNotFound, rec.Code)
 	})
 
 	t.Run("update", func(t *testing.T) {
-		rec := doRequest(t, env, "PUT", "/api/channels/1", map[string]interface{}{
-			"name": "BBC One HD", "channel_number": 1, "tvg_id": "bbc1hd", "is_enabled": true,
+		rec := doRequest(t, env, "PUT", "/api/channels/"+firstChannelID, map[string]interface{}{
+			"name": "BBC One HD", "tvg_id": "bbc1hd", "is_enabled": true,
 		}, env.adminToken)
 		assert.Equal(t, http.StatusOK, rec.Code)
 		var ch map[string]interface{}
@@ -1480,10 +1669,19 @@ func TestIntegration_ChannelCRUD(t *testing.T) {
 	})
 
 	t.Run("delete", func(t *testing.T) {
-		rec := doRequest(t, env, "DELETE", "/api/channels/3", nil, env.adminToken)
+		// Create a channel to delete
+		rec := doRequest(t, env, "POST", "/api/channels/", map[string]interface{}{
+			"name": "ToDelete", "is_enabled": true,
+		}, env.adminToken)
+		require.Equal(t, http.StatusCreated, rec.Code)
+		var ch map[string]interface{}
+		decodeResponse(t, rec, &ch)
+		deleteID := ch["id"].(string)
+
+		rec = doRequest(t, env, "DELETE", "/api/channels/"+deleteID, nil, env.adminToken)
 		assert.Equal(t, http.StatusNoContent, rec.Code)
 
-		rec = doRequest(t, env, "GET", "/api/channels/3", nil, env.adminToken)
+		rec = doRequest(t, env, "GET", "/api/channels/"+deleteID, nil, env.adminToken)
 		assert.Equal(t, http.StatusNotFound, rec.Code)
 	})
 }
@@ -1513,21 +1711,25 @@ func TestIntegration_Output(t *testing.T) {
 
 	t.Run("m3u with channels", func(t *testing.T) {
 		// Create a channel group and channel
-		doRequest(t, env, "POST", "/api/channel-groups/", map[string]interface{}{
+		rec := doRequest(t, env, "POST", "/api/channel-groups/", map[string]interface{}{
 			"name": "Entertainment", "is_enabled": true, "sort_order": 1,
 		}, env.adminToken)
+		require.Equal(t, http.StatusCreated, rec.Code)
+		var group map[string]interface{}
+		decodeResponse(t, rec, &group)
+		groupID := group["id"].(string)
 
 		doRequest(t, env, "POST", "/api/channels/", map[string]interface{}{
-			"name": "Channel One", "channel_number": 1, "tvg_id": "ch1",
-			"channel_group_id": float64(1), "is_enabled": true,
+			"name": "Channel One", "tvg_id": "ch1",
+			"channel_group_id": groupID, "is_enabled": true,
 			"logo": "https://example.com/logo.png",
 		}, env.adminToken)
 
 		doRequest(t, env, "POST", "/api/channels/", map[string]interface{}{
-			"name": "Channel Two", "channel_number": 2, "is_enabled": false,
+			"name": "Channel Two", "is_enabled": false,
 		}, env.adminToken)
 
-		rec := doRequest(t, env, "GET", "/output/m3u", nil, "")
+		rec = doRequest(t, env, "GET", "/output/m3u", nil, "")
 		assert.Equal(t, http.StatusOK, rec.Code)
 		body := rec.Body.String()
 		assert.Contains(t, body, "#EXTM3U")
@@ -1541,7 +1743,7 @@ func TestIntegration_Output(t *testing.T) {
 }
 
 // =============================================================================
-// Full User Workflow — simulates a real user setting up the system
+// Full User Workflow -- simulates a real user setting up the system
 // =============================================================================
 
 func TestIntegration_FullUserWorkflow(t *testing.T) {
@@ -1562,80 +1764,84 @@ func TestIntegration_FullUserWorkflow(t *testing.T) {
 	// Step 4: Operator logs in
 	operatorToken, _ := loginHelper(t, env, "operator", "oppass")
 
-	// Step 5: Create an M3U account
+	// Step 5: Create an M3U account (admin only)
 	rec = doRequest(t, env, "POST", "/api/m3u/accounts/", map[string]interface{}{
 		"name": "Primary IPTV", "url": "http://iptv.example.com/get.php?type=m3u_plus",
 		"type": "m3u", "max_streams": 2, "is_enabled": true,
-	}, operatorToken)
+	}, env.adminToken)
 	require.Equal(t, http.StatusCreated, rec.Code)
 
-	// Step 7: Create channel groups
+	// Step 7: Create channel groups (admin, so output/HDHR can see them)
 	rec = doRequest(t, env, "POST", "/api/channel-groups/", map[string]interface{}{
 		"name": "Sports", "is_enabled": true, "sort_order": 1,
-	}, operatorToken)
+	}, env.adminToken)
 	require.Equal(t, http.StatusCreated, rec.Code)
+	var sportsGroup map[string]interface{}
+	decodeResponse(t, rec, &sportsGroup)
+	sportsGroupID := sportsGroup["id"].(string)
 
 	rec = doRequest(t, env, "POST", "/api/channel-groups/", map[string]interface{}{
 		"name": "Movies", "is_enabled": true, "sort_order": 2,
-	}, operatorToken)
+	}, env.adminToken)
 	require.Equal(t, http.StatusCreated, rec.Code)
+	var moviesGroup map[string]interface{}
+	decodeResponse(t, rec, &moviesGroup)
+	moviesGroupID := moviesGroup["id"].(string)
 
-	// Step 8: Create stream profile
+	// Step 8: Create stream profile (admin only)
 	rec = doRequest(t, env, "POST", "/api/stream-profiles/", map[string]interface{}{
 		"name": "My Direct Profile", "stream_mode": "direct", "is_default": true,
-	}, operatorToken)
+	}, env.adminToken)
 	require.Equal(t, http.StatusCreated, rec.Code)
 
-	// Step 9: Create channels
+	// Step 9: Create channels (admin, so output/HDHR can see them)
 	rec = doRequest(t, env, "POST", "/api/channels/", map[string]interface{}{
-		"name": "Sky Sports 1", "tvg_id": "skysports1", "channel_group_id": float64(1),
+		"name": "Sky Sports 1", "tvg_id": "skysports1", "channel_group_id": sportsGroupID,
 		"is_enabled": true,
-	}, operatorToken)
+	}, env.adminToken)
 	require.Equal(t, http.StatusCreated, rec.Code)
 
 	rec = doRequest(t, env, "POST", "/api/channels/", map[string]interface{}{
-		"name": "HBO", "tvg_id": "hbo", "channel_group_id": float64(2),
+		"name": "HBO", "tvg_id": "hbo", "channel_group_id": moviesGroupID,
 		"is_enabled": true,
-	}, operatorToken)
+	}, env.adminToken)
 	require.Equal(t, http.StatusCreated, rec.Code)
 
-	// Step 10: Create an EPG source
+	// Step 10: Create an EPG source (admin only)
 	rec = doRequest(t, env, "POST", "/api/epg/sources", map[string]interface{}{
 		"name": "EPG Source", "url": "http://epg.example.com/xmltv.xml", "is_enabled": true,
-	}, operatorToken)
+	}, env.adminToken)
 	require.Equal(t, http.StatusCreated, rec.Code)
 
-	// Step 11: Create an HDHR device with channel groups
+	// Step 11: Create an HDHR device with channel groups (admin only)
 	rec = doRequest(t, env, "POST", "/api/hdhr/devices/", map[string]interface{}{
 		"name": "TVProxy Tuner", "device_id": "ABCDEF12", "device_auth": "auth123",
 		"firmware_version": "20240101", "tuner_count": 4, "port": 47601, "is_enabled": true,
-		"channel_group_ids": []float64{1, 2},
-	}, operatorToken)
+		"channel_group_ids": []interface{}{sportsGroupID, moviesGroupID},
+	}, env.adminToken)
 	require.Equal(t, http.StatusCreated, rec.Code)
 
-	// Step 12: Configure settings
+	// Step 12: Configure settings (admin only)
 	rec = doRequest(t, env, "PUT", "/api/settings/", map[string]string{
 		"base_url": "http://myserver:8080",
-	}, operatorToken)
+	}, env.adminToken)
 	require.Equal(t, http.StatusOK, rec.Code)
 
-	// Step 13: Create a logo
+	// Step 13: Create a logo (admin only)
 	rec = doRequest(t, env, "POST", "/api/logos/", map[string]interface{}{
 		"name": "Sky Sports Logo", "url": "https://example.com/sky-sports.png",
-	}, operatorToken)
+	}, env.adminToken)
 	require.Equal(t, http.StatusCreated, rec.Code)
 
 	// Step 14: Verify everything via list endpoints
-	// Check channels
-	rec = doRequest(t, env, "GET", "/api/channels/", nil, operatorToken)
+	// Check channels (admin sees admin's channels)
+	rec = doRequest(t, env, "GET", "/api/channels/", nil, env.adminToken)
 	require.Equal(t, http.StatusOK, rec.Code)
 	var channels []map[string]interface{}
 	decodeResponse(t, rec, &channels)
 	assert.Len(t, channels, 2)
-	// First channel auto-assigned number 1
-	assert.Equal(t, float64(1), channels[0]["channel_number"])
 
-	// Check M3U output includes our channels
+	// Check M3U output includes admin's channels
 	rec = doRequest(t, env, "GET", "/output/m3u", nil, "")
 	require.Equal(t, http.StatusOK, rec.Code)
 	m3uBody := rec.Body.String()
@@ -1651,7 +1857,7 @@ func TestIntegration_FullUserWorkflow(t *testing.T) {
 	decodeResponse(t, rec, &discover)
 	assert.Equal(t, "TVProxy Tuner", discover["FriendlyName"])
 
-	// Check HDHR lineup includes our channels
+	// Check HDHR lineup includes admin's channels
 	rec = doRequest(t, env, "GET", "/lineup.json", nil, "")
 	require.Equal(t, http.StatusOK, rec.Code)
 	var lineup []map[string]interface{}
@@ -1663,8 +1869,8 @@ func TestIntegration_FullUserWorkflow(t *testing.T) {
 	require.Equal(t, http.StatusOK, rec.Code)
 	assert.Contains(t, rec.Body.String(), `<tv generator-info-name="tvproxy">`)
 
-	// Check settings
-	rec = doRequest(t, env, "GET", "/api/settings/", nil, operatorToken)
+	// Check settings (admin only)
+	rec = doRequest(t, env, "GET", "/api/settings/", nil, env.adminToken)
 	require.Equal(t, http.StatusOK, rec.Code)
 	var settings []map[string]interface{}
 	decodeResponse(t, rec, &settings)
@@ -1696,15 +1902,17 @@ func TestIntegration_FullUserWorkflow(t *testing.T) {
 func TestIntegration_NonAdminAccess(t *testing.T) {
 	env := setupFullEnv(t)
 
-	// Non-admin CAN access regular endpoints
+	// Non-admin CAN access user-scoped endpoints
 	t.Run("non-admin can list channels", func(t *testing.T) {
 		rec := doRequest(t, env, "GET", "/api/channels/", nil, env.userToken)
 		assert.Equal(t, http.StatusOK, rec.Code)
 	})
 
-	t.Run("non-admin can list m3u accounts", func(t *testing.T) {
-		rec := doRequest(t, env, "GET", "/api/m3u/accounts/", nil, env.userToken)
-		assert.Equal(t, http.StatusOK, rec.Code)
+	t.Run("non-admin can create channels", func(t *testing.T) {
+		rec := doRequest(t, env, "POST", "/api/channels/", map[string]interface{}{
+			"name": "User Channel", "is_enabled": true,
+		}, env.userToken)
+		assert.Equal(t, http.StatusCreated, rec.Code)
 	})
 
 	t.Run("non-admin can list streams", func(t *testing.T) {
@@ -1738,7 +1946,125 @@ func TestIntegration_NonAdminAccess(t *testing.T) {
 	})
 
 	t.Run("non-admin cannot delete users", func(t *testing.T) {
-		rec := doRequest(t, env, "DELETE", "/api/users/1", nil, env.userToken)
+		rec := doRequest(t, env, "GET", "/api/users/", nil, env.adminToken)
+		require.Equal(t, http.StatusOK, rec.Code)
+		var users []map[string]interface{}
+		decodeResponse(t, rec, &users)
+		adminID := users[0]["id"].(string)
+
+		rec = doRequest(t, env, "DELETE", "/api/users/"+adminID, nil, env.userToken)
+		assert.Equal(t, http.StatusForbidden, rec.Code)
+	})
+
+	t.Run("non-admin cannot create m3u accounts", func(t *testing.T) {
+		rec := doRequest(t, env, "POST", "/api/m3u/accounts/", map[string]interface{}{
+			"name": "Hacker M3U", "url": "http://evil.com/m3u", "type": "m3u",
+		}, env.userToken)
+		assert.Equal(t, http.StatusForbidden, rec.Code)
+	})
+
+	t.Run("non-admin cannot create stream profiles", func(t *testing.T) {
+		rec := doRequest(t, env, "POST", "/api/stream-profiles/", map[string]interface{}{
+			"name": "Hacker Profile", "source_type": "m3u",
+		}, env.userToken)
+		assert.Equal(t, http.StatusForbidden, rec.Code)
+	})
+
+	t.Run("non-admin cannot list stream profiles", func(t *testing.T) {
+		rec := doRequest(t, env, "GET", "/api/stream-profiles/", nil, env.userToken)
+		assert.Equal(t, http.StatusForbidden, rec.Code)
+	})
+
+	t.Run("non-admin cannot create channel profiles", func(t *testing.T) {
+		rec := doRequest(t, env, "POST", "/api/channel-profiles/", map[string]interface{}{
+			"name": "Hacker CP", "stream_profile": "direct",
+		}, env.userToken)
+		assert.Equal(t, http.StatusForbidden, rec.Code)
+	})
+
+	t.Run("non-admin cannot list channel profiles", func(t *testing.T) {
+		rec := doRequest(t, env, "GET", "/api/channel-profiles/", nil, env.userToken)
+		assert.Equal(t, http.StatusForbidden, rec.Code)
+	})
+
+	t.Run("non-admin cannot create hdhr devices", func(t *testing.T) {
+		rec := doRequest(t, env, "POST", "/api/hdhr/devices/", map[string]interface{}{
+			"name": "Hacker HDHR", "device_id": "HACK1234", "device_auth": "auth",
+			"tuner_count": 1, "is_enabled": true,
+		}, env.userToken)
+		assert.Equal(t, http.StatusForbidden, rec.Code)
+	})
+
+	t.Run("non-admin cannot list hdhr devices", func(t *testing.T) {
+		rec := doRequest(t, env, "GET", "/api/hdhr/devices/", nil, env.userToken)
+		assert.Equal(t, http.StatusForbidden, rec.Code)
+	})
+
+	t.Run("non-admin cannot create logos", func(t *testing.T) {
+		rec := doRequest(t, env, "POST", "/api/logos/", map[string]interface{}{
+			"name": "Hacker Logo", "url": "http://evil.com/logo.png",
+		}, env.userToken)
+		assert.Equal(t, http.StatusForbidden, rec.Code)
+	})
+
+	t.Run("non-admin cannot list logos", func(t *testing.T) {
+		rec := doRequest(t, env, "GET", "/api/logos/", nil, env.userToken)
+		assert.Equal(t, http.StatusForbidden, rec.Code)
+	})
+
+	t.Run("non-admin cannot update settings", func(t *testing.T) {
+		rec := doRequest(t, env, "PUT", "/api/settings/", map[string]string{
+			"base_url": "http://hacked",
+		}, env.userToken)
+		assert.Equal(t, http.StatusForbidden, rec.Code)
+	})
+
+	t.Run("non-admin cannot list settings", func(t *testing.T) {
+		rec := doRequest(t, env, "GET", "/api/settings/", nil, env.userToken)
+		assert.Equal(t, http.StatusForbidden, rec.Code)
+	})
+
+	t.Run("non-admin cannot create clients", func(t *testing.T) {
+		rec := doRequest(t, env, "POST", "/api/clients/", map[string]interface{}{
+			"name": "Hacker Client", "priority": 1,
+			"match_rules": []map[string]interface{}{
+				{"header_name": "User-Agent", "match_type": "contains", "match_value": "hack"},
+			},
+		}, env.userToken)
+		assert.Equal(t, http.StatusForbidden, rec.Code)
+	})
+
+	t.Run("non-admin cannot list clients", func(t *testing.T) {
+		rec := doRequest(t, env, "GET", "/api/clients/", nil, env.userToken)
+		assert.Equal(t, http.StatusForbidden, rec.Code)
+	})
+
+	t.Run("non-admin cannot create EPG sources", func(t *testing.T) {
+		rec := doRequest(t, env, "POST", "/api/epg/sources", map[string]interface{}{
+			"name": "Hacker EPG", "url": "http://evil.com/epg.xml", "is_enabled": true,
+		}, env.userToken)
+		assert.Equal(t, http.StatusForbidden, rec.Code)
+	})
+
+	t.Run("non-admin cannot delete EPG sources", func(t *testing.T) {
+		rec := doRequest(t, env, "DELETE", "/api/epg/sources/00000000-0000-0000-0000-000000000000", nil, env.userToken)
+		assert.Equal(t, http.StatusForbidden, rec.Code)
+	})
+
+	t.Run("non-admin can read EPG sources", func(t *testing.T) {
+		rec := doRequest(t, env, "GET", "/api/epg/sources", nil, env.userToken)
+		assert.Equal(t, http.StatusOK, rec.Code)
+	})
+
+	t.Run("non-admin cannot delete streams", func(t *testing.T) {
+		rec := doRequest(t, env, "DELETE", "/api/streams/00000000-0000-0000-0000-000000000000", nil, env.userToken)
+		assert.Equal(t, http.StatusForbidden, rec.Code)
+	})
+
+	t.Run("non-admin cannot invite users", func(t *testing.T) {
+		rec := doRequest(t, env, "POST", "/api/users/invite", map[string]interface{}{
+			"username": "sneaky",
+		}, env.userToken)
 		assert.Equal(t, http.StatusForbidden, rec.Code)
 	})
 }
@@ -1759,9 +2085,9 @@ func TestIntegration_EdgeCases(t *testing.T) {
 		assert.Equal(t, http.StatusBadRequest, rec.Code)
 	})
 
-	t.Run("invalid id parameter", func(t *testing.T) {
+	t.Run("non-existent id returns not found", func(t *testing.T) {
 		rec := doRequest(t, env, "GET", "/api/channels/notanumber", nil, env.adminToken)
-		assert.Equal(t, http.StatusBadRequest, rec.Code)
+		assert.Equal(t, http.StatusNotFound, rec.Code)
 	})
 
 	t.Run("expired token is rejected", func(t *testing.T) {
@@ -1777,63 +2103,63 @@ func TestIntegration_EdgeCases(t *testing.T) {
 	})
 
 	t.Run("update non-existent channel group", func(t *testing.T) {
-		rec := doRequest(t, env, "PUT", "/api/channel-groups/999", map[string]interface{}{
+		rec := doRequest(t, env, "PUT", "/api/channel-groups/00000000-0000-0000-0000-000000000000", map[string]interface{}{
 			"name": "Ghost",
 		}, env.adminToken)
 		assert.Equal(t, http.StatusNotFound, rec.Code)
 	})
 
 	t.Run("update non-existent channel", func(t *testing.T) {
-		rec := doRequest(t, env, "PUT", "/api/channels/999", map[string]interface{}{
+		rec := doRequest(t, env, "PUT", "/api/channels/00000000-0000-0000-0000-000000000000", map[string]interface{}{
 			"name": "Ghost",
 		}, env.adminToken)
 		assert.Equal(t, http.StatusNotFound, rec.Code)
 	})
 
 	t.Run("update non-existent m3u account", func(t *testing.T) {
-		rec := doRequest(t, env, "PUT", "/api/m3u/accounts/999", map[string]interface{}{
+		rec := doRequest(t, env, "PUT", "/api/m3u/accounts/00000000-0000-0000-0000-000000000000", map[string]interface{}{
 			"name": "Ghost",
 		}, env.adminToken)
 		assert.Equal(t, http.StatusNotFound, rec.Code)
 	})
 
 	t.Run("update non-existent stream profile", func(t *testing.T) {
-		rec := doRequest(t, env, "PUT", "/api/stream-profiles/999", map[string]interface{}{
+		rec := doRequest(t, env, "PUT", "/api/stream-profiles/00000000-0000-0000-0000-000000000000", map[string]interface{}{
 			"name": "Ghost",
 		}, env.adminToken)
 		assert.Equal(t, http.StatusNotFound, rec.Code)
 	})
 
 	t.Run("update non-existent epg source", func(t *testing.T) {
-		rec := doRequest(t, env, "PUT", "/api/epg/sources/999", map[string]interface{}{
+		rec := doRequest(t, env, "PUT", "/api/epg/sources/00000000-0000-0000-0000-000000000000", map[string]interface{}{
 			"name": "Ghost", "url": "http://x",
 		}, env.adminToken)
 		assert.Equal(t, http.StatusNotFound, rec.Code)
 	})
 
 	t.Run("update non-existent hdhr device", func(t *testing.T) {
-		rec := doRequest(t, env, "PUT", "/api/hdhr/devices/999", map[string]interface{}{
+		rec := doRequest(t, env, "PUT", "/api/hdhr/devices/00000000-0000-0000-0000-000000000000", map[string]interface{}{
 			"name": "Ghost", "device_id": "x",
 		}, env.adminToken)
 		assert.Equal(t, http.StatusNotFound, rec.Code)
 	})
 
 	t.Run("update non-existent user", func(t *testing.T) {
-		rec := doRequest(t, env, "PUT", "/api/users/999", map[string]interface{}{
+		rec := doRequest(t, env, "PUT", "/api/users/00000000-0000-0000-0000-000000000000", map[string]interface{}{
 			"username": "Ghost",
 		}, env.adminToken)
 		assert.Equal(t, http.StatusNotFound, rec.Code)
 	})
 
 	t.Run("update non-existent channel profile", func(t *testing.T) {
-		rec := doRequest(t, env, "PUT", "/api/channel-profiles/999", map[string]interface{}{
+		rec := doRequest(t, env, "PUT", "/api/channel-profiles/00000000-0000-0000-0000-000000000000", map[string]interface{}{
 			"name": "Ghost",
 		}, env.adminToken)
 		assert.Equal(t, http.StatusNotFound, rec.Code)
 	})
 
 	t.Run("update non-existent client", func(t *testing.T) {
-		rec := doRequest(t, env, "PUT", "/api/clients/999", map[string]interface{}{
+		rec := doRequest(t, env, "PUT", "/api/clients/00000000-0000-0000-0000-000000000000", map[string]interface{}{
 			"name": "Ghost",
 		}, env.adminToken)
 		assert.Equal(t, http.StatusNotFound, rec.Code)
@@ -1860,7 +2186,10 @@ func TestIntegration_ClientCRUD(t *testing.T) {
 	})
 
 	t.Run("get seeded client with rules", func(t *testing.T) {
-		rec := doRequest(t, env, "GET", "/api/clients/1", nil, env.adminToken)
+		plexClient := findByName(t, env, "/api/clients/", "Plex", env.adminToken)
+		plexID := plexClient["id"].(string)
+
+		rec := doRequest(t, env, "GET", "/api/clients/"+plexID, nil, env.adminToken)
 		assert.Equal(t, http.StatusOK, rec.Code)
 		var client map[string]interface{}
 		decodeResponse(t, rec, &client)
@@ -1870,6 +2199,8 @@ func TestIntegration_ClientCRUD(t *testing.T) {
 		rules := client["match_rules"].([]interface{})
 		assert.Len(t, rules, 2)
 	})
+
+	var createdClientID string
 
 	t.Run("create with auto profile", func(t *testing.T) {
 		rec := doRequest(t, env, "POST", "/api/clients/", map[string]interface{}{
@@ -1886,6 +2217,7 @@ func TestIntegration_ClientCRUD(t *testing.T) {
 		assert.NotZero(t, client["stream_profile_id"])
 		rules := client["match_rules"].([]interface{})
 		assert.Len(t, rules, 1)
+		createdClientID = client["id"].(string)
 	})
 
 	t.Run("create missing name", func(t *testing.T) {
@@ -1927,7 +2259,7 @@ func TestIntegration_ClientCRUD(t *testing.T) {
 
 	t.Run("update client", func(t *testing.T) {
 		newPriority := 25
-		rec := doRequest(t, env, "PUT", "/api/clients/4", map[string]interface{}{
+		rec := doRequest(t, env, "PUT", "/api/clients/"+createdClientID, map[string]interface{}{
 			"name": "Oculus Quest 2", "priority": newPriority,
 			"match_rules": []map[string]interface{}{
 				{"header_name": "User-Agent", "match_type": "contains", "match_value": "OculusBrowser/"},
@@ -1945,18 +2277,18 @@ func TestIntegration_ClientCRUD(t *testing.T) {
 
 	t.Run("delete client cleans up profile", func(t *testing.T) {
 		// Get the profile ID before deleting
-		rec := doRequest(t, env, "GET", "/api/clients/4", nil, env.adminToken)
+		rec := doRequest(t, env, "GET", "/api/clients/"+createdClientID, nil, env.adminToken)
 		require.Equal(t, http.StatusOK, rec.Code)
 		var client map[string]interface{}
 		decodeResponse(t, rec, &client)
-		profileID := fmt.Sprintf("%.0f", client["stream_profile_id"].(float64))
+		profileID := client["stream_profile_id"].(string)
 
 		// Delete the client
-		rec = doRequest(t, env, "DELETE", "/api/clients/4", nil, env.adminToken)
+		rec = doRequest(t, env, "DELETE", "/api/clients/"+createdClientID, nil, env.adminToken)
 		assert.Equal(t, http.StatusNoContent, rec.Code)
 
 		// Verify client is gone
-		rec = doRequest(t, env, "GET", "/api/clients/4", nil, env.adminToken)
+		rec = doRequest(t, env, "GET", "/api/clients/"+createdClientID, nil, env.adminToken)
 		assert.Equal(t, http.StatusNotFound, rec.Code)
 
 		// Verify orphaned profile was cleaned up
@@ -1972,4 +2304,113 @@ func TestIntegration_ClientCRUD(t *testing.T) {
 		// 3 seeded remain (Oculus Quest was deleted)
 		assert.Len(t, clients, 3)
 	})
+}
+
+// =============================================================================
+// Channel Isolation (multi-user scoping)
+// =============================================================================
+
+func TestIntegration_ChannelIsolation(t *testing.T) {
+	env := setupFullEnv(t)
+
+	// Admin creates a channel
+	rec := doRequest(t, env, "POST", "/api/channels/", map[string]interface{}{
+		"name": "Admin Channel", "is_enabled": true,
+	}, env.adminToken)
+	require.Equal(t, http.StatusCreated, rec.Code)
+
+	// Non-admin creates a channel
+	rec = doRequest(t, env, "POST", "/api/channels/", map[string]interface{}{
+		"name": "User Channel", "is_enabled": true,
+	}, env.userToken)
+	require.Equal(t, http.StatusCreated, rec.Code)
+
+	// Admin sees only their channel
+	rec = doRequest(t, env, "GET", "/api/channels/", nil, env.adminToken)
+	require.Equal(t, http.StatusOK, rec.Code)
+	var adminChannels []map[string]interface{}
+	decodeResponse(t, rec, &adminChannels)
+	assert.Len(t, adminChannels, 1)
+	assert.Equal(t, "Admin Channel", adminChannels[0]["name"])
+
+	// Non-admin sees only their channel
+	rec = doRequest(t, env, "GET", "/api/channels/", nil, env.userToken)
+	require.Equal(t, http.StatusOK, rec.Code)
+	var userChannels []map[string]interface{}
+	decodeResponse(t, rec, &userChannels)
+	assert.Len(t, userChannels, 1)
+	assert.Equal(t, "User Channel", userChannels[0]["name"])
+
+	// Non-admin cannot access admin's channel
+	adminChannelID := adminChannels[0]["id"].(string)
+	rec = doRequest(t, env, "GET", "/api/channels/"+adminChannelID, nil, env.userToken)
+	assert.Equal(t, http.StatusNotFound, rec.Code)
+
+	// Same for channel groups
+	rec = doRequest(t, env, "POST", "/api/channel-groups/", map[string]interface{}{
+		"name": "Admin Group", "is_enabled": true,
+	}, env.adminToken)
+	require.Equal(t, http.StatusCreated, rec.Code)
+
+	rec = doRequest(t, env, "POST", "/api/channel-groups/", map[string]interface{}{
+		"name": "User Group", "is_enabled": true,
+	}, env.userToken)
+	require.Equal(t, http.StatusCreated, rec.Code)
+
+	rec = doRequest(t, env, "GET", "/api/channel-groups/", nil, env.adminToken)
+	require.Equal(t, http.StatusOK, rec.Code)
+	var adminGroups []map[string]interface{}
+	decodeResponse(t, rec, &adminGroups)
+	assert.Len(t, adminGroups, 1)
+	assert.Equal(t, "Admin Group", adminGroups[0]["name"])
+
+	rec = doRequest(t, env, "GET", "/api/channel-groups/", nil, env.userToken)
+	require.Equal(t, http.StatusOK, rec.Code)
+	var userGroups []map[string]interface{}
+	decodeResponse(t, rec, &userGroups)
+	assert.Len(t, userGroups, 1)
+	assert.Equal(t, "User Group", userGroups[0]["name"])
+}
+
+// =============================================================================
+// Invite Flow
+// =============================================================================
+
+func TestIntegration_InviteFlow(t *testing.T) {
+	env := setupFullEnv(t)
+
+	// Admin creates invite
+	rec := doRequest(t, env, "POST", "/api/users/invite", map[string]interface{}{
+		"username": "invited_user",
+	}, env.adminToken)
+	require.Equal(t, http.StatusCreated, rec.Code)
+	var inviteResp map[string]interface{}
+	decodeResponse(t, rec, &inviteResp)
+	assert.Equal(t, "invited_user", inviteResp["username"])
+	assert.NotNil(t, inviteResp["invite_token"])
+	token := inviteResp["invite_token"].(string)
+
+	// Cannot login before accepting invite
+	rec = doRequest(t, env, "POST", "/api/auth/login", map[string]string{
+		"username": "invited_user", "password": "newpass",
+	}, "")
+	assert.Equal(t, http.StatusUnauthorized, rec.Code)
+
+	// Accept invite
+	rec = doRequest(t, env, "POST", "/api/auth/invite/"+token, map[string]interface{}{
+		"password": "newpass",
+	}, "")
+	assert.Equal(t, http.StatusOK, rec.Code)
+
+	// Now login works
+	rec = doRequest(t, env, "POST", "/api/auth/login", map[string]string{
+		"username": "invited_user", "password": "newpass",
+	}, "")
+	assert.Equal(t, http.StatusOK, rec.Code)
+
+	// Non-admin cannot create invite
+	rec = doRequest(t, env, "POST", "/api/users/invite", map[string]interface{}{
+		"username": "another_user",
+	}, env.userToken)
+	assert.Equal(t, http.StatusForbidden, rec.Code)
 }

@@ -2,33 +2,24 @@ package handler
 
 import (
 	"net/http"
-	"strconv"
+
+	"github.com/go-chi/chi/v5"
 
 	"github.com/gavinmcnair/tvproxy/pkg/repository"
 )
 
-// StreamHandler handles stream-related HTTP requests.
 type StreamHandler struct {
 	streamRepo *repository.StreamRepository
 }
 
-// NewStreamHandler creates a new StreamHandler.
 func NewStreamHandler(streamRepo *repository.StreamRepository) *StreamHandler {
 	return &StreamHandler{streamRepo: streamRepo}
 }
 
-// List returns streams. Uses lightweight summaries by default.
-// Add ?full=true for full stream details, or ?account_id= to filter.
 func (h *StreamHandler) List(w http.ResponseWriter, r *http.Request) {
 	accountIDStr := r.URL.Query().Get("account_id")
 	if accountIDStr != "" {
-		accountID, err := strconv.ParseInt(accountIDStr, 10, 64)
-		if err != nil {
-			respondError(w, http.StatusBadRequest, "invalid account_id")
-			return
-		}
-
-		streams, err := h.streamRepo.ListByAccountID(r.Context(), accountID)
+		streams, err := h.streamRepo.ListByAccountID(r.Context(), accountIDStr)
 		if err != nil {
 			respondError(w, http.StatusInternalServerError, "failed to list streams")
 			return
@@ -58,13 +49,8 @@ func (h *StreamHandler) List(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, http.StatusOK, summaries)
 }
 
-// Get returns a stream by ID (full details).
 func (h *StreamHandler) Get(w http.ResponseWriter, r *http.Request) {
-	id, err := urlParamInt64(r, "id")
-	if err != nil {
-		respondError(w, http.StatusBadRequest, "invalid stream id")
-		return
-	}
+	id := chi.URLParam(r, "id")
 
 	stream, err := h.streamRepo.GetByID(r.Context(), id)
 	if err != nil {
@@ -75,13 +61,8 @@ func (h *StreamHandler) Get(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, http.StatusOK, stream)
 }
 
-// Delete deletes a stream by ID.
 func (h *StreamHandler) Delete(w http.ResponseWriter, r *http.Request) {
-	id, err := urlParamInt64(r, "id")
-	if err != nil {
-		respondError(w, http.StatusBadRequest, "invalid stream id")
-		return
-	}
+	id := chi.URLParam(r, "id")
 
 	if err := h.streamRepo.Delete(r.Context(), id); err != nil {
 		respondError(w, http.StatusInternalServerError, "failed to delete stream")

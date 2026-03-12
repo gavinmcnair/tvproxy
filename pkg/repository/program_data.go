@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/gavinmcnair/tvproxy/pkg/database"
 	"github.com/gavinmcnair/tvproxy/pkg/models"
 )
@@ -28,21 +30,17 @@ func NewProgramDataRepository(db *database.DB) *ProgramDataRepository {
 }
 
 func (r *ProgramDataRepository) Create(ctx context.Context, program *models.ProgramData) error {
-	result, err := r.db.ExecContext(ctx,
-		`INSERT INTO program_data (epg_data_id, title, description, start, stop, category, episode_num, icon)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		program.EPGDataID, program.Title, program.Description,
+	program.ID = uuid.New().String()
+	_, err := r.db.ExecContext(ctx,
+		`INSERT INTO program_data (id, epg_data_id, title, description, start, stop, category, episode_num, icon)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		program.ID, program.EPGDataID, program.Title, program.Description,
 		program.Start, program.Stop, program.Category,
 		program.EpisodeNum, program.Icon,
 	)
 	if err != nil {
 		return fmt.Errorf("creating program data: %w", err)
 	}
-	id, err := result.LastInsertId()
-	if err != nil {
-		return fmt.Errorf("getting last insert id: %w", err)
-	}
-	program.ID = id
 	return nil
 }
 
@@ -73,7 +71,7 @@ func (r *ProgramDataRepository) List(ctx context.Context) ([]models.ProgramData,
 	return programs, nil
 }
 
-func (r *ProgramDataRepository) ListByEPGDataID(ctx context.Context, epgDataID int64) ([]models.ProgramData, error) {
+func (r *ProgramDataRepository) ListByEPGDataID(ctx context.Context, epgDataID string) ([]models.ProgramData, error) {
 	rows, err := r.db.QueryContext(ctx,
 		`SELECT id, epg_data_id, title, description, start, stop, category, episode_num, icon
 		FROM program_data WHERE epg_data_id = ? ORDER BY start`, epgDataID,
@@ -171,7 +169,7 @@ func (r *ProgramDataRepository) ListForGuide(ctx context.Context, start, stop ti
 	return programs, nil
 }
 
-func (r *ProgramDataRepository) Delete(ctx context.Context, id int64) error {
+func (r *ProgramDataRepository) Delete(ctx context.Context, id string) error {
 	_, err := r.db.ExecContext(ctx, `DELETE FROM program_data WHERE id = ?`, id)
 	if err != nil {
 		return fmt.Errorf("deleting program data: %w", err)
@@ -179,7 +177,7 @@ func (r *ProgramDataRepository) Delete(ctx context.Context, id int64) error {
 	return nil
 }
 
-func (r *ProgramDataRepository) DeleteByEPGDataID(ctx context.Context, epgDataID int64) error {
+func (r *ProgramDataRepository) DeleteByEPGDataID(ctx context.Context, epgDataID string) error {
 	_, err := r.db.ExecContext(ctx, `DELETE FROM program_data WHERE epg_data_id = ?`, epgDataID)
 	if err != nil {
 		return fmt.Errorf("deleting program data by epg data id: %w", err)
@@ -190,8 +188,8 @@ func (r *ProgramDataRepository) DeleteByEPGDataID(ctx context.Context, epgDataID
 func (r *ProgramDataRepository) BulkCreate(ctx context.Context, programs []models.ProgramData) error {
 	return r.db.InTx(ctx, func(tx *sql.Tx) error {
 		stmt, err := tx.PrepareContext(ctx,
-			`INSERT INTO program_data (epg_data_id, title, description, start, stop, category, episode_num, icon)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+			`INSERT INTO program_data (id, epg_data_id, title, description, start, stop, category, episode_num, icon)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		)
 		if err != nil {
 			return fmt.Errorf("preparing statement: %w", err)
@@ -199,19 +197,14 @@ func (r *ProgramDataRepository) BulkCreate(ctx context.Context, programs []model
 		defer stmt.Close()
 
 		for i := range programs {
-			result, err := stmt.ExecContext(ctx,
-				programs[i].EPGDataID, programs[i].Title, programs[i].Description,
+			programs[i].ID = uuid.New().String()
+			if _, err := stmt.ExecContext(ctx,
+				programs[i].ID, programs[i].EPGDataID, programs[i].Title, programs[i].Description,
 				programs[i].Start, programs[i].Stop, programs[i].Category,
 				programs[i].EpisodeNum, programs[i].Icon,
-			)
-			if err != nil {
+			); err != nil {
 				return fmt.Errorf("inserting program data %d: %w", i, err)
 			}
-			id, err := result.LastInsertId()
-			if err != nil {
-				return fmt.Errorf("getting last insert id for program data %d: %w", i, err)
-			}
-			programs[i].ID = id
 		}
 		return nil
 	})

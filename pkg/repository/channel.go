@@ -6,9 +6,39 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/gavinmcnair/tvproxy/pkg/database"
 	"github.com/gavinmcnair/tvproxy/pkg/models"
 )
+
+const channelSelect = `SELECT c.id, c.user_id, c.name, c.logo_id, COALESCE(l.url, ''), c.tvg_id, c.channel_group_id, c.channel_profile_id, c.fail_count, c.is_enabled, c.created_at, c.updated_at
+		FROM channels c LEFT JOIN logos l ON c.logo_id = l.id`
+
+type channelScanner interface {
+	Scan(dest ...any) error
+}
+
+func scanChannel(s channelScanner) (*models.Channel, error) {
+	c := &models.Channel{}
+	var logoID, groupID, profileID sql.NullString
+	if err := s.Scan(
+		&c.ID, &c.UserID, &c.Name, &logoID, &c.Logo, &c.TvgID,
+		&groupID, &profileID, &c.FailCount, &c.IsEnabled, &c.CreatedAt, &c.UpdatedAt,
+	); err != nil {
+		return nil, err
+	}
+	if logoID.Valid {
+		c.LogoID = &logoID.String
+	}
+	if groupID.Valid {
+		c.ChannelGroupID = &groupID.String
+	}
+	if profileID.Valid {
+		c.ChannelProfileID = &profileID.String
+	}
+	return c, nil
+}
 
 type ChannelRepository struct {
 	db *database.DB
@@ -20,133 +50,67 @@ func NewChannelRepository(db *database.DB) *ChannelRepository {
 
 func (r *ChannelRepository) Create(ctx context.Context, channel *models.Channel) error {
 	now := time.Now()
-	result, err := r.db.ExecContext(ctx,
-		`INSERT INTO channels (channel_number, name, logo_id, tvg_id, channel_group_id, channel_profile_id, is_enabled, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		channel.ChannelNumber, channel.Name, channel.LogoID, channel.TvgID,
+	channel.ID = uuid.New().String()
+	_, err := r.db.ExecContext(ctx,
+		`INSERT INTO channels (id, user_id, name, logo_id, tvg_id, channel_group_id, channel_profile_id, is_enabled, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		channel.ID, channel.UserID, channel.Name, channel.LogoID, channel.TvgID,
 		channel.ChannelGroupID, channel.ChannelProfileID, channel.IsEnabled, now, now,
 	)
 	if err != nil {
 		return fmt.Errorf("creating channel: %w", err)
 	}
-	id, err := result.LastInsertId()
-	if err != nil {
-		return fmt.Errorf("getting last insert id: %w", err)
-	}
-	channel.ID = id
 	channel.CreatedAt = now
 	channel.UpdatedAt = now
 	return nil
 }
 
-func (r *ChannelRepository) GetByID(ctx context.Context, id int64) (*models.Channel, error) {
-	channel := &models.Channel{}
-	var logoID sql.NullInt64
-	var groupID sql.NullInt64
-	var profileID sql.NullInt64
-	err := r.db.QueryRowContext(ctx,
-		`SELECT c.id, c.channel_number, c.name, c.logo_id, COALESCE(l.url, ''), c.tvg_id, c.channel_group_id, c.channel_profile_id, c.is_enabled, c.created_at, c.updated_at
-		FROM channels c LEFT JOIN logos l ON c.logo_id = l.id WHERE c.id = ?`, id,
-	).Scan(
-		&channel.ID, &channel.ChannelNumber, &channel.Name, &logoID, &channel.Logo,
-		&channel.TvgID, &groupID, &profileID,
-		&channel.IsEnabled, &channel.CreatedAt, &channel.UpdatedAt,
-	)
+func (r *ChannelRepository) GetByID(ctx context.Context, id string) (*models.Channel, error) {
+	ch, err := scanChannel(r.db.QueryRowContext(ctx, channelSelect+` WHERE c.id = ?`, id))
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return nil, fmt.Errorf("channel not found: %w", err)
 		}
 		return nil, fmt.Errorf("getting channel by id: %w", err)
 	}
-	if logoID.Valid {
-		channel.LogoID = &logoID.Int64
-	}
-	if groupID.Valid {
-		channel.ChannelGroupID = &groupID.Int64
-	}
-	if profileID.Valid {
-		channel.ChannelProfileID = &profileID.Int64
-	}
-	return channel, nil
+	return ch, nil
 }
 
-func (r *ChannelRepository) GetByNumber(ctx context.Context, number int) (*models.Channel, error) {
-	channel := &models.Channel{}
-	var logoID sql.NullInt64
-	var groupID sql.NullInt64
-	var profileID sql.NullInt64
-	err := r.db.QueryRowContext(ctx,
-		`SELECT c.id, c.channel_number, c.name, c.logo_id, COALESCE(l.url, ''), c.tvg_id, c.channel_group_id, c.channel_profile_id, c.is_enabled, c.created_at, c.updated_at
-		FROM channels c LEFT JOIN logos l ON c.logo_id = l.id WHERE c.channel_number = ?`, number,
-	).Scan(
-		&channel.ID, &channel.ChannelNumber, &channel.Name, &logoID, &channel.Logo,
-		&channel.TvgID, &groupID, &profileID,
-		&channel.IsEnabled, &channel.CreatedAt, &channel.UpdatedAt,
-	)
+func (r *ChannelRepository) GetByIDForUser(ctx context.Context, id, userID string) (*models.Channel, error) {
+	ch, err := scanChannel(r.db.QueryRowContext(ctx, channelSelect+` WHERE c.id = ? AND c.user_id = ?`, id, userID))
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return nil, fmt.Errorf("channel not found: %w", err)
 		}
-		return nil, fmt.Errorf("getting channel by number: %w", err)
+		return nil, fmt.Errorf("getting channel for user: %w", err)
 	}
-	if logoID.Valid {
-		channel.LogoID = &logoID.Int64
-	}
-	if groupID.Valid {
-		channel.ChannelGroupID = &groupID.Int64
-	}
-	if profileID.Valid {
-		channel.ChannelProfileID = &profileID.Int64
-	}
-	return channel, nil
+	return ch, nil
 }
 
 func (r *ChannelRepository) List(ctx context.Context) ([]models.Channel, error) {
-	rows, err := r.db.QueryContext(ctx,
-		`SELECT c.id, c.channel_number, c.name, c.logo_id, COALESCE(l.url, ''), c.tvg_id, c.channel_group_id, c.channel_profile_id, c.is_enabled, c.created_at, c.updated_at
-		FROM channels c LEFT JOIN logos l ON c.logo_id = l.id ORDER BY c.channel_number`,
-	)
+	rows, err := r.db.QueryContext(ctx, channelSelect+` ORDER BY c.name COLLATE NOCASE`)
 	if err != nil {
 		return nil, fmt.Errorf("listing channels: %w", err)
 	}
 	defer rows.Close()
+	return r.scanRows(rows)
+}
 
-	var channels []models.Channel
-	for rows.Next() {
-		var c models.Channel
-		var logoID sql.NullInt64
-		var groupID sql.NullInt64
-		var profileID sql.NullInt64
-		if err := rows.Scan(
-			&c.ID, &c.ChannelNumber, &c.Name, &logoID, &c.Logo, &c.TvgID,
-			&groupID, &profileID,
-			&c.IsEnabled, &c.CreatedAt, &c.UpdatedAt,
-		); err != nil {
-			return nil, fmt.Errorf("scanning channel: %w", err)
-		}
-		if logoID.Valid {
-			c.LogoID = &logoID.Int64
-		}
-		if groupID.Valid {
-			c.ChannelGroupID = &groupID.Int64
-		}
-		if profileID.Valid {
-			c.ChannelProfileID = &profileID.Int64
-		}
-		channels = append(channels, c)
+func (r *ChannelRepository) ListByUserID(ctx context.Context, userID string) ([]models.Channel, error) {
+	rows, err := r.db.QueryContext(ctx, channelSelect+` WHERE c.user_id = ? ORDER BY c.name COLLATE NOCASE`, userID)
+	if err != nil {
+		return nil, fmt.Errorf("listing channels by user: %w", err)
 	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterating channels: %w", err)
-	}
-	return channels, nil
+	defer rows.Close()
+	return r.scanRows(rows)
 }
 
 func (r *ChannelRepository) Update(ctx context.Context, channel *models.Channel) error {
 	now := time.Now()
 	_, err := r.db.ExecContext(ctx,
-		`UPDATE channels SET channel_number = ?, name = ?, logo_id = ?, tvg_id = ?, channel_group_id = ?, channel_profile_id = ?, is_enabled = ?, updated_at = ?
+		`UPDATE channels SET name = ?, logo_id = ?, tvg_id = ?, channel_group_id = ?, channel_profile_id = ?, is_enabled = ?, updated_at = ?
 		WHERE id = ?`,
-		channel.ChannelNumber, channel.Name, channel.LogoID, channel.TvgID,
+		channel.Name, channel.LogoID, channel.TvgID,
 		channel.ChannelGroupID, channel.ChannelProfileID, channel.IsEnabled, now, channel.ID,
 	)
 	if err != nil {
@@ -156,7 +120,22 @@ func (r *ChannelRepository) Update(ctx context.Context, channel *models.Channel)
 	return nil
 }
 
-func (r *ChannelRepository) Delete(ctx context.Context, id int64) error {
+func (r *ChannelRepository) UpdateForUser(ctx context.Context, channel *models.Channel, userID string) error {
+	now := time.Now()
+	_, err := r.db.ExecContext(ctx,
+		`UPDATE channels SET name = ?, logo_id = ?, tvg_id = ?, channel_group_id = ?, channel_profile_id = ?, is_enabled = ?, updated_at = ?
+		WHERE id = ? AND user_id = ?`,
+		channel.Name, channel.LogoID, channel.TvgID,
+		channel.ChannelGroupID, channel.ChannelProfileID, channel.IsEnabled, now, channel.ID, userID,
+	)
+	if err != nil {
+		return fmt.Errorf("updating channel for user: %w", err)
+	}
+	channel.UpdatedAt = now
+	return nil
+}
+
+func (r *ChannelRepository) Delete(ctx context.Context, id string) error {
 	_, err := r.db.ExecContext(ctx, `DELETE FROM channels WHERE id = ?`, id)
 	if err != nil {
 		return fmt.Errorf("deleting channel: %w", err)
@@ -164,7 +143,15 @@ func (r *ChannelRepository) Delete(ctx context.Context, id int64) error {
 	return nil
 }
 
-func (r *ChannelRepository) AssignStreams(ctx context.Context, channelID int64, streamIDs []int64, priorities []int) error {
+func (r *ChannelRepository) DeleteForUser(ctx context.Context, id, userID string) error {
+	_, err := r.db.ExecContext(ctx, `DELETE FROM channels WHERE id = ? AND user_id = ?`, id, userID)
+	if err != nil {
+		return fmt.Errorf("deleting channel for user: %w", err)
+	}
+	return nil
+}
+
+func (r *ChannelRepository) AssignStreams(ctx context.Context, channelID string, streamIDs []string, priorities []int) error {
 	if len(streamIDs) != len(priorities) {
 		return fmt.Errorf("streamIDs and priorities must have the same length")
 	}
@@ -173,7 +160,7 @@ func (r *ChannelRepository) AssignStreams(ctx context.Context, channelID int64, 
 			return fmt.Errorf("deleting existing channel streams: %w", err)
 		}
 		stmt, err := tx.PrepareContext(ctx,
-			`INSERT INTO channel_streams (channel_id, stream_id, priority) VALUES (?, ?, ?)`,
+			`INSERT INTO channel_streams (id, channel_id, stream_id, priority) VALUES (?, ?, ?, ?)`,
 		)
 		if err != nil {
 			return fmt.Errorf("preparing statement: %w", err)
@@ -181,7 +168,7 @@ func (r *ChannelRepository) AssignStreams(ctx context.Context, channelID int64, 
 		defer stmt.Close()
 
 		for i := range streamIDs {
-			if _, err := stmt.ExecContext(ctx, channelID, streamIDs[i], priorities[i]); err != nil {
+			if _, err := stmt.ExecContext(ctx, uuid.New().String(), channelID, streamIDs[i], priorities[i]); err != nil {
 				return fmt.Errorf("inserting channel stream %d: %w", i, err)
 			}
 		}
@@ -189,7 +176,7 @@ func (r *ChannelRepository) AssignStreams(ctx context.Context, channelID int64, 
 	})
 }
 
-func (r *ChannelRepository) GetStreams(ctx context.Context, channelID int64) ([]models.ChannelStream, error) {
+func (r *ChannelRepository) GetStreams(ctx context.Context, channelID string) ([]models.ChannelStream, error) {
 	rows, err := r.db.QueryContext(ctx,
 		`SELECT id, channel_id, stream_id, priority
 		FROM channel_streams WHERE channel_id = ? ORDER BY priority`, channelID,
@@ -213,14 +200,33 @@ func (r *ChannelRepository) GetStreams(ctx context.Context, channelID int64) ([]
 	return channelStreams, nil
 }
 
-func (r *ChannelRepository) GetNextChannelNumber(ctx context.Context) (int, error) {
-	var maxNum sql.NullInt64
-	err := r.db.QueryRowContext(ctx, `SELECT MAX(channel_number) FROM channels`).Scan(&maxNum)
+func (r *ChannelRepository) IncrementFailCount(ctx context.Context, id string) error {
+	_, err := r.db.ExecContext(ctx, `UPDATE channels SET fail_count = fail_count + 1 WHERE id = ?`, id)
 	if err != nil {
-		return 0, fmt.Errorf("getting max channel number: %w", err)
+		return fmt.Errorf("incrementing channel fail count: %w", err)
 	}
-	if !maxNum.Valid {
-		return 1, nil
+	return nil
+}
+
+func (r *ChannelRepository) ResetFailCount(ctx context.Context, id string) error {
+	_, err := r.db.ExecContext(ctx, `UPDATE channels SET fail_count = 0 WHERE id = ?`, id)
+	if err != nil {
+		return fmt.Errorf("resetting channel fail count: %w", err)
 	}
-	return int(maxNum.Int64) + 1, nil
+	return nil
+}
+
+func (r *ChannelRepository) scanRows(rows *sql.Rows) ([]models.Channel, error) {
+	var channels []models.Channel
+	for rows.Next() {
+		ch, err := scanChannel(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scanning channel: %w", err)
+		}
+		channels = append(channels, *ch)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterating channels: %w", err)
+	}
+	return channels, nil
 }

@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"reflect"
-	"strconv"
 
 	"github.com/go-chi/chi/v5"
 )
@@ -31,8 +30,8 @@ func respondError(w http.ResponseWriter, status int, message string) {
 	respondJSON(w, status, map[string]string{"error": message})
 }
 
-func urlParamInt64(r *http.Request, key string) (int64, error) {
-	return strconv.ParseInt(chi.URLParam(r, key), 10, 64)
+func urlParamString(r *http.Request, key string) string {
+	return chi.URLParam(r, key)
 }
 
 func decodeJSON(r *http.Request, v interface{}) error {

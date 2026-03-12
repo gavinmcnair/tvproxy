@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/gavinmcnair/tvproxy/pkg/database"
 	"github.com/gavinmcnair/tvproxy/pkg/models"
 )
@@ -20,25 +22,21 @@ func NewStreamProfileRepository(db *database.DB) *StreamProfileRepository {
 
 func (r *StreamProfileRepository) Create(ctx context.Context, profile *models.StreamProfile) error {
 	now := time.Now()
-	result, err := r.db.ExecContext(ctx,
-		`INSERT INTO stream_profiles (name, stream_mode, source_type, hwaccel, video_codec, container, use_custom_args, custom_args, command, args, is_default, is_system, is_client, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		profile.Name, profile.StreamMode, profile.SourceType, profile.HWAccel, profile.VideoCodec, profile.Container, profile.UseCustomArgs, profile.CustomArgs, profile.Command, profile.Args, profile.IsDefault, profile.IsSystem, profile.IsClient, now, now,
+	profile.ID = uuid.New().String()
+	_, err := r.db.ExecContext(ctx,
+		`INSERT INTO stream_profiles (id, name, stream_mode, source_type, hwaccel, video_codec, container, use_custom_args, custom_args, command, args, is_default, is_system, is_client, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		profile.ID, profile.Name, profile.StreamMode, profile.SourceType, profile.HWAccel, profile.VideoCodec, profile.Container, profile.UseCustomArgs, profile.CustomArgs, profile.Command, profile.Args, profile.IsDefault, profile.IsSystem, profile.IsClient, now, now,
 	)
 	if err != nil {
 		return fmt.Errorf("creating stream profile: %w", err)
 	}
-	id, err := result.LastInsertId()
-	if err != nil {
-		return fmt.Errorf("getting last insert id: %w", err)
-	}
-	profile.ID = id
 	profile.CreatedAt = now
 	profile.UpdatedAt = now
 	return nil
 }
 
-func (r *StreamProfileRepository) GetByID(ctx context.Context, id int64) (*models.StreamProfile, error) {
+func (r *StreamProfileRepository) GetByID(ctx context.Context, id string) (*models.StreamProfile, error) {
 	profile := &models.StreamProfile{}
 	err := r.db.QueryRowContext(ctx,
 		`SELECT id, name, stream_mode, source_type, hwaccel, video_codec, container, use_custom_args, custom_args, command, args, is_default, is_system, is_client, created_at, updated_at
@@ -91,7 +89,7 @@ func (r *StreamProfileRepository) Update(ctx context.Context, profile *models.St
 	return nil
 }
 
-func (r *StreamProfileRepository) Delete(ctx context.Context, id int64) error {
+func (r *StreamProfileRepository) Delete(ctx context.Context, id string) error {
 	_, err := r.db.ExecContext(ctx, `DELETE FROM stream_profiles WHERE id = ?`, id)
 	if err != nil {
 		return fmt.Errorf("deleting stream profile: %w", err)

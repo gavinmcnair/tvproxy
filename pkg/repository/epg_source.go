@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/gavinmcnair/tvproxy/pkg/database"
 	"github.com/gavinmcnair/tvproxy/pkg/models"
 )
@@ -20,26 +22,22 @@ func NewEPGSourceRepository(db *database.DB) *EPGSourceRepository {
 
 func (r *EPGSourceRepository) Create(ctx context.Context, source *models.EPGSource) error {
 	now := time.Now()
-	result, err := r.db.ExecContext(ctx,
-		`INSERT INTO epg_sources (name, url, is_enabled, last_refreshed, channel_count, program_count, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		source.Name, source.URL, source.IsEnabled, source.LastRefreshed,
+	source.ID = uuid.New().String()
+	_, err := r.db.ExecContext(ctx,
+		`INSERT INTO epg_sources (id, name, url, is_enabled, last_refreshed, channel_count, program_count, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		source.ID, source.Name, source.URL, source.IsEnabled, source.LastRefreshed,
 		source.ChannelCount, source.ProgramCount, now, now,
 	)
 	if err != nil {
 		return fmt.Errorf("creating epg source: %w", err)
 	}
-	id, err := result.LastInsertId()
-	if err != nil {
-		return fmt.Errorf("getting last insert id: %w", err)
-	}
-	source.ID = id
 	source.CreatedAt = now
 	source.UpdatedAt = now
 	return nil
 }
 
-func (r *EPGSourceRepository) GetByID(ctx context.Context, id int64) (*models.EPGSource, error) {
+func (r *EPGSourceRepository) GetByID(ctx context.Context, id string) (*models.EPGSource, error) {
 	source := &models.EPGSource{}
 	var lastRefreshed sql.NullTime
 	err := r.db.QueryRowContext(ctx,
@@ -65,7 +63,7 @@ func (r *EPGSourceRepository) GetByID(ctx context.Context, id int64) (*models.EP
 func (r *EPGSourceRepository) List(ctx context.Context) ([]models.EPGSource, error) {
 	rows, err := r.db.QueryContext(ctx,
 		`SELECT id, name, url, is_enabled, last_refreshed, channel_count, program_count, created_at, updated_at
-		FROM epg_sources ORDER BY id`,
+		FROM epg_sources ORDER BY created_at`,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("listing epg sources: %w", err)
@@ -107,7 +105,7 @@ func (r *EPGSourceRepository) Update(ctx context.Context, source *models.EPGSour
 	return nil
 }
 
-func (r *EPGSourceRepository) Delete(ctx context.Context, id int64) error {
+func (r *EPGSourceRepository) Delete(ctx context.Context, id string) error {
 	_, err := r.db.ExecContext(ctx, `DELETE FROM epg_sources WHERE id = ?`, id)
 	if err != nil {
 		return fmt.Errorf("deleting epg source: %w", err)
@@ -115,7 +113,7 @@ func (r *EPGSourceRepository) Delete(ctx context.Context, id int64) error {
 	return nil
 }
 
-func (r *EPGSourceRepository) UpdateLastRefreshed(ctx context.Context, id int64, lastRefreshed time.Time) error {
+func (r *EPGSourceRepository) UpdateLastRefreshed(ctx context.Context, id string, lastRefreshed time.Time) error {
 	_, err := r.db.ExecContext(ctx,
 		`UPDATE epg_sources SET last_refreshed = ?, updated_at = ? WHERE id = ?`,
 		lastRefreshed, time.Now(), id,
@@ -126,7 +124,7 @@ func (r *EPGSourceRepository) UpdateLastRefreshed(ctx context.Context, id int64,
 	return nil
 }
 
-func (r *EPGSourceRepository) UpdateCounts(ctx context.Context, id int64, channelCount, programCount int) error {
+func (r *EPGSourceRepository) UpdateCounts(ctx context.Context, id string, channelCount, programCount int) error {
 	_, err := r.db.ExecContext(ctx,
 		`UPDATE epg_sources SET channel_count = ?, program_count = ?, updated_at = ? WHERE id = ?`,
 		channelCount, programCount, time.Now(), id,

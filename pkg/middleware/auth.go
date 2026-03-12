@@ -14,7 +14,7 @@ type contextKey string
 const userContextKey contextKey = "user"
 
 type ContextUser struct {
-	UserID   int64  `json:"user_id"`
+	UserID   string `json:"user_id"`
 	Username string `json:"username"`
 	IsAdmin  bool   `json:"is_admin"`
 }
@@ -27,20 +27,20 @@ func UserFromContext(ctx context.Context) *ContextUser {
 type AuthMiddleware struct {
 	authService *service.AuthService
 	apiKey      string
+	adminUserID string
 }
 
-func NewAuthMiddleware(authService *service.AuthService, apiKey string) *AuthMiddleware {
-	return &AuthMiddleware{authService: authService, apiKey: apiKey}
+func NewAuthMiddleware(authService *service.AuthService, apiKey string, adminUserID string) *AuthMiddleware {
+	return &AuthMiddleware{authService: authService, apiKey: apiKey, adminUserID: adminUserID}
 }
 
-// Authenticate checks for JWT bearer token or API key
+// Authenticate checks for JWT bearer token or API key.
 func (m *AuthMiddleware) Authenticate(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Check API key first
 		if m.apiKey != "" {
 			if key := r.Header.Get("X-API-Key"); key == m.apiKey {
 				ctx := context.WithValue(r.Context(), userContextKey, &ContextUser{
-					UserID:   0,
+					UserID:   m.adminUserID,
 					Username: "api-key",
 					IsAdmin:  true,
 				})
@@ -49,16 +49,17 @@ func (m *AuthMiddleware) Authenticate(next http.Handler) http.Handler {
 			}
 		}
 
-		// Check Bearer token
-		auth := r.Header.Get("Authorization")
-		if auth == "" || !strings.HasPrefix(auth, "Bearer ") {
+		var token string
+		if auth := r.Header.Get("Authorization"); auth != "" && strings.HasPrefix(auth, "Bearer ") {
+			token = strings.TrimPrefix(auth, "Bearer ")
+		} else if qToken := r.URL.Query().Get("token"); qToken != "" {
+			token = qToken
+		} else {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusUnauthorized)
 			json.NewEncoder(w).Encode(map[string]string{"error": "missing or invalid authorization header"})
 			return
 		}
-
-		token := strings.TrimPrefix(auth, "Bearer ")
 		claims, err := m.authService.ValidateToken(token)
 		if err != nil {
 			w.Header().Set("Content-Type", "application/json")
@@ -76,7 +77,6 @@ func (m *AuthMiddleware) Authenticate(next http.Handler) http.Handler {
 	})
 }
 
-// RequireAdmin checks that the authenticated user is an admin
 func (m *AuthMiddleware) RequireAdmin(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		user := UserFromContext(r.Context())

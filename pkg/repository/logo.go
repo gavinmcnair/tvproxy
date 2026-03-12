@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/gavinmcnair/tvproxy/pkg/database"
 	"github.com/gavinmcnair/tvproxy/pkg/models"
 )
@@ -20,23 +22,19 @@ func NewLogoRepository(db *database.DB) *LogoRepository {
 
 func (r *LogoRepository) Create(ctx context.Context, logo *models.Logo) error {
 	now := time.Now()
-	result, err := r.db.ExecContext(ctx,
-		`INSERT INTO logos (name, url, created_at) VALUES (?, ?, ?)`,
-		logo.Name, logo.URL, now,
+	logo.ID = uuid.New().String()
+	_, err := r.db.ExecContext(ctx,
+		`INSERT INTO logos (id, name, url, created_at) VALUES (?, ?, ?, ?)`,
+		logo.ID, logo.Name, logo.URL, now,
 	)
 	if err != nil {
 		return fmt.Errorf("creating logo: %w", err)
 	}
-	id, err := result.LastInsertId()
-	if err != nil {
-		return fmt.Errorf("getting last insert id: %w", err)
-	}
-	logo.ID = id
 	logo.CreatedAt = now
 	return nil
 }
 
-func (r *LogoRepository) GetByID(ctx context.Context, id int64) (*models.Logo, error) {
+func (r *LogoRepository) GetByID(ctx context.Context, id string) (*models.Logo, error) {
 	logo := &models.Logo{}
 	err := r.db.QueryRowContext(ctx,
 		`SELECT id, name, url, created_at FROM logos WHERE id = ?`, id,
@@ -52,7 +50,7 @@ func (r *LogoRepository) GetByID(ctx context.Context, id int64) (*models.Logo, e
 
 func (r *LogoRepository) List(ctx context.Context) ([]models.Logo, error) {
 	rows, err := r.db.QueryContext(ctx,
-		`SELECT id, name, url, created_at FROM logos ORDER BY id`,
+		`SELECT id, name, url, created_at FROM logos ORDER BY created_at`,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("listing logos: %w", err)
@@ -98,8 +96,7 @@ func (r *LogoRepository) GetByURL(ctx context.Context, url string) (*models.Logo
 	return logo, nil
 }
 
-func (r *LogoRepository) Delete(ctx context.Context, id int64) error {
-	// Clear channel references first (SQLite ALTER TABLE FK constraints aren't enforced)
+func (r *LogoRepository) Delete(ctx context.Context, id string) error {
 	if _, err := r.db.ExecContext(ctx, `UPDATE channels SET logo_id = NULL WHERE logo_id = ?`, id); err != nil {
 		return fmt.Errorf("clearing channel logo references: %w", err)
 	}

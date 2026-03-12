@@ -3,33 +3,35 @@ package models
 import "time"
 
 type User struct {
-	ID           int64     `json:"id"`
-	Username     string    `json:"username"`
-	PasswordHash string    `json:"-"`
-	IsAdmin      bool      `json:"is_admin"`
-	CreatedAt    time.Time `json:"created_at"`
-	UpdatedAt    time.Time `json:"updated_at"`
+	ID              string     `json:"id"`
+	Username        string     `json:"username"`
+	PasswordHash    string     `json:"-"`
+	IsAdmin         bool       `json:"is_admin"`
+	InviteToken     *string    `json:"invite_token,omitempty"`
+	InviteExpiresAt *time.Time `json:"invite_expires_at,omitempty"`
+	CreatedAt       time.Time  `json:"created_at"`
+	UpdatedAt       time.Time  `json:"updated_at"`
 }
 
 type M3UAccount struct {
-	ID             int64     `json:"id"`
-	Name           string    `json:"name"`
-	URL            string    `json:"url"`
-	Type           string    `json:"type"` // "m3u" or "xtream"
-	Username       string    `json:"username,omitempty"`
-	Password       string    `json:"password,omitempty"`
-	MaxStreams      int       `json:"max_streams"`
-	IsEnabled      bool      `json:"is_enabled"`
-	LastRefreshed  *time.Time `json:"last_refreshed,omitempty"`
-	StreamCount    int       `json:"stream_count"`
-	RefreshInterval int      `json:"refresh_interval"` // seconds, 0 = use default
-	CreatedAt      time.Time `json:"created_at"`
-	UpdatedAt      time.Time `json:"updated_at"`
+	ID              string     `json:"id"`
+	Name            string     `json:"name"`
+	URL             string     `json:"url"`
+	Type            string     `json:"type"` // "m3u" or "xtream"
+	Username        string     `json:"username,omitempty"`
+	Password        string     `json:"password,omitempty"`
+	MaxStreams      int        `json:"max_streams"`
+	IsEnabled       bool       `json:"is_enabled"`
+	LastRefreshed   *time.Time `json:"last_refreshed,omitempty"`
+	StreamCount     int        `json:"stream_count"`
+	RefreshInterval int        `json:"refresh_interval"` // seconds, 0 = use default
+	CreatedAt       time.Time  `json:"created_at"`
+	UpdatedAt       time.Time  `json:"updated_at"`
 }
 
 type Stream struct {
-	ID           int64     `json:"id"`
-	M3UAccountID int64     `json:"m3u_account_id"`
+	ID           string    `json:"id"`
+	M3UAccountID string    `json:"m3u_account_id"`
 	Name         string    `json:"name"`
 	URL          string    `json:"url"`
 	Group        string    `json:"group"`
@@ -43,28 +45,30 @@ type Stream struct {
 }
 
 type Channel struct {
-	ID               int64     `json:"id"`
-	ChannelNumber    int       `json:"channel_number"`
+	ID               string    `json:"id"`
+	UserID           string    `json:"user_id"`
 	Name             string    `json:"name"`
-	LogoID           *int64    `json:"logo_id,omitempty"`
+	LogoID           *string   `json:"logo_id,omitempty"`
 	Logo             string    `json:"logo,omitempty"`
 	TvgID            string    `json:"tvg_id,omitempty"`
-	ChannelGroupID   *int64    `json:"channel_group_id,omitempty"`
-	ChannelProfileID *int64    `json:"channel_profile_id,omitempty"`
+	ChannelGroupID   *string   `json:"channel_group_id,omitempty"`
+	ChannelProfileID *string   `json:"channel_profile_id,omitempty"`
+	FailCount        int       `json:"fail_count"`
 	IsEnabled        bool      `json:"is_enabled"`
 	CreatedAt        time.Time `json:"created_at"`
 	UpdatedAt        time.Time `json:"updated_at"`
 }
 
 type ChannelStream struct {
-	ID        int64 `json:"id"`
-	ChannelID int64 `json:"channel_id"`
-	StreamID  int64 `json:"stream_id"`
-	Priority  int   `json:"priority"`
+	ID        string `json:"id"`
+	ChannelID string `json:"channel_id"`
+	StreamID  string `json:"stream_id"`
+	Priority  int    `json:"priority"`
 }
 
 type ChannelGroup struct {
-	ID        int64     `json:"id"`
+	ID        string    `json:"id"`
+	UserID    string    `json:"user_id"`
 	Name      string    `json:"name"`
 	IsEnabled bool      `json:"is_enabled"`
 	SortOrder int       `json:"sort_order"`
@@ -73,23 +77,23 @@ type ChannelGroup struct {
 }
 
 type ChannelProfile struct {
-	ID             int64     `json:"id"`
-	Name           string    `json:"name"`
-	StreamProfile  string    `json:"stream_profile,omitempty"`
-	SortOrder      int       `json:"sort_order"`
-	CreatedAt      time.Time `json:"created_at"`
-	UpdatedAt      time.Time `json:"updated_at"`
+	ID            string    `json:"id"`
+	Name          string    `json:"name"`
+	StreamProfile string    `json:"stream_profile,omitempty"`
+	SortOrder     int       `json:"sort_order"`
+	CreatedAt     time.Time `json:"created_at"`
+	UpdatedAt     time.Time `json:"updated_at"`
 }
 
 type Logo struct {
-	ID        int64     `json:"id"`
+	ID        string    `json:"id"`
 	Name      string    `json:"name"`
 	URL       string    `json:"url"`
 	CreatedAt time.Time `json:"created_at"`
 }
 
 type StreamProfile struct {
-	ID            int64     `json:"id"`
+	ID            string    `json:"id"`
 	Name          string    `json:"name"`
 	StreamMode    string    `json:"stream_mode"`
 	SourceType    string    `json:"source_type"`
@@ -108,7 +112,7 @@ type StreamProfile struct {
 }
 
 type EPGSource struct {
-	ID            int64      `json:"id"`
+	ID            string     `json:"id"`
 	Name          string     `json:"name"`
 	URL           string     `json:"url"`
 	IsEnabled     bool       `json:"is_enabled"`
@@ -120,16 +124,16 @@ type EPGSource struct {
 }
 
 type EPGData struct {
-	ID          int64  `json:"id"`
-	EPGSourceID int64  `json:"epg_source_id"`
+	ID          string `json:"id"`
+	EPGSourceID string `json:"epg_source_id"`
 	ChannelID   string `json:"channel_id"`
 	Name        string `json:"name"`
 	Icon        string `json:"icon,omitempty"`
 }
 
 type ProgramData struct {
-	ID          int64     `json:"id"`
-	EPGDataID   int64     `json:"epg_data_id"`
+	ID          string    `json:"id"`
+	EPGDataID   string    `json:"epg_data_id"`
 	Title       string    `json:"title"`
 	Description string    `json:"description,omitempty"`
 	Start       time.Time `json:"start"`
@@ -140,18 +144,18 @@ type ProgramData struct {
 }
 
 type HDHRDevice struct {
-	ID              int64     `json:"id"`
-	Name            string    `json:"name"`
-	DeviceID        string    `json:"device_id"`
-	DeviceAuth      string    `json:"device_auth"`
-	FirmwareVersion string    `json:"firmware_version"`
-	TunerCount      int       `json:"tuner_count"`
-	Port            int       `json:"port"`
-	ChannelProfileID *int64   `json:"channel_profile_id,omitempty"`
-	ChannelGroupIDs []int64   `json:"channel_group_ids,omitempty"`
-	IsEnabled       bool      `json:"is_enabled"`
-	CreatedAt       time.Time `json:"created_at"`
-	UpdatedAt       time.Time `json:"updated_at"`
+	ID               string    `json:"id"`
+	Name             string    `json:"name"`
+	DeviceID         string    `json:"device_id"`
+	DeviceAuth       string    `json:"device_auth"`
+	FirmwareVersion  string    `json:"firmware_version"`
+	TunerCount       int       `json:"tuner_count"`
+	Port             int       `json:"port"`
+	ChannelProfileID *string   `json:"channel_profile_id,omitempty"`
+	ChannelGroupIDs  []string  `json:"channel_group_ids,omitempty"`
+	IsEnabled        bool      `json:"is_enabled"`
+	CreatedAt        time.Time `json:"created_at"`
+	UpdatedAt        time.Time `json:"updated_at"`
 }
 
 type CoreSetting struct {
@@ -160,10 +164,10 @@ type CoreSetting struct {
 }
 
 type Client struct {
-	ID              int64             `json:"id"`
+	ID              string            `json:"id"`
 	Name            string            `json:"name"`
 	Priority        int               `json:"priority"`
-	StreamProfileID int64             `json:"stream_profile_id"`
+	StreamProfileID string            `json:"stream_profile_id"`
 	IsEnabled       bool              `json:"is_enabled"`
 	MatchRules      []ClientMatchRule `json:"match_rules"`
 	CreatedAt       time.Time         `json:"created_at"`
@@ -171,8 +175,8 @@ type Client struct {
 }
 
 type ClientMatchRule struct {
-	ID         int64  `json:"id"`
-	ClientID   int64  `json:"client_id"`
+	ID         string `json:"id"`
+	ClientID   string `json:"client_id"`
 	HeaderName string `json:"header_name"`
 	MatchType  string `json:"match_type"`
 	MatchValue string `json:"match_value"`

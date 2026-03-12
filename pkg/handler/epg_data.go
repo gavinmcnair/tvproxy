@@ -23,8 +23,8 @@ func NewEPGDataHandler(epgDataRepo *repository.EPGDataRepository, programDataRep
 }
 
 type epgDataWithPrograms struct {
-	ID          int64       `json:"id"`
-	EPGSourceID int64       `json:"epg_source_id"`
+	ID          string      `json:"id"`
+	EPGSourceID string      `json:"epg_source_id"`
 	ChannelID   string      `json:"channel_id"`
 	Name        string      `json:"name"`
 	Icon        string      `json:"icon,omitempty"`
@@ -39,12 +39,7 @@ func (h *EPGDataHandler) List(w http.ResponseWriter, r *http.Request) {
 	var err error
 
 	if sourceIDStr != "" {
-		sourceID, parseErr := strconv.ParseInt(sourceIDStr, 10, 64)
-		if parseErr != nil {
-			respondError(w, http.StatusBadRequest, "invalid source_id")
-			return
-		}
-		data, err = h.epgDataRepo.ListBySourceID(r.Context(), sourceID)
+		data, err = h.epgDataRepo.ListBySourceID(r.Context(), sourceIDStr)
 	} else {
 		data, err = h.epgDataRepo.List(r.Context())
 	}
@@ -98,8 +93,8 @@ func (h *EPGDataHandler) NowPlaying(w http.ResponseWriter, r *http.Request) {
 }
 
 type guideResponse struct {
-	Start    time.Time                          `json:"start"`
-	Stop     time.Time                          `json:"stop"`
+	Start    time.Time                            `json:"start"`
+	Stop     time.Time                            `json:"stop"`
 	Programs map[string][]repository.GuideProgram `json:"programs"`
 }
 

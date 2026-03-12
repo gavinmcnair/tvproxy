@@ -4,21 +4,20 @@ import (
 	"context"
 	"net/http"
 
+	"github.com/go-chi/chi/v5"
+
 	"github.com/gavinmcnair/tvproxy/pkg/models"
 	"github.com/gavinmcnair/tvproxy/pkg/service"
 )
 
-// EPGSourceHandler handles EPG source HTTP requests.
 type EPGSourceHandler struct {
 	epgService *service.EPGService
 }
 
-// NewEPGSourceHandler creates a new EPGSourceHandler.
 func NewEPGSourceHandler(epgService *service.EPGService) *EPGSourceHandler {
 	return &EPGSourceHandler{epgService: epgService}
 }
 
-// List returns all EPG sources.
 func (h *EPGSourceHandler) List(w http.ResponseWriter, r *http.Request) {
 	sources, err := h.epgService.ListSources(r.Context())
 	if err != nil {
@@ -29,7 +28,6 @@ func (h *EPGSourceHandler) List(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, http.StatusOK, sources)
 }
 
-// Create creates a new EPG source.
 func (h *EPGSourceHandler) Create(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Name      string `json:"name"`
@@ -60,13 +58,8 @@ func (h *EPGSourceHandler) Create(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, http.StatusCreated, source)
 }
 
-// Get returns an EPG source by ID.
 func (h *EPGSourceHandler) Get(w http.ResponseWriter, r *http.Request) {
-	id, err := urlParamInt64(r, "id")
-	if err != nil {
-		respondError(w, http.StatusBadRequest, "invalid epg source id")
-		return
-	}
+	id := chi.URLParam(r, "id")
 
 	source, err := h.epgService.GetSource(r.Context(), id)
 	if err != nil {
@@ -77,13 +70,8 @@ func (h *EPGSourceHandler) Get(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, http.StatusOK, source)
 }
 
-// Update updates an EPG source by ID.
 func (h *EPGSourceHandler) Update(w http.ResponseWriter, r *http.Request) {
-	id, err := urlParamInt64(r, "id")
-	if err != nil {
-		respondError(w, http.StatusBadRequest, "invalid epg source id")
-		return
-	}
+	id := chi.URLParam(r, "id")
 
 	source, err := h.epgService.GetSource(r.Context(), id)
 	if err != nil {
@@ -117,13 +105,8 @@ func (h *EPGSourceHandler) Update(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, http.StatusOK, source)
 }
 
-// Delete deletes an EPG source by ID.
 func (h *EPGSourceHandler) Delete(w http.ResponseWriter, r *http.Request) {
-	id, err := urlParamInt64(r, "id")
-	if err != nil {
-		respondError(w, http.StatusBadRequest, "invalid epg source id")
-		return
-	}
+	id := chi.URLParam(r, "id")
 
 	if err := h.epgService.DeleteSource(r.Context(), id); err != nil {
 		respondError(w, http.StatusInternalServerError, "failed to delete epg source")
@@ -133,17 +116,12 @@ func (h *EPGSourceHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// Refresh triggers a refresh of the EPG source data.
 func (h *EPGSourceHandler) Refresh(w http.ResponseWriter, r *http.Request) {
-	id, err := urlParamInt64(r, "id")
-	if err != nil {
-		respondError(w, http.StatusBadRequest, "invalid epg source id")
-		return
-	}
+	id := chi.URLParam(r, "id")
 
 	go func() {
 		if err := h.epgService.RefreshSource(context.Background(), id); err != nil {
-			h.epgService.Log().Error().Err(err).Int64("source_id", id).Msg("background epg refresh failed")
+			h.epgService.Log().Error().Err(err).Str("source_id", id).Msg("background epg refresh failed")
 		}
 	}()
 

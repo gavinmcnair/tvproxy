@@ -53,7 +53,7 @@ func (s *EPGService) CreateSource(ctx context.Context, source *models.EPGSource)
 }
 
 // GetSource returns an EPG source by ID.
-func (s *EPGService) GetSource(ctx context.Context, id int64) (*models.EPGSource, error) {
+func (s *EPGService) GetSource(ctx context.Context, id string) (*models.EPGSource, error) {
 	source, err := s.epgSourceRepo.GetByID(ctx, id)
 	if err != nil {
 		return nil, fmt.Errorf("getting epg source: %w", err)
@@ -79,7 +79,7 @@ func (s *EPGService) UpdateSource(ctx context.Context, source *models.EPGSource)
 }
 
 // DeleteSource deletes an EPG source by ID and its associated data.
-func (s *EPGService) DeleteSource(ctx context.Context, id int64) error {
+func (s *EPGService) DeleteSource(ctx context.Context, id string) error {
 	// Delete associated EPG data and programs first
 	epgDataList, err := s.epgDataRepo.ListBySourceID(ctx, id)
 	if err != nil {
@@ -87,7 +87,7 @@ func (s *EPGService) DeleteSource(ctx context.Context, id int64) error {
 	}
 	for _, epgData := range epgDataList {
 		if err := s.programDataRepo.DeleteByEPGDataID(ctx, epgData.ID); err != nil {
-			s.log.Error().Err(err).Int64("epg_data_id", epgData.ID).Msg("failed to delete program data")
+			s.log.Error().Err(err).Str("epg_data_id", epgData.ID).Msg("failed to delete program data")
 		}
 	}
 	if err := s.epgDataRepo.DeleteBySourceID(ctx, id); err != nil {
@@ -102,13 +102,13 @@ func (s *EPGService) DeleteSource(ctx context.Context, id int64) error {
 
 // RefreshSource fetches the XMLTV URL for the given source, parses it,
 // and stores the EPG channel and program data.
-func (s *EPGService) RefreshSource(ctx context.Context, sourceID int64) error {
+func (s *EPGService) RefreshSource(ctx context.Context, sourceID string) error {
 	source, err := s.epgSourceRepo.GetByID(ctx, sourceID)
 	if err != nil {
 		return fmt.Errorf("getting source: %w", err)
 	}
 
-	s.log.Info().Int64("source_id", source.ID).Str("name", source.Name).Msg("refreshing epg source")
+	s.log.Info().Str("source_id", source.ID).Str("name", source.Name).Msg("refreshing epg source")
 
 	body, err := s.fetchURL(ctx, source.URL)
 	if err != nil {
@@ -133,7 +133,7 @@ func (s *EPGService) RefreshSource(ctx context.Context, sourceID int64) error {
 	}
 	for _, ed := range existingData {
 		if err := s.programDataRepo.DeleteByEPGDataID(ctx, ed.ID); err != nil {
-			s.log.Error().Err(err).Int64("epg_data_id", ed.ID).Msg("failed to delete existing program data")
+			s.log.Error().Err(err).Str("epg_data_id", ed.ID).Msg("failed to delete existing program data")
 		}
 	}
 	if err := s.epgDataRepo.DeleteBySourceID(ctx, sourceID); err != nil {
@@ -155,7 +155,7 @@ func (s *EPGService) RefreshSource(ctx context.Context, sourceID int64) error {
 	}
 
 	// Build channel ID to EPGData ID map from the bulk-created items
-	channelIDMap := make(map[string]int64, len(epgDataItems))
+	channelIDMap := make(map[string]string, len(epgDataItems))
 	for _, d := range epgDataItems {
 		channelIDMap[d.ChannelID] = d.ID
 	}
@@ -205,7 +205,7 @@ func (s *EPGService) RefreshSource(ctx context.Context, sourceID int64) error {
 	}
 
 	s.log.Info().
-		Int64("source_id", source.ID).
+		Str("source_id", source.ID).
 		Int("channels", len(tv.Channels)).
 		Int("programs", programCount).
 		Msg("source refresh complete")
@@ -226,7 +226,7 @@ func (s *EPGService) RefreshAllSources(ctx context.Context) error {
 			continue
 		}
 		if err := s.RefreshSource(ctx, source.ID); err != nil {
-			s.log.Error().Err(err).Int64("source_id", source.ID).Str("name", source.Name).Msg("failed to refresh source")
+			s.log.Error().Err(err).Str("source_id", source.ID).Str("name", source.Name).Msg("failed to refresh source")
 			lastErr = err
 		}
 	}

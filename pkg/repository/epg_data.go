@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"fmt"
 
+	"github.com/google/uuid"
+
 	"github.com/gavinmcnair/tvproxy/pkg/database"
 	"github.com/gavinmcnair/tvproxy/pkg/models"
 )
@@ -18,23 +20,19 @@ func NewEPGDataRepository(db *database.DB) *EPGDataRepository {
 }
 
 func (r *EPGDataRepository) Create(ctx context.Context, data *models.EPGData) error {
-	result, err := r.db.ExecContext(ctx,
-		`INSERT INTO epg_data (epg_source_id, channel_id, name, icon)
-		VALUES (?, ?, ?, ?)`,
-		data.EPGSourceID, data.ChannelID, data.Name, data.Icon,
+	data.ID = uuid.New().String()
+	_, err := r.db.ExecContext(ctx,
+		`INSERT INTO epg_data (id, epg_source_id, channel_id, name, icon)
+		VALUES (?, ?, ?, ?, ?)`,
+		data.ID, data.EPGSourceID, data.ChannelID, data.Name, data.Icon,
 	)
 	if err != nil {
 		return fmt.Errorf("creating epg data: %w", err)
 	}
-	id, err := result.LastInsertId()
-	if err != nil {
-		return fmt.Errorf("getting last insert id: %w", err)
-	}
-	data.ID = id
 	return nil
 }
 
-func (r *EPGDataRepository) GetByID(ctx context.Context, id int64) (*models.EPGData, error) {
+func (r *EPGDataRepository) GetByID(ctx context.Context, id string) (*models.EPGData, error) {
 	data := &models.EPGData{}
 	err := r.db.QueryRowContext(ctx,
 		`SELECT id, epg_source_id, channel_id, name, icon
@@ -52,7 +50,7 @@ func (r *EPGDataRepository) GetByID(ctx context.Context, id int64) (*models.EPGD
 func (r *EPGDataRepository) List(ctx context.Context) ([]models.EPGData, error) {
 	rows, err := r.db.QueryContext(ctx,
 		`SELECT id, epg_source_id, channel_id, name, icon
-		FROM epg_data ORDER BY id`,
+		FROM epg_data ORDER BY name`,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("listing epg data: %w", err)
@@ -73,10 +71,10 @@ func (r *EPGDataRepository) List(ctx context.Context) ([]models.EPGData, error) 
 	return items, nil
 }
 
-func (r *EPGDataRepository) ListBySourceID(ctx context.Context, sourceID int64) ([]models.EPGData, error) {
+func (r *EPGDataRepository) ListBySourceID(ctx context.Context, sourceID string) ([]models.EPGData, error) {
 	rows, err := r.db.QueryContext(ctx,
 		`SELECT id, epg_source_id, channel_id, name, icon
-		FROM epg_data WHERE epg_source_id = ? ORDER BY id`, sourceID,
+		FROM epg_data WHERE epg_source_id = ? ORDER BY name`, sourceID,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("listing epg data by source id: %w", err)
@@ -97,7 +95,7 @@ func (r *EPGDataRepository) ListBySourceID(ctx context.Context, sourceID int64) 
 	return items, nil
 }
 
-func (r *EPGDataRepository) Delete(ctx context.Context, id int64) error {
+func (r *EPGDataRepository) Delete(ctx context.Context, id string) error {
 	_, err := r.db.ExecContext(ctx, `DELETE FROM epg_data WHERE id = ?`, id)
 	if err != nil {
 		return fmt.Errorf("deleting epg data: %w", err)
@@ -105,7 +103,7 @@ func (r *EPGDataRepository) Delete(ctx context.Context, id int64) error {
 	return nil
 }
 
-func (r *EPGDataRepository) DeleteBySourceID(ctx context.Context, sourceID int64) error {
+func (r *EPGDataRepository) DeleteBySourceID(ctx context.Context, sourceID string) error {
 	_, err := r.db.ExecContext(ctx, `DELETE FROM epg_data WHERE epg_source_id = ?`, sourceID)
 	if err != nil {
 		return fmt.Errorf("deleting epg data by source id: %w", err)
@@ -116,8 +114,8 @@ func (r *EPGDataRepository) DeleteBySourceID(ctx context.Context, sourceID int64
 func (r *EPGDataRepository) BulkCreate(ctx context.Context, items []models.EPGData) error {
 	return r.db.InTx(ctx, func(tx *sql.Tx) error {
 		stmt, err := tx.PrepareContext(ctx,
-			`INSERT INTO epg_data (epg_source_id, channel_id, name, icon)
-			VALUES (?, ?, ?, ?)`,
+			`INSERT INTO epg_data (id, epg_source_id, channel_id, name, icon)
+			VALUES (?, ?, ?, ?, ?)`,
 		)
 		if err != nil {
 			return fmt.Errorf("preparing statement: %w", err)
@@ -125,17 +123,12 @@ func (r *EPGDataRepository) BulkCreate(ctx context.Context, items []models.EPGDa
 		defer stmt.Close()
 
 		for i := range items {
-			result, err := stmt.ExecContext(ctx,
-				items[i].EPGSourceID, items[i].ChannelID, items[i].Name, items[i].Icon,
-			)
-			if err != nil {
+			items[i].ID = uuid.New().String()
+			if _, err := stmt.ExecContext(ctx,
+				items[i].ID, items[i].EPGSourceID, items[i].ChannelID, items[i].Name, items[i].Icon,
+			); err != nil {
 				return fmt.Errorf("inserting epg data %d: %w", i, err)
 			}
-			id, err := result.LastInsertId()
-			if err != nil {
-				return fmt.Errorf("getting last insert id for epg data %d: %w", i, err)
-			}
-			items[i].ID = id
 		}
 		return nil
 	})

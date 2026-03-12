@@ -106,7 +106,7 @@ func TestM3UAccountGetByIDNotFound(t *testing.T) {
 	repo := NewM3UAccountRepository(db)
 	ctx := context.Background()
 
-	_, err := repo.GetByID(ctx, 99999)
+	_, err := repo.GetByID(ctx, "nonexistent")
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "m3u account not found")
 }

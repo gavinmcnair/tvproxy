@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/rs/zerolog"
 
 	"github.com/gavinmcnair/tvproxy/pkg/config"
@@ -51,7 +52,7 @@ func (s *M3UService) CreateAccount(ctx context.Context, account *models.M3UAccou
 }
 
 // GetAccount returns an M3U account by ID.
-func (s *M3UService) GetAccount(ctx context.Context, id int64) (*models.M3UAccount, error) {
+func (s *M3UService) GetAccount(ctx context.Context, id string) (*models.M3UAccount, error) {
 	account, err := s.m3uAccountRepo.GetByID(ctx, id)
 	if err != nil {
 		return nil, fmt.Errorf("getting m3u account: %w", err)
@@ -77,7 +78,7 @@ func (s *M3UService) UpdateAccount(ctx context.Context, account *models.M3UAccou
 }
 
 // DeleteAccount deletes an M3U account and its associated streams.
-func (s *M3UService) DeleteAccount(ctx context.Context, id int64) error {
+func (s *M3UService) DeleteAccount(ctx context.Context, id string) error {
 	if err := s.streamRepo.DeleteByAccountID(ctx, id); err != nil {
 		return fmt.Errorf("deleting streams for account: %w", err)
 	}
@@ -90,13 +91,13 @@ func (s *M3UService) DeleteAccount(ctx context.Context, id int64) error {
 // RefreshAccount fetches the M3U URL for the given account, parses streams,
 // and upserts them by matching on content hash. It also updates the account's
 // last refresh time and stream count.
-func (s *M3UService) RefreshAccount(ctx context.Context, accountID int64) error {
+func (s *M3UService) RefreshAccount(ctx context.Context, accountID string) error {
 	account, err := s.m3uAccountRepo.GetByID(ctx, accountID)
 	if err != nil {
 		return fmt.Errorf("getting account: %w", err)
 	}
 
-	s.log.Info().Int64("account_id", account.ID).Str("name", account.Name).Msg("refreshing m3u account")
+	s.log.Info().Str("account_id", account.ID).Str("name", account.Name).Msg("refreshing m3u account")
 
 	body, err := s.fetchURL(ctx, account.URL)
 	if err != nil {
@@ -111,18 +112,19 @@ func (s *M3UService) RefreshAccount(ctx context.Context, accountID int64) error 
 
 	s.log.Info().Int("entries", len(entries)).Msg("parsed m3u entries")
 
-	// Build a set of content hashes from the new entries.
-	// Hash is based on accountID + name only, so duplicate channel names
-	// collapse into one stream (first occurrence wins).
-	newHashes := make(map[string]struct{}, len(entries))
+	seen := make(map[string]struct{}, len(entries))
 	streams := make([]models.Stream, 0, len(entries))
+	keepIDs := make([]string, 0, len(entries))
 	for _, entry := range entries {
 		hash := computeContentHash(entry.Name, account.ID)
-		if _, dup := newHashes[hash]; dup {
-			continue // skip duplicate name
+		if _, dup := seen[hash]; dup {
+			continue
 		}
-		newHashes[hash] = struct{}{}
+		seen[hash] = struct{}{}
+		id := deterministicStreamID(hash)
+		keepIDs = append(keepIDs, id)
 		streams = append(streams, models.Stream{
+			ID:           id,
 			M3UAccountID: account.ID,
 			Name:         entry.Name,
 			URL:          entry.URL,
@@ -135,59 +137,15 @@ func (s *M3UService) RefreshAccount(ctx context.Context, accountID int64) error 
 		})
 	}
 
-	// Get existing streams for this account
-	existingStreams, err := s.streamRepo.ListByAccountID(ctx, account.ID)
-	if err != nil {
-		return fmt.Errorf("listing existing streams: %w", err)
+	if err := s.streamRepo.BulkUpsert(ctx, streams); err != nil {
+		return fmt.Errorf("upserting streams: %w", err)
 	}
 
-	// Build a map of existing streams by content hash
-	existingByHash := make(map[string]*models.Stream, len(existingStreams))
-	for i := range existingStreams {
-		existingByHash[existingStreams[i].ContentHash] = &existingStreams[i]
+	if err := s.streamRepo.DeleteStaleByAccountID(ctx, account.ID, keepIDs); err != nil {
+		return fmt.Errorf("deleting stale streams: %w", err)
 	}
 
-	// Determine which streams to create, update, or deactivate
-	var toCreate []models.Stream
-	var toUpdate []*models.Stream
-	for i := range streams {
-		if existing, ok := existingByHash[streams[i].ContentHash]; ok {
-			existing.Name = streams[i].Name
-			existing.URL = streams[i].URL
-			existing.Group = streams[i].Group
-			existing.Logo = streams[i].Logo
-			existing.TvgID = streams[i].TvgID
-			existing.TvgName = streams[i].TvgName
-			existing.IsActive = true
-			toUpdate = append(toUpdate, existing)
-		} else {
-			toCreate = append(toCreate, streams[i])
-		}
-	}
-
-	// Deactivate streams that are no longer in the M3U
-	for i := range existingStreams {
-		if _, ok := newHashes[existingStreams[i].ContentHash]; !ok {
-			existingStreams[i].IsActive = false
-			toUpdate = append(toUpdate, &existingStreams[i])
-		}
-	}
-
-	// Bulk update existing streams (batched)
-	if len(toUpdate) > 0 {
-		if err := s.streamRepo.BulkUpdate(ctx, toUpdate); err != nil {
-			return fmt.Errorf("bulk updating streams: %w", err)
-		}
-		s.log.Info().Int("count", len(toUpdate)).Msg("updated existing streams")
-	}
-
-	// Bulk create new streams (batched)
-	if len(toCreate) > 0 {
-		if err := s.streamRepo.BulkCreate(ctx, toCreate); err != nil {
-			return fmt.Errorf("bulk creating streams: %w", err)
-		}
-		s.log.Info().Int("count", len(toCreate)).Msg("created new streams")
-	}
+	s.log.Info().Int("count", len(streams)).Msg("upserted streams")
 
 	// Update account refresh time and stream count
 	now := time.Now()
@@ -199,9 +157,8 @@ func (s *M3UService) RefreshAccount(ctx context.Context, accountID int64) error 
 	}
 
 	s.log.Info().
-		Int64("account_id", account.ID).
+		Str("account_id", account.ID).
 		Int("total", len(streams)).
-		Int("new", len(toCreate)).
 		Msg("account refresh complete")
 
 	return nil
@@ -220,7 +177,7 @@ func (s *M3UService) RefreshAllAccounts(ctx context.Context) error {
 			continue
 		}
 		if err := s.RefreshAccount(ctx, account.ID); err != nil {
-			s.log.Error().Err(err).Int64("account_id", account.ID).Str("name", account.Name).Msg("failed to refresh account")
+			s.log.Error().Err(err).Str("account_id", account.ID).Str("name", account.Name).Msg("failed to refresh account")
 			lastErr = err
 		}
 	}
@@ -253,11 +210,14 @@ func (s *M3UService) fetchURL(ctx context.Context, url string) (io.ReadCloser, e
 	return resp.Body, nil
 }
 
-// computeContentHash generates a SHA-256 hash from the account ID and stream name.
-// URL is excluded so that duplicate channel names within the same account collapse
-// into a single stream (common in IPTV M3U files with multiple server mirrors).
-func computeContentHash(name string, accountID int64) string {
+var streamNamespace = uuid.MustParse("f47ac10b-58cc-4372-a567-0e02b2c3d479")
+
+func deterministicStreamID(contentHash string) string {
+	return uuid.NewSHA1(streamNamespace, []byte(contentHash)).String()
+}
+
+func computeContentHash(name string, accountID string) string {
 	h := sha256.New()
-	h.Write([]byte(fmt.Sprintf("%d:%s", accountID, name)))
+	h.Write([]byte(fmt.Sprintf("%s:%s", accountID, name)))
 	return fmt.Sprintf("%x", h.Sum(nil))
 }

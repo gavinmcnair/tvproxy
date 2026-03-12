@@ -17,7 +17,9 @@ if [ "$(id -u tvproxy)" != "$PUID" ]; then
   usermod -o -u "$PUID" tvproxy
 fi
 
-# Ensure /data is writable
+# Ensure /data and /record are writable
 chown "$PUID:$PGID" /data
+mkdir -p /record
+chown "$PUID:$PGID" /record
 
 exec gosu tvproxy tvproxy "$@"

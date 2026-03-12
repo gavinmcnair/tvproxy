@@ -44,7 +44,7 @@ func (s *ClientService) MatchClient(ctx context.Context, r *http.Request) (*mode
 		if matchesAllRules(r, client.MatchRules) {
 			profile, err := s.streamProfileRepo.GetByID(ctx, client.StreamProfileID)
 			if err != nil {
-				s.log.Warn().Err(err).Int64("client_id", client.ID).Str("client", client.Name).Msg("matched but profile not found")
+				s.log.Warn().Err(err).Str("client_id", client.ID).Str("client", client.Name).Msg("matched but profile not found")
 				continue
 			}
 			s.log.Info().Str("client", client.Name).Str("profile", profile.Name).Msg("client detected")
@@ -59,7 +59,7 @@ func (s *ClientService) ListClients(ctx context.Context) ([]models.Client, error
 	return s.clientRepo.List(ctx)
 }
 
-func (s *ClientService) GetClient(ctx context.Context, id int64) (*models.Client, error) {
+func (s *ClientService) GetClient(ctx context.Context, id string) (*models.Client, error) {
 	return s.clientRepo.GetByID(ctx, id)
 }
 
@@ -108,7 +108,7 @@ func (s *ClientService) UpdateClient(ctx context.Context, client *models.Client,
 	return nil
 }
 
-func (s *ClientService) DeleteClient(ctx context.Context, id int64) error {
+func (s *ClientService) DeleteClient(ctx context.Context, id string) error {
 	client, err := s.clientRepo.GetByID(ctx, id)
 	if err != nil {
 		return fmt.Errorf("getting client: %w", err)

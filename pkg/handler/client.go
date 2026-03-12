@@ -4,6 +4,8 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/go-chi/chi/v5"
+
 	"github.com/gavinmcnair/tvproxy/pkg/models"
 	"github.com/gavinmcnair/tvproxy/pkg/service"
 )
@@ -64,7 +66,7 @@ func (h *ClientHandler) Create(w http.ResponseWriter, r *http.Request) {
 		Priority:  req.Priority,
 		IsEnabled: req.IsEnabled,
 	}
-	rules := toMatchRules(0, req.Rules)
+	rules := toMatchRules("", req.Rules)
 
 	if err := h.clientService.CreateClient(r.Context(), client, rules); err != nil {
 		respondError(w, http.StatusInternalServerError, "failed to create client")
@@ -80,11 +82,7 @@ func (h *ClientHandler) Create(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *ClientHandler) Get(w http.ResponseWriter, r *http.Request) {
-	id, err := urlParamInt64(r, "id")
-	if err != nil {
-		respondError(w, http.StatusBadRequest, "invalid client id")
-		return
-	}
+	id := chi.URLParam(r, "id")
 
 	client, err := h.clientService.GetClient(r.Context(), id)
 	if err != nil {
@@ -95,11 +93,7 @@ func (h *ClientHandler) Get(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *ClientHandler) Update(w http.ResponseWriter, r *http.Request) {
-	id, err := urlParamInt64(r, "id")
-	if err != nil {
-		respondError(w, http.StatusBadRequest, "invalid client id")
-		return
-	}
+	id := chi.URLParam(r, "id")
 
 	client, err := h.clientService.GetClient(r.Context(), id)
 	if err != nil {
@@ -110,7 +104,7 @@ func (h *ClientHandler) Update(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Name            string                   `json:"name"`
 		Priority        *int                     `json:"priority"`
-		StreamProfileID *int64                   `json:"stream_profile_id"`
+		StreamProfileID *string                  `json:"stream_profile_id"`
 		IsEnabled       *bool                    `json:"is_enabled"`
 		Rules           []clientMatchRuleRequest `json:"match_rules"`
 	}
@@ -162,11 +156,7 @@ func (h *ClientHandler) Update(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *ClientHandler) Delete(w http.ResponseWriter, r *http.Request) {
-	id, err := urlParamInt64(r, "id")
-	if err != nil {
-		respondError(w, http.StatusBadRequest, "invalid client id")
-		return
-	}
+	id := chi.URLParam(r, "id")
 
 	if err := h.clientService.DeleteClient(r.Context(), id); err != nil {
 		if strings.Contains(err.Error(), "getting client") {
@@ -194,7 +184,7 @@ func validateRules(rules []clientMatchRuleRequest) string {
 	return ""
 }
 
-func toMatchRules(clientID int64, reqs []clientMatchRuleRequest) []models.ClientMatchRule {
+func toMatchRules(clientID string, reqs []clientMatchRuleRequest) []models.ClientMatchRule {
 	rules := make([]models.ClientMatchRule, len(reqs))
 	for i, rr := range reqs {
 		rules[i] = models.ClientMatchRule{

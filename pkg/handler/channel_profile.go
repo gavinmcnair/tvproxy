@@ -3,21 +3,20 @@ package handler
 import (
 	"net/http"
 
+	"github.com/go-chi/chi/v5"
+
 	"github.com/gavinmcnair/tvproxy/pkg/models"
 	"github.com/gavinmcnair/tvproxy/pkg/repository"
 )
 
-// ChannelProfileHandler handles channel profile HTTP requests.
 type ChannelProfileHandler struct {
 	repo *repository.ChannelProfileRepository
 }
 
-// NewChannelProfileHandler creates a new ChannelProfileHandler.
 func NewChannelProfileHandler(repo *repository.ChannelProfileRepository) *ChannelProfileHandler {
 	return &ChannelProfileHandler{repo: repo}
 }
 
-// List returns all channel profiles.
 func (h *ChannelProfileHandler) List(w http.ResponseWriter, r *http.Request) {
 	profiles, err := h.repo.List(r.Context())
 	if err != nil {
@@ -28,7 +27,6 @@ func (h *ChannelProfileHandler) List(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, http.StatusOK, profiles)
 }
 
-// Create creates a new channel profile.
 func (h *ChannelProfileHandler) Create(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Name          string `json:"name"`
@@ -59,13 +57,8 @@ func (h *ChannelProfileHandler) Create(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, http.StatusCreated, profile)
 }
 
-// Get returns a channel profile by ID.
 func (h *ChannelProfileHandler) Get(w http.ResponseWriter, r *http.Request) {
-	id, err := urlParamInt64(r, "id")
-	if err != nil {
-		respondError(w, http.StatusBadRequest, "invalid channel profile id")
-		return
-	}
+	id := chi.URLParam(r, "id")
 
 	profile, err := h.repo.GetByID(r.Context(), id)
 	if err != nil {
@@ -76,13 +69,8 @@ func (h *ChannelProfileHandler) Get(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, http.StatusOK, profile)
 }
 
-// Update updates a channel profile by ID.
 func (h *ChannelProfileHandler) Update(w http.ResponseWriter, r *http.Request) {
-	id, err := urlParamInt64(r, "id")
-	if err != nil {
-		respondError(w, http.StatusBadRequest, "invalid channel profile id")
-		return
-	}
+	id := chi.URLParam(r, "id")
 
 	profile, err := h.repo.GetByID(r.Context(), id)
 	if err != nil {
@@ -114,13 +102,8 @@ func (h *ChannelProfileHandler) Update(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, http.StatusOK, profile)
 }
 
-// Delete deletes a channel profile by ID.
 func (h *ChannelProfileHandler) Delete(w http.ResponseWriter, r *http.Request) {
-	id, err := urlParamInt64(r, "id")
-	if err != nil {
-		respondError(w, http.StatusBadRequest, "invalid channel profile id")
-		return
-	}
+	id := chi.URLParam(r, "id")
 
 	if err := h.repo.Delete(r.Context(), id); err != nil {
 		respondError(w, http.StatusInternalServerError, "failed to delete channel profile")

@@ -3,6 +3,57 @@
 (function() {
   'use strict';
 
+  // ─── DVR State Tracker ─────────────────────────────────────────────────
+
+  function createDVRTracker(isLive, duration) {
+    var buffered = 0;
+    var seekOffset = 0;
+    var seeking = false;
+    var dur = duration || 0;
+
+    return {
+      getPos: function(videoCurrentTime) {
+        return seekOffset + (videoCurrentTime || 0);
+      },
+
+      updateBuffered: function(b) { buffered = b; },
+      getBuffered: function() { return buffered; },
+      isSeeking: function() { return seeking; },
+      getSeekOffset: function() { return seekOffset; },
+
+      startSeek: function(videoCurrentTime) {
+        if (seeking || buffered <= 0) return null;
+        var pos = seekOffset + (videoCurrentTime || 0);
+        var seekTime = Math.min(pos, buffered);
+        seeking = true;
+        seekOffset = seekTime;
+        return seekTime;
+      },
+
+      seekTo: function(seekTime) {
+        if (seeking) return null;
+        if (seekTime > buffered) return null;
+        seeking = true;
+        seekOffset = seekTime;
+        return seekTime;
+      },
+
+      completeSeek: function() { seeking = false; },
+
+      reset: function() {
+        seekOffset = 0;
+        seeking = false;
+      },
+
+      getDisplay: function(videoCurrentTime) {
+        var pos = seekOffset + (videoCurrentTime || 0);
+        var total = isLive ? buffered : (dur || buffered);
+        var pct = total > 0 ? Math.min(100, Math.max(0, (pos / total) * 100)) : 0;
+        return { pos: pos, total: total, pct: pct };
+      },
+    };
+  }
+
   // ─── State ────────────────────────────────────────────────────────────
   const state = {
     user: null,
@@ -86,6 +137,7 @@
       state.refreshToken = data.refresh_token;
       localStorage.setItem('access_token', data.access_token);
       localStorage.setItem('refresh_token', data.refresh_token);
+      auth.invalidateCaches();
       await auth.fetchUser();
     },
 
@@ -97,6 +149,14 @@
       }
     },
 
+    invalidateCaches() {
+      channelsCache.invalidate();
+      channelGroupsCache.invalidate();
+      streamsCache.invalidate();
+      epgCache.invalidate();
+      logosCache.invalidate();
+    },
+
     logout() {
       api.post('/api/auth/logout').catch(() => {});
       state.user = null;
@@ -104,6 +164,7 @@
       state.refreshToken = null;
       localStorage.removeItem('access_token');
       localStorage.removeItem('refresh_token');
+      auth.invalidateCaches();
       render();
     },
 
@@ -134,9 +195,10 @@
 
   // ─── Data Cache Utility ───────────────────────────────────────────────
   class DataCache {
-    constructor({ loader, searchKeys, label }) {
+    constructor({ loader, searchKeys, label, storageKey }) {
       this._loader = loader;
       this._searchKeys = searchKeys;
+      this._storageKey = storageKey ? 'tvproxy_' + storageKey : null;
       this._data = null;
       this._index = null;
       this._promise = null;
@@ -145,14 +207,38 @@
       this.count = 0;
     }
 
+    _loadFromStorage() {
+      if (!this._storageKey) return false;
+      try {
+        const raw = localStorage.getItem(this._storageKey);
+        if (!raw) return false;
+        this._data = JSON.parse(raw);
+        this._buildIndex();
+        this.state = 'ready';
+        this.count = this._data.length;
+        DataCache._notify();
+        return true;
+      } catch { return false; }
+    }
+
+    _saveToStorage() {
+      if (!this._storageKey || !this._data) return;
+      try { localStorage.setItem(this._storageKey, JSON.stringify(this._data)); } catch {}
+    }
+
     async getAll() {
       if (this._data) return this._data;
       if (this._promise) return this._promise;
+      if (this._loadFromStorage()) {
+        this._refreshInBackground();
+        return this._data;
+      }
       this.state = 'loading';
       DataCache._notify();
       this._promise = (async () => {
         try { this._data = await this._loader(); } catch { this._data = []; }
         this._buildIndex();
+        this._saveToStorage();
         this.state = 'ready';
         this.count = this._data.length;
         this._promise = null;
@@ -160,6 +246,19 @@
         return this._data;
       })();
       return this._promise;
+    }
+
+    _refreshInBackground() {
+      (async () => {
+        try {
+          const fresh = await this._loader();
+          this._data = fresh;
+          this._buildIndex();
+          this._saveToStorage();
+          this.count = this._data.length;
+          DataCache._notify();
+        } catch {}
+      })();
     }
 
     _buildIndex() {
@@ -198,6 +297,9 @@
       this._promise = null;
       this.state = 'idle';
       this.count = 0;
+      if (this._storageKey) {
+        try { localStorage.removeItem(this._storageKey); } catch {}
+      }
       DataCache._notify();
     }
   }
@@ -211,12 +313,14 @@
     label: 'EPG',
     loader: () => api.get('/api/epg/data'),
     searchKeys: ['name', 'channel_id'],
+    storageKey: 'epg',
   });
 
   const logosCache = new DataCache({
     label: 'Logos',
     loader: () => api.get('/api/logos'),
     searchKeys: ['name', 'url'],
+    storageKey: 'logos',
   });
 
   const streamsCache = new DataCache({
@@ -229,9 +333,11 @@
       const nameMap = {};
       accounts.forEach(a => { nameMap[a.id] = a.name; });
       streams.forEach(s => { s._display_name = (nameMap[s.m3u_account_id] || 'Unknown') + '/' + s.name; });
+      for (var k in streamGroupsCache) delete streamGroupsCache[k];
       return streams;
     },
     searchKeys: ['_display_name', 'group'],
+    storageKey: 'streams',
   });
 
   const channelsCache = new DataCache({
@@ -374,27 +480,112 @@
     usernameInput.focus();
   }
 
+  function renderInvitePage() {
+    const app = document.getElementById('app');
+    app.innerHTML = '';
+
+    const hash = window.location.hash.replace(/^#\/?/, '');
+    const match = hash.match(/^invite\/(.+)/);
+    const token = match ? match[1] : '';
+
+    if (!token) {
+      app.appendChild(h('div', { className: 'login-page' },
+        h('div', { className: 'login-card' },
+          h('h1', null, 'TVProxy'),
+          h('p', { style: 'color: var(--danger)' }, 'Invalid invite link.'),
+          h('button', { className: 'btn btn-primary btn-block', onClick: () => { state.currentPage = 'dashboard'; window.location.hash = ''; render(); } }, 'Go to Login'),
+        ),
+      ));
+      return;
+    }
+
+    const errorEl = h('div', { className: 'error-msg' });
+    const passwordInput = h('input', { type: 'password', placeholder: 'Choose a password', id: 'invite-pass' });
+    const confirmInput = h('input', { type: 'password', placeholder: 'Confirm password', id: 'invite-confirm' });
+    const submitBtn = h('button', { className: 'btn btn-primary btn-block', type: 'submit' }, 'Activate Account');
+
+    const form = h('form', {
+      onSubmit: async (e) => {
+        e.preventDefault();
+        errorEl.classList.remove('visible');
+        if (passwordInput.value !== confirmInput.value) {
+          errorEl.textContent = 'Passwords do not match';
+          errorEl.classList.add('visible');
+          return;
+        }
+        if (!passwordInput.value) {
+          errorEl.textContent = 'Password is required';
+          errorEl.classList.add('visible');
+          return;
+        }
+        submitBtn.disabled = true;
+        submitBtn.textContent = 'Activating...';
+        try {
+          await fetch('/api/auth/invite/' + encodeURIComponent(token), {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ password: passwordInput.value }),
+          }).then(resp => {
+            if (!resp.ok) return resp.json().then(data => { throw new Error(data.error || 'Invite failed'); });
+          });
+          toast.success('Account activated! Please sign in.');
+          state.currentPage = 'dashboard';
+          window.location.hash = '';
+          render();
+        } catch (err) {
+          errorEl.textContent = err.message;
+          errorEl.classList.add('visible');
+          submitBtn.disabled = false;
+          submitBtn.textContent = 'Activate Account';
+        }
+      }
+    },
+      errorEl,
+      h('div', { className: 'form-group' },
+        h('label', { for: 'invite-pass' }, 'Password'),
+        passwordInput,
+      ),
+      h('div', { className: 'form-group' },
+        h('label', { for: 'invite-confirm' }, 'Confirm Password'),
+        confirmInput,
+      ),
+      submitBtn,
+    );
+
+    app.appendChild(
+      h('div', { className: 'login-page' },
+        h('div', { className: 'login-card' },
+          h('h1', null, 'TVProxy'),
+          h('p', { className: 'subtitle' }, 'Activate Your Account'),
+          form,
+        ),
+      )
+    );
+
+    passwordInput.focus();
+  }
+
   // ─── Navigation ───────────────────────────────────────────────────────
   let navItems = [
-    { section: 'Overview' },
-    { id: 'dashboard', label: 'Dashboard', icon: '\u2302', tip: 'Overview of your TVProxy system status' },
-    { section: 'Sources' },
-    { id: 'm3u-accounts', label: 'M3U Accounts', icon: '\u2630', tip: 'Add your SAT>IP or IPTV source M3U files' },
-    { id: 'epg-sources', label: 'EPG Sources', icon: '\ud83d\udcc5', tip: 'Manage XMLTV EPG data sources for programme guides' },
+    { section: 'Overview', adminOnly: true },
+    { id: 'dashboard', label: 'Dashboard', icon: '\u2302', tip: 'Overview of your TVProxy system status', adminOnly: true },
+    { section: 'Sources', adminOnly: true },
+    { id: 'm3u-accounts', label: 'M3U Accounts', icon: '\u2630', tip: 'Add your SAT>IP or IPTV source M3U files', adminOnly: true },
+    { id: 'epg-sources', label: 'EPG Sources', icon: '\ud83d\udcc5', tip: 'Manage XMLTV EPG data sources for programme guides', adminOnly: true },
     { section: 'Channels' },
     { id: 'channels', label: 'Channels', icon: '\ud83d\udcfa', tip: 'Define your custom channels and assign streams and EPG data' },
-    { id: 'channel-groups', label: 'Channel Groups', icon: '\ud83d\udcc2', tip: 'Organize channels into groups like Sports, Entertainment, News' },
     { id: 'epg-guide', label: 'EPG Guide', icon: '\ud83d\udcf0', tip: 'TV programme guide grid for your channels' },
-    { id: 'channel-profiles', label: 'Channel Profiles', icon: '\u2699', tip: 'Control which channels are exposed to each HDHR device' },
-    { section: 'Configuration' },
-    { id: 'stream-profiles', label: 'Stream Profiles', icon: '\ud83d\udd27', tip: 'Configure transcoding profiles for stream processing' },
-    { id: 'hdhr-devices', label: 'HDHR Devices', icon: '\ud83d\udce1', tip: 'Virtual HDHomeRun devices for Plex, Jellyfin, and Emby' },
-    { id: 'clients', label: 'Client Detection', icon: '\ud83d\udd0d', tip: 'Auto-detect players by HTTP headers and assign stream profiles' },
-    { id: 'logos', label: 'Logos', icon: '\ud83d\uddbc', tip: 'Saved channel logos for quick reuse' },
+    { id: 'channel-profiles', label: 'Channel Profiles', icon: '\u2699', tip: 'Control which channels are exposed to each HDHR device', adminOnly: true },
+    { section: 'Configuration', adminOnly: true },
+    { id: 'stream-profiles', label: 'Stream Profiles', icon: '\ud83d\udd27', tip: 'Configure transcoding profiles for stream processing', adminOnly: true },
+    { id: 'hdhr-devices', label: 'HDHR Devices', icon: '\ud83d\udce1', tip: 'Virtual HDHomeRun devices for Plex, Jellyfin, and Emby', adminOnly: true },
+    { id: 'clients', label: 'Client Detection', icon: '\ud83d\udd0d', tip: 'Auto-detect players by HTTP headers and assign stream profiles', adminOnly: true },
+    { id: 'logos', label: 'Logos', icon: '\ud83d\uddbc', tip: 'Saved channel logos for quick reuse', adminOnly: true },
     { section: 'Streams' },
-    { section: 'System' },
-    { id: 'users', label: 'Users', icon: '\ud83d\udc65', tip: 'Manage admin and user accounts' },
-    { id: 'settings', label: 'Settings', icon: '\u2699', tip: 'Core application settings' },
+    { id: 'recordings', label: 'Recordings', icon: '\u23FA', tip: 'View active and completed recordings' },
+    { section: 'System', adminOnly: true },
+    { id: 'users', label: 'Users', icon: '\ud83d\udc65', tip: 'Manage admin and user accounts', adminOnly: true },
+    { id: 'settings', label: 'Settings', icon: '\u2699', tip: 'Core application settings', adminOnly: true },
   ];
 
   // Shared tooltip element
@@ -445,7 +636,7 @@
 
       // Only show enabled channels with tvg_id
       channels = channels.filter(function(c) { return c.is_enabled; });
-      channels.sort(function(a, b) { return a.channel_number - b.channel_number; });
+      channels.sort(function(a, b) { return a.name.localeCompare(b.name); });
 
       // Build group lookup
       var groupMap = {};
@@ -498,7 +689,9 @@
       }
 
       // Build channel row HTML
+      var channelCounter = 0;
       function buildChannelRow(ch) {
+        channelCounter++;
         var chPrograms = ch.tvg_id ? (programs[ch.tvg_id] || []) : [];
         var programsHtml = '';
 
@@ -519,7 +712,9 @@
           var tooltip = esc(p.title) + ' (' + timeStr + ')';
           if (p.description) tooltip += '&#10;' + esc(p.description.substring(0, 200));
 
+          var recBtnHtml = isPast ? '' : '<button class="epg-record-btn" data-ptitle="' + esc(p.title) + '" data-pstop="' + esc(p.stop) + '">\u23FA</button>';
           programsHtml += '<div class="' + cls + '" style="left:' + leftPx + 'px;width:' + widthPx + 'px" title="' + tooltip + '">' +
+            recBtnHtml +
             '<div class="epg-program-title">' + esc(p.title) + '</div>' +
             '<div class="epg-program-time">' + timeStr + '</div>' +
             '</div>';
@@ -538,7 +733,7 @@
 
         return '<div class="epg-row">' +
           '<div class="epg-channel" data-chid="' + esc(String(ch.id)) + '" data-tvgid="' + esc(ch.tvg_id || '') + '" data-chname="' + esc(ch.name) + '">' +
-            '<span class="epg-channel-num">' + ch.channel_number + '</span>' +
+            '<span class="epg-channel-num">' + channelCounter + '</span>' +
             logoHtml +
             '<span class="epg-channel-name">' + esc(ch.name) + '</span>' +
           '</div>' +
@@ -547,6 +742,7 @@
       }
 
       // Build all rows grouped
+      channelCounter = 0;
       var rowsHtml = '';
       for (var gi = 0; gi < sortedGroupIds.length; gi++) {
         var gid = sortedGroupIds[gi];
@@ -630,6 +826,7 @@
           hourMarksHtml += '<div class="epg-hour-mark" style="width:' + HOUR_WIDTH + 'px">' + formatTime(windowStart + m * 60000) + '</div>';
         }
 
+        channelCounter = 0;
         rowsHtml = '';
         for (var gi = 0; gi < sortedGroupIds.length; gi++) {
           var gid = sortedGroupIds[gi];
@@ -681,8 +878,24 @@
 
         scrollEl.innerHTML = innerHtml;
 
-        // Event delegation for channel and program clicks (play)
+        // Event delegation for channel and program clicks (play + record)
         scrollEl.addEventListener('click', function(e) {
+          var recBtn = e.target.closest('.epg-record-btn');
+          if (recBtn) {
+            e.stopPropagation();
+            if (recBtn.classList.contains('recording')) return;
+            var row = recBtn.closest('.epg-row');
+            if (!row) return;
+            var ch = row.querySelector('.epg-channel');
+            if (!ch) return;
+            var body = { program_title: recBtn.dataset.ptitle || '', channel_name: ch.dataset.chname || '', stop_at: recBtn.dataset.pstop || '' };
+            recBtn.classList.add('recording');
+            recBtn.disabled = true;
+            api.post('/channel/' + ch.dataset.chid + '/record', body).catch(function() {
+              recBtn.classList.remove('recording'); recBtn.disabled = false;
+            });
+            return;
+          }
           var ch = e.target.closest('.epg-channel');
           if (ch) {
             playChannelWithDVR(ch.dataset.chid, ch.dataset.chname, ch.dataset.tvgid || undefined);
@@ -787,7 +1000,7 @@
 
       const searchInput = h('input', {
         type: 'text',
-        placeholder: 'Filter groups...',
+        placeholder: 'Filter streams...',
         style: 'padding: 6px 10px; background: var(--bg-input); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text-primary); font-size: 13px; width: 220px; outline: none;',
       });
       searchInput.addEventListener('input', () => {
@@ -805,79 +1018,89 @@
         const gIdx = details.dataset.gidx;
         if (rendered[gIdx]) return;
         rendered[gIdx] = true;
-        const streams = groups[sortedGroups[gIdx]];
-        const rows = [];
-        for (let j = 0; j < streams.length; j++) {
-          const s = streams[j];
-          const logo = s.logo_url
-            ? '<img class="stream-group-logo" src="' + esc(s.logo_url) + '" loading="lazy" alt="">'
-            : '';
-          rows.push('<tr><td style="width:40px;padding-left:40px">' + logo + '</td><td>' + esc(s.name) + '</td><td style="width:60px;text-align:right"><button class="btn btn-secondary btn-sm" data-sid="' + s.id + '" data-sname="' + esc(s.name) + '" data-tvgid="' + esc(s.tvg_id || '') + '">Play</button></td></tr>');
+        let streams = groups[sortedGroups[gIdx]];
+        if (searchTerm) {
+          if (groupSearch[gIdx].indexOf(searchTerm) === -1) {
+            streams = streams.filter(function(s) { return s.name.toLowerCase().indexOf(searchTerm) !== -1; });
+          }
         }
         const tableEl = document.createElement('table');
         tableEl.className = 'stream-group-table';
-        tableEl.innerHTML = '<tbody>' + rows.join('') + '</tbody>';
+        tableEl.innerHTML = '<tbody>' + buildStreamRows(streams).join('') + '</tbody>';
         details.appendChild(tableEl);
       }, true);
 
       groupsContainer.addEventListener('click', (e) => {
         const btn = e.target.closest('button[data-sid]');
         if (!btn) return;
+        if (btn.dataset.qadd) {
+          quickAddChannel(btn.dataset.sid, btn.dataset.sname, btn.dataset.tvgid || '', btn.dataset.slogo || '');
+          return;
+        }
         playStreamWithVODDetection(btn.dataset.sid, btn.dataset.sname, btn.dataset.tvgid || undefined);
       });
 
+      function buildStreamRows(streams) {
+        const rows = [];
+        for (let j = 0; j < streams.length; j++) {
+          const s = streams[j];
+          const logo = s.logo_url
+            ? '<img class="stream-group-logo" src="' + esc(s.logo_url) + '" loading="lazy" alt="">'
+            : '';
+          rows.push('<tr><td style="width:40px;padding-left:40px">' + logo + '</td><td>' + esc(s.name) + '</td><td style="width:80px"><div class="actions-cell" style="justify-content:flex-end"><button class="btn btn-primary btn-sm btn-icon" title="Add as Channel" style="font-size:16px" data-qadd="1" data-sid="' + s.id + '" data-sname="' + esc(s.name) + '" data-tvgid="' + esc(s.tvg_id || '') + '" data-slogo="' + esc(s.logo_url || '') + '">+</button><button class="btn btn-secondary btn-sm btn-icon" title="Play" data-sid="' + s.id + '" data-sname="' + esc(s.name) + '" data-tvgid="' + esc(s.tvg_id || '') + '">\u25B6</button></div></td></tr>');
+        }
+        return rows;
+      }
+
       function renderGroups() {
-        // Track which groups were open so we can restore
         const openSet = new Set();
         groupsContainer.querySelectorAll('details[open]').forEach(el => {
           openSet.add(el.dataset.gidx);
         });
 
-        // Filter visible groups
         let totalVisible = 0;
         const html = [];
+        const filteredGroups = {};
 
         for (let i = 0; i < sortedGroups.length; i++) {
-          if (searchTerm && groupSearch[i].indexOf(searchTerm) === -1) continue;
-          const count = groups[sortedGroups[i]].length;
-          totalVisible += count;
-          const open = openSet.has(String(i)) ? ' open' : '';
-          html.push('<details class="stream-group" data-gidx="' + i + '"' + open + '><summary>' + esc(groupDisplay[i]) + '<span class="stream-group-count">' + count + '</span></summary></details>');
+          let streams = groups[sortedGroups[i]];
+          if (searchTerm) {
+            if (groupSearch[i].indexOf(searchTerm) !== -1) {
+              // Group name matches — show all streams
+            } else {
+              // Filter individual streams by name
+              streams = streams.filter(function(s) { return s.name.toLowerCase().indexOf(searchTerm) !== -1; });
+              if (streams.length === 0) continue;
+            }
+          }
+          filteredGroups[i] = streams;
+          totalVisible += streams.length;
+          const open = searchTerm || openSet.has(String(i)) ? ' open' : '';
+          html.push('<details class="stream-group" data-gidx="' + i + '"' + open + '><summary>' + esc(groupDisplay[i]) + '<span class="stream-group-count">' + streams.length + '</span></summary></details>');
         }
 
         summaryEl.textContent = totalVisible.toLocaleString() + ' streams in ' + html.length + ' group' + (html.length !== 1 ? 's' : '');
 
         if (html.length === 0) {
           groupsContainer.innerHTML = '<div style="padding:40px 16px;text-align:center;color:var(--text-muted)">' +
-            (searchTerm ? 'No groups match "' + esc(searchInput.value) + '"' : 'No streams found') + '</div>';
+            (searchTerm ? 'No streams match "' + esc(searchInput.value) + '"' : 'No streams found') + '</div>';
           return;
         }
 
-        // Re-rendered groups lose their lazy-rendered tables, so clear rendered tracking for non-open groups
-        // (open groups that were re-rendered via innerHTML need their tables rebuilt on next toggle)
         for (const key in rendered) {
           if (!openSet.has(key)) delete rendered[key];
         }
 
         groupsContainer.innerHTML = html.join('');
 
-        // For groups that were open, re-trigger lazy render
         groupsContainer.querySelectorAll('details[open]').forEach(el => {
           const gIdx = el.dataset.gidx;
-          if (!rendered[gIdx]) {
-            rendered[gIdx] = true;
-            const streams = groups[sortedGroups[gIdx]];
-            const rows = [];
-            for (let j = 0; j < streams.length; j++) {
-              const s = streams[j];
-              const logo = s.logo_url
-                ? '<img class="stream-group-logo" src="' + esc(s.logo_url) + '" loading="lazy" alt="">'
-                : '';
-              rows.push('<tr><td style="width:40px;padding-left:40px">' + logo + '</td><td>' + esc(s.name) + '</td><td style="width:60px;text-align:right"><button class="btn btn-secondary btn-sm" data-sid="' + s.id + '" data-sname="' + esc(s.name) + '" data-tvgid="' + esc(s.tvg_id || '') + '">Play</button></td></tr>');
-            }
+          const streams = filteredGroups[gIdx];
+          if (streams) {
+            rendered[gIdx] = searchTerm ? false : true;
             const tableEl = document.createElement('table');
             tableEl.className = 'stream-group-table';
-            tableEl.innerHTML = '<tbody>' + rows.join('') + '</tbody>';
+            tableEl.innerHTML = '<tbody>' + buildStreamRows(streams).join('') + '</tbody>';
             el.appendChild(tableEl);
           }
         });
@@ -917,12 +1140,25 @@
     accounts.forEach(a => {
       pages['streams-' + a.id] = buildStreamGroupsPage(a.id);
     });
-    // Re-render sidebar if already on screen
-    if (auth.isLoggedIn()) render();
+    if (auth.isLoggedIn()) {
+      const oldSidebar = document.querySelector('.sidebar');
+      if (oldSidebar) {
+        oldSidebar.replaceWith(renderSidebar());
+      }
+    }
   }
 
   function renderSidebar() {
-    const items = navItems.map(item => {
+    const isAdmin = state.user && state.user.is_admin;
+    const visible = navItems.filter((n, i, arr) => {
+      if (n.adminOnly && !isAdmin) return false;
+      if (n.section) {
+        const next = arr.slice(i + 1).find(x => !x.adminOnly || isAdmin);
+        if (!next || next.section) return false;
+      }
+      return true;
+    });
+    const items = visible.map(item => {
       if (item.section) {
         return h('div', { className: 'nav-section' }, item.section);
       }
@@ -1000,7 +1236,7 @@
         { label: 'M3U Accounts', value: accounts.length, icon: '\u2630', page: 'm3u-accounts' },
         { label: 'Streams', value: streamCount, icon: '\u25b6', page: accounts.length ? 'streams-' + accounts[0].id : 'dashboard' },
         { label: 'Channels', value: channels.length, icon: '\ud83d\udcfa', page: 'channels' },
-        { label: 'Channel Groups', value: groups.length, icon: '\ud83d\udcc2', page: 'channel-groups' },
+        { label: 'Channel Groups', value: groups.length, icon: '\ud83d\udcc2', page: 'channels' },
         { label: 'EPG Sources', value: epgSources.length, icon: '\ud83d\udcc5', page: 'epg-sources' },
         { label: 'HDHR Devices', value: devices.length, icon: '\ud83d\udce1', page: 'hdhr-devices' },
       ];
@@ -1115,8 +1351,13 @@
 
       let allItems;
       let searchIndex; // parallel array of pre-lowercased search strings
+      let groupsData = null;
+      const openGroups = new Set();
+      let groupsInitialized = false;
+      const groupsContainerEl = config.groupBy ? h('table') : null;
       try {
         allItems = await api.get(config.apiPath);
+        if (config.groupBy) groupsData = await config.groupBy.loadGroups();
       } catch (err) {
         container.innerHTML = '';
         container.appendChild(h('p', { style: 'color: var(--danger)' }, 'Failed to load: ' + err.message));
@@ -1179,14 +1420,337 @@
         }, 300);
       });
 
+      function buildItemRow(item) {
+        const tr = document.createElement('tr');
+        for (let c = 0; c < config.columns.length; c++) {
+          const col = config.columns[c];
+          const val = col.render ? col.render(item) : item[col.key];
+          const td = document.createElement('td');
+          if (col.tdStyle) td.style.cssText = col.tdStyle;
+          if (val != null && typeof val === 'object' && val.nodeType) {
+            td.appendChild(val);
+          } else {
+            td.textContent = val != null ? String(val) : '-';
+          }
+          tr.appendChild(td);
+        }
+        const actionsTd = document.createElement('td');
+        actionsTd.className = 'actions-cell';
+        if (config.update !== false && (typeof config.update !== 'function' || config.update(item))) {
+          const editBtn = document.createElement('button');
+          editBtn.className = 'btn btn-secondary btn-sm btn-icon';
+          editBtn.textContent = '\u270E';
+          editBtn.title = 'Edit';
+          editBtn.onclick = () => openForm(item);
+          actionsTd.appendChild(editBtn);
+        }
+        if (config.rowActions) {
+          const actions = config.rowActions(item, reloadData);
+          for (let a = 0; a < actions.length; a++) {
+            const btn = document.createElement('button');
+            if (actions[a].icon) {
+              btn.className = 'btn btn-secondary btn-sm btn-icon';
+              btn.textContent = actions[a].icon;
+              btn.title = actions[a].label;
+            } else {
+              btn.className = 'btn btn-secondary btn-sm';
+              btn.textContent = actions[a].label;
+            }
+            btn.onclick = actions[a].handler;
+            actionsTd.appendChild(btn);
+          }
+        }
+        if (config.delete !== false && (typeof config.delete !== 'function' || config.delete(item))) {
+          const delBtn = document.createElement('button');
+          delBtn.className = 'btn btn-danger btn-sm btn-icon btn-icon-circle';
+          delBtn.textContent = '\u2715';
+          delBtn.title = 'Delete';
+          delBtn.onclick = () => deleteItem(item);
+          actionsTd.appendChild(delBtn);
+        }
+        tr.appendChild(actionsTd);
+        return tr;
+      }
+
+      function buildGroupedThead() {
+        const thead = document.createElement('thead');
+        const headRow = document.createElement('tr');
+        for (let c = 0; c < config.columns.length; c++) {
+          const col = config.columns[c];
+          const th = h('th', null, col.label);
+          if (col.thStyle) th.style.cssText = col.thStyle;
+          headRow.appendChild(th);
+        }
+        headRow.appendChild(h('th', { style: 'width: 120px' }, 'Actions'));
+        thead.appendChild(headRow);
+        return thead;
+      }
+
+      function renderGrouped(filtered) {
+        const gb = config.groupBy;
+        const groupMap = {};
+        (groupsData || []).forEach(g => { groupMap[g.id] = g; });
+
+        const grouped = {};
+        const ungrouped = [];
+        const seen = new Set();
+        for (let i = 0; i < filtered.length; i++) {
+          const item = filtered[i];
+          seen.add(item);
+          const gid = item[gb.key];
+          if (gid && groupMap[gid]) {
+            if (!grouped[gid]) grouped[gid] = [];
+            grouped[gid].push(item);
+          } else {
+            ungrouped.push(item);
+          }
+        }
+
+        if (searchTerm) {
+          const q = searchTerm.toLowerCase();
+          (groupsData || []).forEach(g => {
+            if ((g[gb.nameKey] || '').toLowerCase().indexOf(q) !== -1) {
+              for (let i = 0; i < allItems.length; i++) {
+                if (allItems[i][gb.key] === g.id && !seen.has(allItems[i])) {
+                  if (!grouped[g.id]) grouped[g.id] = [];
+                  grouped[g.id].push(allItems[i]);
+                  seen.add(allItems[i]);
+                }
+              }
+            }
+          });
+        }
+
+        let totalVisible = 0;
+        Object.values(grouped).forEach(items => { totalVisible += items.length; });
+        totalVisible += ungrouped.length;
+
+        countEl.textContent = searchTerm
+          ? config.title + ' (' + totalVisible + ' of ' + allItems.length + ')'
+          : config.title + ' (' + allItems.length + ')';
+
+        const colSpan = config.columns.length + 1;
+
+        const sortedGroups = (groupsData || []).slice()
+          .sort((a, b) => (a[gb.sortKey] || 0) - (b[gb.sortKey] || 0));
+
+        if (!groupsInitialized) {
+          sortedGroups.forEach(g => openGroups.add(g.id));
+          if (ungrouped.length > 0) openGroups.add('__ungrouped__');
+          groupsInitialized = true;
+        }
+
+        // Clear all tbody elements, keep thead
+        groupsContainerEl.querySelectorAll('tbody').forEach(el => el.remove());
+        let hasContent = false;
+
+        function buildGroupTbody(gid, label, items) {
+          const tbody = document.createElement('tbody');
+          tbody.dataset.gid = gid;
+
+          // Group header row
+          const headerTr = document.createElement('tr');
+          headerTr.className = 'group-header-row';
+          const headerTd = document.createElement('td');
+          headerTd.colSpan = colSpan;
+
+          const arrow = h('span', { className: 'group-header-arrow' + (openGroups.has(gid) ? ' open' : '') }, '\u25B6');
+          headerTd.appendChild(arrow);
+          headerTd.appendChild(document.createTextNode(label));
+          headerTd.appendChild(h('span', { className: 'stream-group-count', style: 'margin-left:8px' }, String(items.length)));
+
+          // Edit/delete buttons for real groups (not ungrouped)
+          if (gid !== '__ungrouped__') {
+            const group = (groupsData || []).find(g => g.id === gid);
+            if (group) {
+              const grpActions = document.createElement('span');
+              grpActions.style.cssText = 'float:right;display:none;gap:4px;align-items:center;';
+              grpActions.appendChild(h('button', { className: 'btn btn-secondary btn-sm btn-icon', title: 'Edit group', onClick: (e) => {
+                e.preventDefault(); e.stopPropagation(); editGroupInline(group);
+              }}, '\u270E'));
+              grpActions.appendChild(h('button', { className: 'btn btn-danger btn-sm btn-icon btn-icon-circle', title: 'Delete group', onClick: (e) => {
+                e.preventDefault(); e.stopPropagation(); deleteGroupFromHeader(group);
+              }}, '\u2715'));
+              headerTd.appendChild(grpActions);
+              headerTr.addEventListener('mouseenter', () => { grpActions.style.display = 'inline-flex'; });
+              headerTr.addEventListener('mouseleave', () => { grpActions.style.display = 'none'; });
+            }
+          }
+
+          headerTr.appendChild(headerTd);
+
+          // Toggle data rows on click
+          const dataRows = [];
+          headerTr.addEventListener('click', (e) => {
+            if (e.target.closest('button')) return;
+            var isOpen = openGroups.has(gid);
+            if (isOpen) {
+              openGroups.delete(gid);
+              arrow.className = 'group-header-arrow';
+            } else {
+              openGroups.add(gid);
+              arrow.className = 'group-header-arrow open';
+            }
+            for (var r = 0; r < dataRows.length; r++) {
+              dataRows[r].style.display = openGroups.has(gid) ? '' : 'none';
+            }
+          });
+
+          tbody.appendChild(headerTr);
+
+          for (var i = 0; i < items.length; i++) {
+            var row = buildItemRow(items[i]);
+            if (!openGroups.has(gid)) row.style.display = 'none';
+            dataRows.push(row);
+            tbody.appendChild(row);
+          }
+
+          return tbody;
+        }
+
+        for (let gi = 0; gi < sortedGroups.length; gi++) {
+          const group = sortedGroups[gi];
+          const items = grouped[group.id];
+          if (!items || items.length === 0) continue;
+          hasContent = true;
+          groupsContainerEl.appendChild(buildGroupTbody(group.id, group[gb.nameKey] || 'Unknown', items));
+        }
+
+        if (ungrouped.length > 0) {
+          hasContent = true;
+          groupsContainerEl.appendChild(buildGroupTbody('__ungrouped__', gb.ungroupedLabel || 'Ungrouped', ungrouped));
+        }
+
+        if (!hasContent) {
+          const tbody = document.createElement('tbody');
+          tbody.appendChild(h('tr', { className: 'empty-row' },
+            h('td', { colspan: String(colSpan), style: 'padding:40px 16px;text-align:center;color:var(--text-muted)' },
+              searchTerm ? 'No matching items' : 'No items found')
+          ));
+          groupsContainerEl.appendChild(tbody);
+        }
+
+        paginationEl.innerHTML = '';
+      }
+
+      function editGroupInline(group) {
+        const gb = config.groupBy;
+        const formEl = h('div');
+        const inputs = {};
+        (gb.fields || []).forEach(f => {
+          const inp = h('input', { type: f.type || 'text', placeholder: f.placeholder || '' });
+          inp.value = group[f.key] != null ? String(group[f.key]) : (f.default != null ? String(f.default) : '');
+          inputs[f.key] = inp;
+          formEl.appendChild(h('div', { className: 'form-group' }, h('label', null, f.label), inp));
+        });
+        showModal('Edit ' + (gb.singular || 'Group'), formEl, async () => {
+          const body = {};
+          (gb.fields || []).forEach(f => {
+            body[f.key] = f.type === 'number' ? Number(inputs[f.key].value) : inputs[f.key].value;
+          });
+          await api.put(gb.apiPath + '/' + group.id, body);
+          toast.success((gb.singular || 'Group') + ' updated');
+          groupsData = await gb.loadGroups();
+          if (gb.onChanged) gb.onChanged();
+          filteredCache = null;
+          updateTable();
+        });
+      }
+
+      async function deleteGroupFromHeader(group) {
+        const gb = config.groupBy;
+        const ok = await confirmDialog('Delete group "' + (group[gb.nameKey] || '') + '"? Channels will become ungrouped.');
+        if (!ok) return;
+        try {
+          await api.del(gb.apiPath + '/' + group.id);
+          toast.success((gb.singular || 'Group') + ' deleted');
+          groupsData = await gb.loadGroups();
+          if (gb.onChanged) gb.onChanged();
+          await reloadData();
+        } catch (err) {
+          toast.error(err.message);
+        }
+      }
+
+      function manageGroupsModal() {
+        const gb = config.groupBy;
+        const bodyEl = h('div');
+
+        function renderGroupList() {
+          bodyEl.innerHTML = '';
+          const sorted = (groupsData || []).slice().sort((a, b) => (a[gb.sortKey] || 0) - (b[gb.sortKey] || 0));
+
+          const addBtn = h('button', { className: 'btn btn-primary btn-sm', onClick: () => {
+            const formContent = h('div');
+            const cnInputs = {};
+            (gb.fields || []).forEach(f => {
+              const inp = h('input', { type: f.type || 'text', placeholder: f.placeholder || '' });
+              inp.value = f.default != null ? String(f.default) : '';
+              cnInputs[f.key] = inp;
+              formContent.appendChild(h('div', { className: 'form-group' }, h('label', null, f.label), inp));
+            });
+            showModal('Add ' + (gb.singular || 'Group'), formContent, async () => {
+              const body = {};
+              (gb.fields || []).forEach(f => {
+                body[f.key] = f.type === 'number' ? Number(cnInputs[f.key].value) : cnInputs[f.key].value;
+              });
+              await api.post(gb.apiPath, body);
+              toast.success((gb.singular || 'Group') + ' created');
+              groupsData = await gb.loadGroups();
+              if (gb.onChanged) gb.onChanged();
+              renderGroupList();
+              filteredCache = null;
+              updateTable();
+            }, 'Create');
+          }}, '+ Add ' + (gb.singular || 'Group'));
+          bodyEl.appendChild(h('div', { style: 'margin-bottom:12px' }, addBtn));
+
+          if (sorted.length === 0) {
+            bodyEl.appendChild(h('p', { style: 'color:var(--text-muted)' }, 'No groups defined yet.'));
+            return;
+          }
+
+          sorted.forEach(group => {
+            bodyEl.appendChild(h('div', { style: 'display:flex;align-items:center;gap:8px;padding:8px 0;border-bottom:1px solid var(--border)' },
+              h('span', { style: 'flex:1;font-weight:500' }, group[gb.nameKey] || 'Unknown'),
+              h('span', { style: 'color:var(--text-secondary);font-size:13px;min-width:60px' }, 'Order: ' + (group[gb.sortKey] || 0)),
+              h('button', { className: 'btn btn-secondary btn-sm btn-icon', title: 'Edit', onClick: () => editGroupInline(group) }, '\u270E'),
+              h('button', { className: 'btn btn-danger btn-sm btn-icon btn-icon-circle', title: 'Delete', onClick: async () => {
+                const ok = await confirmDialog('Delete group "' + (group[gb.nameKey] || '') + '"?');
+                if (!ok) return;
+                try {
+                  await api.del(gb.apiPath + '/' + group.id);
+                  toast.success((gb.singular || 'Group') + ' deleted');
+                  groupsData = await gb.loadGroups();
+                  if (gb.onChanged) gb.onChanged();
+                  renderGroupList();
+                  filteredCache = null;
+                  updateTable();
+                } catch (err) {
+                  toast.error(err.message);
+                }
+              }}, '\u2715'),
+            ));
+          });
+        }
+
+        renderGroupList();
+        showModal('Manage ' + (gb.plural || 'Groups'), bodyEl);
+      }
+
       // Build the shell once
       function buildShell() {
         container.innerHTML = '';
 
         const headerActions = [];
+        if (config.groupBy) {
+          headerActions.push(
+            h('button', { className: 'btn btn-secondary btn-sm', onClick: () => manageGroupsModal() }, 'Manage Groups')
+          );
+        }
         if (config.create) {
           headerActions.push(
-            h('button', { className: 'btn btn-primary btn-sm', onClick: () => openForm(null) }, '+ Add New')
+            h('button', { className: 'btn btn-primary btn-sm btn-icon', title: 'Add New', style: 'font-size:18px', onClick: () => openForm(null) }, '+')
           );
         }
         if (config.extraActions) {
@@ -1197,30 +1761,50 @@
           });
         }
 
-        container.appendChild(h('div', { className: 'table-container' },
-          h('div', { className: 'table-header' },
-            countEl,
-            h('div', { className: 'btn-group', style: 'align-items: center;' },
-              searchInput,
-              ...headerActions,
-            ),
-          ),
-          h('table', null,
-            h('thead', null,
-              h('tr', null,
-                ...config.columns.map(col => h('th', null, col.label)),
-                h('th', { style: 'width: 120px' }, 'Actions'),
+        if (config.groupBy && groupsContainerEl) {
+          groupsContainerEl.appendChild(buildGroupedThead());
+          container.appendChild(h('div', { className: 'table-container' },
+            h('div', { className: 'table-header' },
+              countEl,
+              h('div', { className: 'btn-group', style: 'align-items: center;' },
+                searchInput,
+                ...headerActions,
               ),
             ),
-            tbodyEl,
-          ),
-        ));
-        container.appendChild(paginationEl);
+            groupsContainerEl,
+          ));
+        } else {
+          container.appendChild(h('div', { className: 'table-container' },
+            h('div', { className: 'table-header' },
+              countEl,
+              h('div', { className: 'btn-group', style: 'align-items: center;' },
+                searchInput,
+                ...headerActions,
+              ),
+            ),
+            h('table', null,
+              h('thead', null,
+                h('tr', null,
+                  ...config.columns.map(col => { const th = h('th', null, col.label); if (col.thStyle) th.style.cssText = col.thStyle; return th; }),
+                  h('th', { style: 'width: 120px' }, 'Actions'),
+                ),
+              ),
+              tbodyEl,
+            ),
+          ));
+          container.appendChild(paginationEl);
+        }
       }
 
       // Fast update - only swaps tbody rows, count text, and pagination
       function updateTable() {
         const filtered = getFiltered();
+
+        if (config.groupBy && groupsContainerEl) {
+          renderGrouped(filtered);
+          return;
+        }
+
         const totalPages = Math.max(1, Math.ceil(filtered.length / perPage));
         if (currentPage > totalPages) currentPage = totalPages;
         const start = (currentPage - 1) * perPage;
@@ -1241,47 +1825,7 @@
           );
         } else {
           for (let i = 0; i < pageItems.length; i++) {
-            const item = pageItems[i];
-            const tr = document.createElement('tr');
-            for (let c = 0; c < config.columns.length; c++) {
-              const col = config.columns[c];
-              const val = col.render ? col.render(item) : item[col.key];
-              const td = document.createElement('td');
-              if (val != null && typeof val === 'object' && val.nodeType) {
-                td.appendChild(val);
-              } else {
-                td.textContent = val != null ? String(val) : '-';
-              }
-              tr.appendChild(td);
-            }
-            const actionsTd = document.createElement('td');
-            actionsTd.className = 'actions-cell';
-            if (config.update !== false && (typeof config.update !== 'function' || config.update(item))) {
-              const editBtn = document.createElement('button');
-              editBtn.className = 'btn btn-secondary btn-sm';
-              editBtn.textContent = 'Edit';
-              editBtn.onclick = () => openForm(item);
-              actionsTd.appendChild(editBtn);
-            }
-            if (config.delete !== false && (typeof config.delete !== 'function' || config.delete(item))) {
-              const delBtn = document.createElement('button');
-              delBtn.className = 'btn btn-danger btn-sm';
-              delBtn.textContent = 'Del';
-              delBtn.onclick = () => deleteItem(item);
-              actionsTd.appendChild(delBtn);
-            }
-            if (config.rowActions) {
-              const actions = config.rowActions(item, reloadData);
-              for (let a = 0; a < actions.length; a++) {
-                const btn = document.createElement('button');
-                btn.className = 'btn btn-secondary btn-sm';
-                btn.textContent = actions[a].label;
-                btn.onclick = actions[a].handler;
-                actionsTd.appendChild(btn);
-              }
-            }
-            tr.appendChild(actionsTd);
-            tbodyEl.appendChild(tr);
+            tbodyEl.appendChild(buildItemRow(pageItems[i]));
           }
         }
 
@@ -1330,6 +1874,7 @@
       async function reloadData() {
         try {
           allItems = await api.get(config.apiPath);
+          if (config.groupBy) groupsData = await config.groupBy.loadGroups();
           if (config.onDataLoaded) await config.onDataLoaded(allItems);
           buildSearchIndex();
           filteredCache = null;
@@ -1338,6 +1883,9 @@
           toast.error('Failed to reload: ' + err.message);
         }
       }
+
+      const reloadHandler = () => { if (container.isConnected) reloadData(); else document.removeEventListener('tvproxy-reload-page', reloadHandler); };
+      document.addEventListener('tvproxy-reload-page', reloadHandler);
 
       function openForm(item) {
         const isEdit = item !== null;
@@ -1608,22 +2156,60 @@
             const sel = h('select', { id: 'field-' + field.key });
             sel.appendChild(h('option', { value: '' }, field.emptyLabel || '-- None --'));
             const currentVal = isEdit ? item[field.key] : null;
-            if (field.loadOptions) {
+
+            function loadSelectOpts(autoSelectId) {
+              while (sel.children.length > 1) sel.removeChild(sel.lastChild);
+              if (!field.loadOptions) return;
               field.loadOptions().then(options => {
                 for (const opt of (options || [])) {
                   const optEl = h('option', { value: String(opt[field.valueKey || 'id']) },
                     opt[field.displayKey || 'name']);
-                  if (currentVal != null && String(currentVal) === String(opt[field.valueKey || 'id'])) {
+                  const matchVal = autoSelectId || currentVal;
+                  if (matchVal != null && String(matchVal) === String(opt[field.valueKey || 'id'])) {
                     optEl.selected = true;
                   }
                   sel.appendChild(optEl);
                 }
               }).catch(() => {});
             }
+            loadSelectOpts();
+
             inputs[field.key] = sel;
+            let selectRow;
+            if (field.createNew) {
+              sel.style.flex = '1';
+              const addBtn = h('button', { className: 'btn btn-secondary btn-sm', style: 'flex-shrink:0;', onClick: (e) => {
+                e.preventDefault();
+                const cn = field.createNew;
+                const formContent = h('div');
+                const cnInputs = {};
+                (cn.fields || []).forEach(f => {
+                  const inp = h('input', { type: f.type || 'text', placeholder: f.placeholder || '' });
+                  inp.value = f.default != null ? String(f.default) : '';
+                  cnInputs[f.key] = inp;
+                  formContent.appendChild(h('div', { className: 'form-group' }, h('label', null, f.label), inp));
+                });
+                showModal(cn.label || 'Create New', formContent, async () => {
+                  const body = {};
+                  (cn.fields || []).forEach(f => {
+                    body[f.key] = f.type === 'number' ? Number(cnInputs[f.key].value) : cnInputs[f.key].value;
+                  });
+                  const result = await api.post(cn.apiPath, body);
+                  toast.success('Created successfully');
+                  if (cn.onCreated) cn.onCreated();
+                  if (config.groupBy && field.key === config.groupBy.key) {
+                    groupsData = await config.groupBy.loadGroups();
+                  }
+                  loadSelectOpts(result.id);
+                }, 'Create');
+              }}, '+');
+              selectRow = h('div', { style: 'display:flex;gap:6px;align-items:center;' }, sel, addBtn);
+            } else {
+              selectRow = sel;
+            }
             formEl.appendChild(h('div', { className: 'form-group' },
               h('label', { for: 'field-' + field.key }, field.label),
-              sel,
+              selectRow,
               field.help ? h('div', { className: 'help-text' }, field.help) : null,
             ));
           } else if (field.type === 'async-multi-select') {
@@ -1710,10 +2296,10 @@
               } else if (field.type === 'number') {
                 body[field.key] = el.value ? Number(el.value) : 0;
               } else if (field.type === 'async-select') {
-                body[field.key] = el.value ? (field.stringValue ? el.value : Number(el.value)) : null;
+                body[field.key] = el.value || null;
               } else if (field.type === 'async-multi-select') {
                 const checked = [];
-                el.querySelectorAll('input[type="checkbox"]:checked').forEach(cb => checked.push(Number(cb.value)));
+                el.querySelectorAll('input[type="checkbox"]:checked').forEach(cb => checked.push(cb.value));
                 body[field.key] = checked;
               } else if (field.type === 'logo-picker') {
                 body[field.key] = el._selectedLogoId || null;
@@ -1783,10 +2369,10 @@
         session = { id: resp.session_id, duration: resp.duration };
       }
     } catch(e) {}
-    openVideoPlayer(name, '/channel/' + channelID + '?profile=Browser', tvgId, session);
+    openVideoPlayer(name, '/channel/' + channelID + '?profile=Browser', tvgId, session, channelID);
   }
 
-  function openVideoPlayer(title, url, tvgId, dvr) {
+  function openVideoPlayer(title, url, tvgId, dvr, channelID) {
     let mpegtsPlayer = null;
     let retryCount = 0;
     const MAX_RETRIES = 3;
@@ -1798,10 +2384,10 @@
     let nowProgram = null;
     let currentContainer = '';
     let currentCodec = '';
-    let dvrBuffered = 0;
-    let dvrSeeking = false;
-    let dvrSeekOffset = 0;
+    let stallTimeout = null;
+    let isRecording = false;
     const isLive = !dvr || !dvr.duration;
+    const dvrTracker = dvr ? createDVRTracker(isLive, dvr.duration) : null;
 
     function destroyPlayer() {
       if (mpegtsPlayer) {
@@ -1819,8 +2405,9 @@
       if (progInterval) { clearInterval(progInterval); progInterval = null; }
       if (dvrPollInterval) { clearInterval(dvrPollInterval); dvrPollInterval = null; }
       if (dvrPosInterval) { clearInterval(dvrPosInterval); dvrPosInterval = null; }
+      if (stallTimeout) { clearTimeout(stallTimeout); stallTimeout = null; }
       destroyPlayer();
-      if (dvr) {
+      if (dvr && !isRecording) {
         fetch('/vod/' + dvr.id, { method: 'DELETE' }).catch(() => {});
       }
       video.oncanplay = null;
@@ -1829,6 +2416,9 @@
       video.removeAttribute('src');
       video.load();
       overlay.remove();
+      if (channelID && state.currentPage === 'channels') {
+        document.dispatchEvent(new CustomEvent('tvproxy-reload-page'));
+      }
     }
 
     function fmtTime(secs) {
@@ -1853,10 +2443,29 @@
     titleEl.textContent = title;
     const hdrBtns = document.createElement('div');
     hdrBtns.style.cssText = 'display:flex;gap:6px;flex-shrink:0;';
+    const recordBtn = document.createElement('button');
+    recordBtn.className = 'btn btn-sm';
+    recordBtn.textContent = '\u23FA';
+    recordBtn.title = 'Record';
+    recordBtn.style.cssText = 'font-size:14px;';
+    recordBtn.onclick = async function() {
+      if (isRecording || !dvr) return;
+      var body = { program_title: nowProgram ? nowProgram.title : title, channel_name: title };
+      if (nowProgram && nowProgram.stop) body.stop_at = new Date(nowProgram.stop).toISOString();
+      try {
+        await api.post('/vod/' + dvr.id + '/record', body);
+        isRecording = true;
+        recordBtn.style.color = '#e53935';
+        recordBtn.title = 'Recording';
+        recordBtn.disabled = true;
+      } catch(e) {}
+    };
+    if (!dvr) recordBtn.style.display = 'none';
     const statsBtn = document.createElement('button');
     statsBtn.className = 'btn btn-sm'; statsBtn.textContent = 'Stats'; statsBtn.title = 'Toggle stream statistics';
     const closeBtn = document.createElement('button');
-    closeBtn.className = 'btn btn-danger btn-sm'; closeBtn.textContent = 'Close'; closeBtn.onclick = cleanup;
+    closeBtn.className = 'btn btn-danger btn-sm btn-icon-circle'; closeBtn.textContent = '\u2715'; closeBtn.title = 'Close'; closeBtn.onclick = cleanup;
+    hdrBtns.appendChild(recordBtn);
     hdrBtns.appendChild(statsBtn);
     hdrBtns.appendChild(closeBtn);
     header.appendChild(titleEl);
@@ -1906,7 +2515,23 @@
     const playPauseBtn = document.createElement('button');
     playPauseBtn.style.cssText = 'background:none;border:none;color:#ccc;font-size:16px;cursor:pointer;padding:0 2px;line-height:1;';
     playPauseBtn.innerHTML = '&#9646;&#9646;';
-    playPauseBtn.onclick = () => { video.paused ? video.play() : video.pause(); };
+    playPauseBtn.onclick = () => {
+      if (video.paused) {
+        if (video.readyState < 2) {
+          retryCount = 0;
+          if (dvrTracker && dvrTracker.getBuffered() > 0 && !dvrTracker.isSeeking()) {
+            var pos = dvrTracker.getPos(video.currentTime);
+            seekTo(Math.min(pos, dvrTracker.getBuffered()));
+          } else {
+            startPlayback();
+          }
+        } else {
+          video.play();
+        }
+      } else {
+        video.pause();
+      }
+    };
     video.onpause = () => { playPauseBtn.innerHTML = '&#9654;'; };
     video.onplay = () => { playPauseBtn.innerHTML = '&#9646;&#9646;'; };
 
@@ -1952,6 +2577,15 @@
       if (document.fullscreenElement) document.exitFullscreen();
       else videoWrap.requestFullscreen().catch(() => {});
     };
+    document.addEventListener('fullscreenchange', () => {
+      if (document.fullscreenElement === videoWrap) {
+        video.style.maxHeight = '100vh';
+        videoWrap.style.borderRadius = '0';
+      } else {
+        video.style.maxHeight = '450px';
+        videoWrap.style.borderRadius = '4px';
+      }
+    });
 
     btnRow.appendChild(playPauseBtn);
     btnRow.appendChild(timeLabel);
@@ -1973,42 +2607,43 @@
 
     // ── DVR seek bar logic ──
     function seekTo(seekTime) {
-      if (dvrSeeking || !dvr) return;
-      if (seekTime > dvrBuffered) return;
-      dvrSeeking = true;
-      dvrSeekOffset = seekTime;
+      if (!dvrTracker || !dvr) return;
+      var result = dvrTracker.seekTo(seekTime);
+      if (result === null) return;
       statusEl.style.color = '#ffa726';
-      statusEl.textContent = 'Seeking to ' + fmtTime(seekTime) + '...';
+      statusEl.textContent = 'Seeking to ' + fmtTime(result) + '...';
       videoWrap.style.minHeight = videoWrap.offsetHeight + 'px';
       destroyPlayer();
       video.pause();
       video.removeAttribute('src');
-      video.src = '/vod/' + dvr.id + '/seek?t=' + seekTime.toFixed(1);
+      video.src = '/vod/' + dvr.id + '/seek?t=' + result.toFixed(1);
       video.oncanplay = () => {
         videoWrap.style.minHeight = '';
-        dvrSeeking = false;
+        dvrTracker.completeSeek();
         statusEl.style.color = '#4caf50';
         currentContainer = 'fMP4';
         updateStatusText();
+        if (channelID) api.del('/api/channels/' + channelID + '/fail').catch(() => {});
       };
-      video.play().catch(() => { dvrSeeking = false; });
+      video.play().catch(() => { dvrTracker.completeSeek(); });
     }
 
     seekOuter.onclick = (e) => {
-      if (!dvr || dvrBuffered <= 0) return;
+      if (!dvrTracker || dvrTracker.getBuffered() <= 0) return;
       const rect = seekOuter.getBoundingClientRect();
       const pct = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
       const epg = getEpgTiming();
+      const buf = dvrTracker.getBuffered();
       let seekTime;
       if (isLive && epg) {
         const progTime = pct * epg.duration;
-        const bufStart = epg.elapsed - dvrBuffered;
+        const bufStart = epg.elapsed - buf;
         seekTime = progTime - bufStart;
-        if (seekTime < 0 || seekTime > dvrBuffered) return;
+        if (seekTime < 0 || seekTime > buf) return;
       } else {
-        const totalEnd = isLive ? dvrBuffered : (dvr.duration || dvrBuffered);
+        const totalEnd = isLive ? buf : (dvr.duration || buf);
         seekTime = pct * totalEnd;
-        if (seekTime > dvrBuffered) return;
+        if (seekTime > buf) return;
       }
       seekTo(seekTime);
     };
@@ -2019,14 +2654,14 @@
       destroyPlayer();
       video.pause();
       video.removeAttribute('src');
-      dvrSeekOffset = 0;
-      dvrSeeking = false;
+      dvrTracker.reset();
       video.src = url;
       video.oncanplay = () => {
         videoWrap.style.minHeight = '';
         statusEl.style.color = '#4caf50';
         currentContainer = 'fMP4';
         updateStatusText();
+        if (channelID) api.del('/api/channels/' + channelID + '/fail').catch(() => {});
       };
       video.play().catch(() => {});
     };
@@ -2041,22 +2676,23 @@
       return { duration: dur, elapsed: Math.max(0, Math.min(dur, elapsed)) };
     }
 
-    if (dvr) {
+    if (dvr && dvrTracker) {
       dvrPollInterval = setInterval(async () => {
         try {
           const st = await fetch('/vod/' + dvr.id + '/status').then(r => r.json());
-          dvrBuffered = st.buffered;
+          dvrTracker.updateBuffered(st.buffered);
+          var buf = st.buffered;
           const epg = getEpgTiming();
           if (isLive && epg) {
-            const bufStartPct = Math.max(0, ((epg.elapsed - dvrBuffered) / epg.duration) * 100);
-            const bufWidthPct = Math.min(100 - bufStartPct, (dvrBuffered / epg.duration) * 100);
+            const bufStartPct = Math.max(0, ((epg.elapsed - buf) / epg.duration) * 100);
+            const bufWidthPct = Math.min(100 - bufStartPct, (buf / epg.duration) * 100);
             seekBuf.style.left = bufStartPct + '%';
             seekBuf.style.width = bufWidthPct + '%';
             epgMarker.style.display = 'block';
             epgMarker.style.left = Math.min(100, (epg.elapsed / epg.duration) * 100) + '%';
           } else if (!isLive) {
-            const total = dvr.duration || dvrBuffered;
-            if (total > 0) seekBuf.style.width = Math.min(100, (dvrBuffered / total) * 100) + '%';
+            const total = dvr.duration || buf;
+            if (total > 0) seekBuf.style.width = Math.min(100, (buf / total) * 100) + '%';
             if (st.ready) {
               seekBuf.style.width = '100%';
               seekBuf.style.background = 'rgba(76,175,80,0.5)';
@@ -2068,48 +2704,53 @@
       }, 2000);
 
       dvrPosInterval = setInterval(() => {
-        if (!video || dvrSeeking) return;
-        const pos = dvrSeekOffset + (video.currentTime || 0);
+        if (!video || dvrTracker.isSeeking()) return;
+        var d = dvrTracker.getDisplay(video.currentTime);
         const epg = getEpgTiming();
 
         if (isLive && epg) {
-          const progPos = epg.elapsed - dvrBuffered + pos;
+          const progPos = epg.elapsed - dvrTracker.getBuffered() + d.pos;
           seekPos.style.width = Math.min(100, Math.max(0, (progPos / epg.duration) * 100)) + '%';
           const progRemain = Math.max(0, epg.duration - epg.elapsed);
-          timeLabel.textContent = fmtTime(pos) + ' / ' + fmtTime(dvrBuffered) + ' (' + fmtTime(progRemain) + ' left)';
+          timeLabel.textContent = fmtTime(d.pos) + ' / ' + fmtTime(d.total) + ' (' + fmtTime(progRemain) + ' left)';
           liveBadge.style.display = 'inline-block';
-          liveBadge.style.opacity = (dvrSeekOffset > 0) ? '1' : '0.5';
+          liveBadge.style.opacity = (dvrTracker.getSeekOffset() > 0) ? '1' : '0.5';
         } else if (isLive) {
-          if (dvrBuffered > 0) seekPos.style.width = Math.min(100, (pos / dvrBuffered) * 100) + '%';
-          timeLabel.textContent = fmtTime(pos) + ' / ' + fmtTime(dvrBuffered);
+          seekPos.style.width = d.pct + '%';
+          timeLabel.textContent = fmtTime(d.pos) + ' / ' + fmtTime(d.total);
           liveBadge.style.display = 'inline-block';
-          liveBadge.style.opacity = (dvrSeekOffset > 0) ? '1' : '0.5';
+          liveBadge.style.opacity = (dvrTracker.getSeekOffset() > 0) ? '1' : '0.5';
         } else {
-          const total = dvr.duration || dvrBuffered;
-          if (total > 0) seekPos.style.width = Math.min(100, (pos / total) * 100) + '%';
-          timeLabel.textContent = fmtTime(pos) + ' / ' + fmtTime(dvr.duration || dvrBuffered);
+          seekPos.style.width = d.pct + '%';
+          timeLabel.textContent = fmtTime(d.pos) + ' / ' + fmtTime(d.total);
         }
       }, 500);
     }
 
     // ── Stats updater ──
     function updateStats() {
-      if (!mpegtsPlayer || !mpegtsPlayer.statisticsInfo) return;
-      const stats = mpegtsPlayer.statisticsInfo;
-      const mi = mpegtsPlayer.mediaInfo || {};
       const res = (video.videoWidth && video.videoHeight) ? video.videoWidth + 'x' + video.videoHeight : '?';
-      const speed = stats.speed != null ? (stats.speed / 1024).toFixed(2) + ' MB/s' : '?';
-      const fps = mi.fps || '?';
-      const dropped = (stats.droppedFrames != null) ? stats.droppedFrames : '?';
       const buf = video.buffered.length > 0 ? (video.buffered.end(0) - video.currentTime).toFixed(1) + 's' : '0s';
-      statsOverlay.innerHTML =
-        'Res: ' + res + '<br>' +
-        'Speed: ' + speed + '<br>' +
-        'FPS: ' + fps + '<br>' +
-        'Dropped: ' + dropped + '<br>' +
-        'Buffer: ' + buf + '<br>' +
-        'Video: ' + codecName(mi.videoCodec) + '<br>' +
-        'Audio: ' + codecName(mi.audioCodec);
+      if (mpegtsPlayer && mpegtsPlayer.statisticsInfo) {
+        const stats = mpegtsPlayer.statisticsInfo;
+        const mi = mpegtsPlayer.mediaInfo || {};
+        const speed = stats.speed != null ? (stats.speed / 1024).toFixed(2) + ' MB/s' : '?';
+        const fps = mi.fps || '?';
+        const dropped = (stats.droppedFrames != null) ? stats.droppedFrames : '?';
+        statsOverlay.innerHTML =
+          'Res: ' + res + '<br>' +
+          'Speed: ' + speed + '<br>' +
+          'FPS: ' + fps + '<br>' +
+          'Dropped: ' + dropped + '<br>' +
+          'Buffer: ' + buf + '<br>' +
+          'Video: ' + codecName(mi.videoCodec) + '<br>' +
+          'Audio: ' + codecName(mi.audioCodec);
+      } else {
+        statsOverlay.innerHTML =
+          'Res: ' + res + '<br>' +
+          'Container: ' + (currentContainer || '?') + '<br>' +
+          'Buffer: ' + buf;
+      }
     }
 
     // ── EPG Now Playing ──
@@ -2173,8 +2814,10 @@
           retryCount = 0;
           updateStatusText();
           fetchNowPlaying();
+          if (channelID) api.del('/api/channels/' + channelID + '/fail').catch(() => {});
         };
         video.play().catch(() => handleRetry());
+        statsInterval = setInterval(updateStats, 2000);
       } else if (typeof mpegts !== 'undefined' && mpegts.isSupported()) {
         statusEl.style.color = '#999';
         statusEl.textContent = 'Connecting...';
@@ -2216,7 +2859,13 @@
     function handleRetry() {
       if (retryCount >= MAX_RETRIES) {
         statusEl.style.color = '#ff6b6b';
-        statusEl.textContent = 'Stream failed after ' + MAX_RETRIES + ' retries.';
+        statusEl.textContent = 'Stream stalled. ';
+        const retryBtn = document.createElement('a');
+        retryBtn.textContent = 'Retry';
+        retryBtn.href = '#';
+        retryBtn.style.cssText = 'color:#4fc3f7;cursor:pointer;text-decoration:underline;';
+        retryBtn.onclick = (e) => { e.preventDefault(); retryCount = 0; startPlayback(); };
+        statusEl.appendChild(retryBtn);
         destroyPlayer();
         return;
       }
@@ -2227,10 +2876,30 @@
       retryTimeout = setTimeout(startPlayback, 2000);
     }
 
+    video.addEventListener('waiting', () => {
+      statusEl.style.color = '#ffa726';
+      statusEl.textContent = 'Buffering...';
+      if (stallTimeout) clearTimeout(stallTimeout);
+      stallTimeout = setTimeout(() => {
+        if (!video.paused && video.readyState < 3) {
+          if (dvrTracker && dvrTracker.getBuffered() > 0 && !dvrTracker.isSeeking()) {
+            var pos = dvrTracker.getPos(video.currentTime);
+            seekTo(Math.min(pos, dvrTracker.getBuffered()));
+          }
+          // Non-DVR: just keep waiting, video element will resume when data arrives
+        }
+      }, dvr ? 5000 : 30000);
+    });
+    video.addEventListener('playing', () => {
+      if (stallTimeout) { clearTimeout(stallTimeout); stallTimeout = null; }
+      statusEl.style.color = '#4caf50';
+      updateStatusText();
+    });
+
     video.onerror = () => {
-      if (!mpegtsPlayer && !dvrSeeking) {
-        statusEl.style.color = '#ff6b6b';
-        statusEl.textContent = 'Playback failed.';
+      if (!mpegtsPlayer && !(dvrTracker && dvrTracker.isSeeking())) {
+        if (channelID) api.post('/api/channels/' + channelID + '/fail').catch(() => {});
+        handleRetry();
       }
     };
 
@@ -2250,6 +2919,67 @@
       inputs.logo_id._setLogo(newLogo);
     } catch {
     }
+  }
+
+  // ─── Quick Add Channel from Streams ──────────────────────────────────
+  async function quickAddChannel(streamId, streamName, tvgId, logoUrl) {
+    const nameInp = h('input', { type: 'text', value: streamName });
+    const groupSelect = h('select');
+    groupSelect.appendChild(h('option', { value: '' }, '-- No Group --'));
+
+    try {
+      const groups = await channelGroupsCache.getAll();
+      groups.forEach(g => {
+        groupSelect.appendChild(h('option', { value: g.id }, g.name));
+      });
+    } catch {}
+
+    // Auto-match EPG
+    let matchedEpg = null;
+    if (tvgId) {
+      const epgData = await epgCache.getAll().catch(() => []);
+      matchedEpg = epgData.find(e => e.channel_id === tvgId);
+    }
+    if (!matchedEpg) {
+      const epgData = await epgCache.getAll().catch(() => []);
+      const norm = streamName.toLowerCase().replace(/\s*(hd|sd|fhd|uhd|\+1|_hd|_sd)\s*$/i, '').trim();
+      for (let i = 0; i < epgData.length; i++) {
+        const en = (epgData[i].name || '').toLowerCase().replace(/\s*(hd|sd|fhd|uhd|\+1|_hd|_sd)\s*$/i, '').trim();
+        if (en === norm) { matchedEpg = epgData[i]; break; }
+      }
+    }
+
+    const tvgInp = h('input', { type: 'text', value: matchedEpg ? matchedEpg.channel_id : (tvgId || '') });
+    const statusEl = matchedEpg
+      ? h('small', { style: 'color:var(--success)' }, 'Auto-matched: ' + matchedEpg.name)
+      : h('small', { style: 'color:var(--text-muted)' }, tvgId ? 'Using stream tvg-id' : 'No EPG match found');
+
+    const bodyEl = h('div', null,
+      h('div', { className: 'form-group' }, h('label', null, 'Channel Name'), nameInp),
+      h('div', { className: 'form-group' }, h('label', null, 'EPG Channel ID'), tvgInp, statusEl),
+      h('div', { className: 'form-group' }, h('label', null, 'Channel Group'), groupSelect),
+    );
+
+    showModal('Quick Add Channel', bodyEl, async () => {
+      if (!nameInp.value.trim()) throw new Error('Channel name is required');
+
+      const channelData = {
+        name: nameInp.value.trim(),
+        tvg_id: tvgInp.value.trim(),
+        channel_group_id: groupSelect.value || null,
+        is_enabled: true,
+      };
+
+      // Resolve logo
+      if (logoUrl || (matchedEpg && matchedEpg.icon)) {
+        channelData.logo = logoUrl || matchedEpg.icon;
+      }
+
+      const channel = await api.post('/api/channels', channelData);
+      await api.post('/api/channels/' + channel.id + '/streams', { stream_ids: [streamId] });
+      channelsCache.invalidate();
+      toast.success('Channel "' + channel.name + '" created');
+    }, 'Add Channel');
   }
 
   // ─── Page Definitions ─────────────────────────────────────────────────
@@ -2309,20 +3039,38 @@
       create: true,
       update: true,
       onChange: () => channelsCache.invalidate(),
+      groupBy: {
+        key: 'channel_group_id',
+        loadGroups: () => channelGroupsCache.getAll(),
+        nameKey: 'name',
+        sortKey: 'sort_order',
+        ungroupedLabel: 'Ungrouped',
+        apiPath: '/api/channel-groups',
+        singular: 'Channel Group',
+        plural: 'Channel Groups',
+        onChanged: () => channelGroupsCache.invalidate(),
+        fields: [
+          { key: 'name', label: 'Group Name', placeholder: 'Entertainment' },
+          { key: 'sort_order', label: 'Sort Order', type: 'number', default: 0 },
+        ],
+      },
       columns: [
-        { key: 'channel_number', label: '#' },
-        { key: 'name', label: 'Name' },
-        { key: 'tvg_id', label: 'EPG ID', render: item => item.tvg_id || '-' },
-        { key: 'logo', label: 'Logo', render: item =>
-          item.logo ? h('img', { src: item.logo, style: 'height:24px;width:24px;object-fit:contain;border-radius:2px;' }) : '-'
+        { key: 'logo', label: '', thStyle: 'width:30px;padding-right:0', tdStyle: 'padding-right:0', render: item =>
+          item.logo ? h('img', { src: item.logo, style: 'height:24px;width:24px;object-fit:contain;border-radius:2px;' }) : null
         },
+        { key: 'name', label: 'Name', render: item => {
+          const span = h('span', null, item.name);
+          if (item.fail_count > 0) {
+            span.appendChild(h('span', { className: 'play-fail-badge' }, '! ' + item.fail_count));
+          }
+          return span;
+        }},
         { key: 'is_enabled', label: 'Status', render: item =>
           h('span', { className: 'badge ' + (item.is_enabled ? 'badge-success' : 'badge-danger') }, item.is_enabled ? 'Enabled' : 'Disabled')
         },
       ],
       fields: [
         { key: 'name', label: 'Channel Name', placeholder: 'BBC One' },
-        { key: 'channel_number', label: 'Channel Number', type: 'number', default: 0, help: 'Leave as 0 for auto-assign' },
         {
           key: 'tvg_id', label: 'EPG Channel ID', type: 'autocomplete',
           placeholder: 'Search EPG channels...',
@@ -2346,6 +3094,15 @@
           loadOptions: () => channelGroupsCache.getAll(),
           valueKey: 'id', displayKey: 'name',
           help: 'Organize channels into groups (e.g., Sports, Entertainment)',
+          createNew: {
+            label: 'New Channel Group',
+            fields: [
+              { key: 'name', label: 'Group Name', placeholder: 'Entertainment' },
+              { key: 'sort_order', label: 'Sort Order', type: 'number', default: 0 },
+            ],
+            apiPath: '/api/channel-groups',
+            onCreated: () => channelGroupsCache.invalidate(),
+          },
         },
         {
           key: 'channel_profile_id', label: 'Channel Profile', type: 'async-select',
@@ -2370,7 +3127,7 @@
         { key: 'is_enabled', label: 'Enabled', type: 'checkbox', default: true },
       ],
       rowActions: (item) => [
-        { label: 'Play', handler: () => playChannelWithDVR(item.id, item.name, item.tvg_id || undefined) },
+        { label: 'Play', icon: '\u25B6', handler: () => playChannelWithDVR(item.id, item.name, item.tvg_id || undefined) },
       ],
       postFormSetup: (inputs, isEdit, item) => {
         // Load existing stream assignment when editing
@@ -2478,7 +3235,6 @@
         {
           key: 'stream_profile', label: 'Stream Profile', type: 'async-select',
           emptyLabel: '-- Default --',
-          stringValue: true,
           loadOptions: async () => {
             const profiles = await api.get('/api/stream-profiles');
             return (profiles || []).map(p => ({ id: p.name, name: p.name }));
@@ -2490,39 +3246,43 @@
       ],
     }),
 
-    'epg-sources': buildCrudPage({
-      title: 'EPG Sources',
-      singular: 'EPG Source',
-      apiPath: '/api/epg/sources',
-      create: true,
-      update: true,
-      columns: [
-        { key: 'name', label: 'Name' },
-        { key: 'url', label: 'URL', render: item => {
-          const url = item.url || '';
-          return url.length > 50 ? url.substring(0, 50) + '...' : url;
-        }},
-      ],
-      fields: [
-        { key: 'name', label: 'Source Name', placeholder: 'TV Guide' },
-        { key: 'url', label: 'XMLTV URL', placeholder: 'http://epg-provider.com/guide.xml' },
-      ],
-      rowActions: (item, reload) => [
-        {
-          label: 'Refresh',
-          handler: async () => {
-            try {
-              await api.post('/api/epg/sources/' + item.id + '/refresh');
-              epgCache.invalidate(); // invalidate EPG cache after refresh
-              toast.success('EPG refresh started for ' + item.name);
-              setTimeout(reload, 2000);
-            } catch (err) {
-              toast.error(err.message);
-            }
+    'epg-sources': function(container) {
+      const isAdmin = state.user && state.user.is_admin;
+      return buildCrudPage({
+        title: 'EPG Sources',
+        singular: 'EPG Source',
+        apiPath: '/api/epg/sources',
+        create: isAdmin,
+        update: isAdmin,
+        delete: isAdmin,
+        columns: [
+          { key: 'name', label: 'Name' },
+          { key: 'url', label: 'URL', render: item => {
+            const url = item.url || '';
+            return url.length > 50 ? url.substring(0, 50) + '...' : url;
+          }},
+        ],
+        fields: [
+          { key: 'name', label: 'Source Name', placeholder: 'TV Guide' },
+          { key: 'url', label: 'XMLTV URL', placeholder: 'http://epg-provider.com/guide.xml' },
+        ],
+        rowActions: isAdmin ? (item, reload) => [
+          {
+            label: 'Refresh',
+            handler: async () => {
+              try {
+                await api.post('/api/epg/sources/' + item.id + '/refresh');
+                epgCache.invalidate();
+                toast.success('EPG refresh started for ' + item.name);
+                setTimeout(reload, 2000);
+              } catch (err) {
+                toast.error(err.message);
+              }
+            },
           },
-        },
-      ],
-    }),
+        ] : undefined,
+      })(container);
+    },
 
     'stream-profiles': buildCrudPage({
       title: 'Stream Profiles',
@@ -2787,7 +3547,7 @@
               const updated = await api.put('/api/clients/' + existing.id, {
                 name: nameInp.value,
                 priority: parseInt(priorityInp.value, 10) || 0,
-                stream_profile_id: parseInt(profileSelect.value, 10),
+                stream_profile_id: profileSelect.value || null,
                 is_enabled: enabledChk.checked,
                 match_rules: matchRules,
               });
@@ -2851,13 +3611,180 @@
         { key: 'is_admin', label: 'Role', render: item =>
           h('span', { className: 'badge ' + (item.is_admin ? 'badge-warning' : 'badge-info') }, item.is_admin ? 'Admin' : 'User')
         },
+        { key: 'invite_token', label: 'Status', render: item => {
+          if (item.invite_token) return h('span', { className: 'badge badge-warning' }, 'Invited');
+          return h('span', { className: 'badge badge-success' }, 'Active');
+        }},
       ],
       fields: [
         { key: 'username', label: 'Username', placeholder: 'john' },
         { key: 'password', label: 'Password', type: 'password', placeholder: 'Enter password' },
         { key: 'is_admin', label: 'Administrator', type: 'checkbox', default: false },
       ],
+      extraActions: [
+        {
+          label: 'Invite User',
+          handler: () => {
+            const usernameInp = h('input', { type: 'text', placeholder: 'username' });
+            const resultEl = h('div');
+            showModal('Invite User', h('div', null,
+              h('div', { className: 'form-group' }, h('label', null, 'Username'), usernameInp),
+              resultEl,
+            ), async () => {
+              if (!usernameInp.value.trim()) throw new Error('Username is required');
+              const user = await api.post('/api/users/invite', { username: usernameInp.value.trim() });
+              const inviteUrl = window.location.origin + '/#/invite/' + user.invite_token;
+              resultEl.innerHTML = '';
+              resultEl.appendChild(h('div', { style: 'margin-top:12px;padding:12px;background:var(--bg-input);border:1px solid var(--border);border-radius:var(--radius-sm);word-break:break-all;font-size:13px' },
+                h('label', { style: 'display:block;margin-bottom:4px;color:var(--text-secondary)' }, 'Share this invite link:'),
+                h('code', null, inviteUrl),
+              ));
+              try { await navigator.clipboard.writeText(inviteUrl); toast.success('Invite link copied to clipboard'); } catch {}
+            }, 'Create Invite');
+          },
+        },
+      ],
     }),
+
+    recordings: async function(container) {
+      container.innerHTML = '';
+      container.appendChild(h('div', { className: 'loading-page' }, h('div', { className: 'spinner' }), 'Loading recordings...'));
+
+      var pollTimer = null;
+
+      function fmtSize(bytes) {
+        if (bytes < 1024) return bytes + ' B';
+        if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+        if (bytes < 1024 * 1024 * 1024) return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+        return (bytes / (1024 * 1024 * 1024)).toFixed(2) + ' GB';
+      }
+
+      function fmtDur(secs) {
+        var hrs = Math.floor(secs / 3600);
+        var mins = Math.floor((secs % 3600) / 60);
+        var s = Math.floor(secs % 60);
+        return hrs > 0 ? hrs + ':' + String(mins).padStart(2,'0') + ':' + String(s).padStart(2,'0')
+                       : mins + ':' + String(s).padStart(2,'0');
+      }
+
+      async function renderActive(activeDiv) {
+        try {
+          var recordings = await api.get('/api/recordings');
+          activeDiv.innerHTML = '';
+          if (!recordings || recordings.length === 0) {
+            activeDiv.appendChild(h('p', { style: 'color: var(--text-muted); padding: 16px;' }, 'No active recordings.'));
+            return;
+          }
+          var table = h('table', { className: 'table' });
+          table.innerHTML = '<thead><tr><th>Channel</th><th>Program</th><th>Buffered</th><th>Stop At</th><th>Actions</th></tr></thead>';
+          var tbody = h('tbody');
+          recordings.forEach(function(rec) {
+            var stopStr = rec.stop_at ? new Date(rec.stop_at).toLocaleTimeString() : '-';
+            var actions = h('td', { style: 'display:flex;gap:4px;' });
+            var playBtn = h('button', { className: 'btn btn-primary btn-sm', onClick: function() {
+              playChannelWithDVR(rec.session_id, rec.channel_name || rec.program_title, null);
+            }}, '\u25B6 Play');
+            var stopBtn = h('button', { className: 'btn btn-warning btn-sm', onClick: async function() {
+              await api.post('/vod/' + rec.session_id + '/stop');
+              renderActive(activeDiv);
+              renderCompleted(completedDiv);
+            }}, 'Stop');
+            var cancelBtn = h('button', { className: 'btn btn-danger btn-sm', onClick: async function() {
+              if (!confirm('Cancel and discard "' + (rec.program_title || 'recording') + '"?')) return;
+              await api.post('/vod/' + rec.session_id + '/cancel');
+              renderActive(activeDiv);
+            }}, 'Cancel');
+            actions.appendChild(playBtn);
+            actions.appendChild(stopBtn);
+            actions.appendChild(cancelBtn);
+            var tr = h('tr', null,
+              h('td', null, rec.channel_name),
+              h('td', null, rec.program_title),
+              h('td', null, fmtDur(rec.buffered_secs)),
+              h('td', null, stopStr),
+              actions
+            );
+            tbody.appendChild(tr);
+          });
+          table.appendChild(tbody);
+          activeDiv.appendChild(table);
+        } catch(err) {
+          activeDiv.innerHTML = '';
+          activeDiv.appendChild(h('p', { style: 'color: var(--danger)' }, 'Failed to load: ' + err.message));
+        }
+      }
+
+      async function renderCompleted(completedDiv) {
+        try {
+          var recordings = await api.get('/api/recordings/completed');
+          completedDiv.innerHTML = '';
+          if (!recordings || recordings.length === 0) {
+            completedDiv.appendChild(h('p', { style: 'color: var(--text-muted); padding: 16px;' }, 'No completed recordings.'));
+            return;
+          }
+          var table = h('table', { className: 'table' });
+          table.innerHTML = '<thead><tr><th>Filename</th><th>Size</th><th>Date</th><th>Actions</th></tr></thead>';
+          var tbody = h('tbody');
+          recordings.forEach(function(rec) {
+            var dateStr = new Date(rec.mod_time).toLocaleString();
+            var actions = h('td', { style: 'display:flex;gap:4px;' });
+            var playBtn = h('button', { className: 'btn btn-primary btn-sm', onClick: function() {
+              var fileUrl = '/api/recordings/completed/' + encodeURIComponent(rec.filename) + '/stream?profile=Browser&user_id=' + encodeURIComponent(rec.user_id || '') + '&token=' + encodeURIComponent(state.accessToken || '');
+              openVideoPlayer(rec.filename, fileUrl, null, null);
+            }}, '\u25B6 Play');
+            var deleteBtn = h('button', { className: 'btn btn-danger btn-sm', onClick: async function() {
+              if (!confirm('Delete ' + rec.filename + '?')) return;
+              await api.del('/api/recordings/completed/' + encodeURIComponent(rec.filename) + '?user_id=' + encodeURIComponent(rec.user_id || ''));
+              renderCompleted(completedDiv);
+            }}, 'Delete');
+            actions.appendChild(playBtn);
+            actions.appendChild(deleteBtn);
+            var tr = h('tr', null,
+              h('td', null, rec.filename),
+              h('td', null, fmtSize(rec.size)),
+              h('td', null, dateStr),
+              actions
+            );
+            tbody.appendChild(tr);
+          });
+          table.appendChild(tbody);
+          completedDiv.appendChild(table);
+        } catch(err) {
+          completedDiv.innerHTML = '';
+          completedDiv.appendChild(h('p', { style: 'color: var(--danger)' }, 'Failed to load: ' + err.message));
+        }
+      }
+
+      container.innerHTML = '';
+
+      var activeSection = h('div', { className: 'table-container' },
+        h('div', { className: 'table-header' }, h('h3', null, 'Active Recordings'))
+      );
+      var activeDiv = h('div');
+      activeSection.appendChild(activeDiv);
+
+      var completedSection = h('div', { className: 'table-container', style: 'margin-top: 16px;' },
+        h('div', { className: 'table-header' }, h('h3', null, 'Completed Recordings'))
+      );
+      var completedDiv = h('div');
+      completedSection.appendChild(completedDiv);
+
+      container.appendChild(activeSection);
+      container.appendChild(completedSection);
+
+      renderActive(activeDiv);
+      renderCompleted(completedDiv);
+
+      pollTimer = setInterval(function() { renderActive(activeDiv); }, 5000);
+
+      var observer = new MutationObserver(function() {
+        if (!document.body.contains(container)) {
+          if (pollTimer) clearInterval(pollTimer);
+          observer.disconnect();
+        }
+      });
+      observer.observe(document.body, { childList: true, subtree: true });
+    },
 
     settings: async function(container) {
       container.innerHTML = '';
@@ -2915,8 +3842,18 @@
   // ─── Main Render ──────────────────────────────────────────────────────
   function render() {
     if (!auth.isLoggedIn()) {
+      if (state.currentPage === 'invite') {
+        renderInvitePage();
+        return;
+      }
       renderLoginPage();
       return;
+    }
+
+    const isAdmin = state.user && state.user.is_admin;
+    const adminPages = navItems.filter(n => n.adminOnly && n.id).map(n => n.id);
+    if (!isAdmin && (adminPages.indexOf(state.currentPage) !== -1 || state.currentPage === 'dashboard')) {
+      state.currentPage = 'channels';
     }
 
     const app = document.getElementById('app');
@@ -2947,6 +3884,10 @@
 
   // ─── Init ─────────────────────────────────────────────────────────────
   async function init() {
+    const hash = window.location.hash.replace(/^#\/?/, '');
+    if (hash.startsWith('invite/')) {
+      state.currentPage = 'invite';
+    }
     if (state.accessToken) {
       await auth.fetchUser();
     }
@@ -2959,6 +3900,11 @@
       channelsCache.getAll();
       channelGroupsCache.getAll();
     }
+  }
+
+  // Test exports
+  if (typeof window !== 'undefined') {
+    window._testExports = { createDVRTracker: createDVRTracker };
   }
 
   init();

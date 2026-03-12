@@ -1,12 +1,15 @@
 package handler
 
 import (
+	"encoding/json"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/rs/zerolog"
 
+	"github.com/gavinmcnair/tvproxy/pkg/middleware"
 	"github.com/gavinmcnair/tvproxy/pkg/service"
 )
 
@@ -23,15 +26,11 @@ func NewVODHandler(vodService *service.VODService, log zerolog.Logger) *VODHandl
 }
 
 func (h *VODHandler) ProbeStream(w http.ResponseWriter, r *http.Request) {
-	streamID, err := urlParamInt64(r, "streamID")
-	if err != nil {
-		respondError(w, http.StatusBadRequest, "invalid stream id")
-		return
-	}
+	streamID := chi.URLParam(r, "streamID")
 
 	result, err := h.vodService.ProbeStream(r.Context(), streamID)
 	if err != nil {
-		h.log.Error().Err(err).Int64("stream_id", streamID).Msg("probe failed")
+		h.log.Error().Err(err).Str("stream_id", streamID).Msg("probe failed")
 		respondError(w, http.StatusNotFound, "stream not found")
 		return
 	}
@@ -51,17 +50,13 @@ func (h *VODHandler) ProbeStream(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *VODHandler) CreateSession(w http.ResponseWriter, r *http.Request) {
-	streamID, err := urlParamInt64(r, "streamID")
-	if err != nil {
-		respondError(w, http.StatusBadRequest, "invalid stream id")
-		return
-	}
+	streamID := chi.URLParam(r, "streamID")
 
 	profileName := r.URL.Query().Get("profile")
 
 	session, err := h.vodService.CreateSession(r.Context(), streamID, profileName)
 	if err != nil {
-		h.log.Error().Err(err).Int64("stream_id", streamID).Msg("create VOD session failed")
+		h.log.Error().Err(err).Str("stream_id", streamID).Msg("create VOD session failed")
 		respondError(w, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -73,17 +68,13 @@ func (h *VODHandler) CreateSession(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *VODHandler) CreateChannelSession(w http.ResponseWriter, r *http.Request) {
-	channelID, err := urlParamInt64(r, "channelID")
-	if err != nil {
-		respondError(w, http.StatusBadRequest, "invalid channel id")
-		return
-	}
+	channelID := chi.URLParam(r, "channelID")
 
 	profileName := r.URL.Query().Get("profile")
 
 	session, err := h.vodService.CreateSessionForChannel(r.Context(), channelID, profileName)
 	if err != nil {
-		h.log.Error().Err(err).Int64("channel_id", channelID).Msg("create channel VOD session failed")
+		h.log.Error().Err(err).Str("channel_id", channelID).Msg("create channel VOD session failed")
 		respondError(w, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -103,25 +94,20 @@ func (h *VODHandler) Status(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	buffered := session.GetBufferedSecs()
-
-	ready := false
-	select {
-	case <-session.Ready:
-		ready = true
-	default:
-	}
+	buffered := h.vodService.GetBufferedSecs(sessionID)
+	ready := h.vodService.IsProcessReady(sessionID)
 
 	errMsg := ""
-	if session.Error != nil {
-		errMsg = session.Error.Error()
+	if procErr := h.vodService.GetProcessError(sessionID); procErr != nil {
+		errMsg = procErr.Error()
 	}
 
 	respondJSON(w, http.StatusOK, map[string]interface{}{
-		"buffered": buffered,
-		"duration": session.Duration,
-		"ready":    ready,
-		"error":    errMsg,
+		"buffered":  buffered,
+		"duration":  session.Duration,
+		"ready":     ready,
+		"error":     errMsg,
+		"recording": h.vodService.IsRecording(sessionID),
 	})
 }
 
@@ -175,4 +161,200 @@ func (h *VODHandler) DeleteSession(w http.ResponseWriter, r *http.Request) {
 	sessionID := chi.URLParam(r, "sessionID")
 	h.vodService.DeleteSession(sessionID)
 	w.WriteHeader(http.StatusNoContent)
+}
+
+type recordRequest struct {
+	ProgramTitle string `json:"program_title"`
+	ChannelName  string `json:"channel_name"`
+	StopAt       string `json:"stop_at"`
+}
+
+func (h *VODHandler) MarkRecording(w http.ResponseWriter, r *http.Request) {
+	sessionID := chi.URLParam(r, "sessionID")
+	user := middleware.UserFromContext(r.Context())
+	if user == nil {
+		respondError(w, http.StatusUnauthorized, "authentication required")
+		return
+	}
+
+	var req recordRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		respondError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	var stopAt time.Time
+	if req.StopAt != "" {
+		var err error
+		stopAt, err = time.Parse(time.RFC3339, req.StopAt)
+		if err != nil {
+			respondError(w, http.StatusBadRequest, "invalid stop_at time format")
+			return
+		}
+	}
+
+	if err := h.vodService.MarkRecording(sessionID, req.ProgramTitle, req.ChannelName, user.UserID, stopAt); err != nil {
+		h.log.Error().Err(err).Str("session_id", sessionID).Msg("mark recording failed")
+		respondError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	respondJSON(w, http.StatusOK, map[string]interface{}{"status": "recording"})
+}
+
+func (h *VODHandler) CreateRecording(w http.ResponseWriter, r *http.Request) {
+	channelID := chi.URLParam(r, "channelID")
+	user := middleware.UserFromContext(r.Context())
+	if user == nil {
+		respondError(w, http.StatusUnauthorized, "authentication required")
+		return
+	}
+
+	var req recordRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		respondError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	var stopAt time.Time
+	if req.StopAt != "" {
+		var err error
+		stopAt, err = time.Parse(time.RFC3339, req.StopAt)
+		if err != nil {
+			respondError(w, http.StatusBadRequest, "invalid stop_at time format")
+			return
+		}
+	}
+
+	session, err := h.vodService.CreateRecordingSession(r.Context(), channelID, req.ProgramTitle, req.ChannelName, user.UserID, stopAt)
+	if err != nil {
+		h.log.Error().Err(err).Str("channel_id", channelID).Msg("create recording failed")
+		respondError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	respondJSON(w, http.StatusOK, map[string]interface{}{
+		"session_id": session.ID,
+		"status":     "recording",
+	})
+}
+
+func (h *VODHandler) ListRecordings(w http.ResponseWriter, r *http.Request) {
+	user := middleware.UserFromContext(r.Context())
+	if user == nil {
+		respondError(w, http.StatusUnauthorized, "authentication required")
+		return
+	}
+	list := h.vodService.ListRecordings(user.UserID, user.IsAdmin)
+	if list == nil {
+		list = []service.RecordingInfo{}
+	}
+	respondJSON(w, http.StatusOK, list)
+}
+
+func (h *VODHandler) ListCompletedRecordings(w http.ResponseWriter, r *http.Request) {
+	user := middleware.UserFromContext(r.Context())
+	if user == nil {
+		respondError(w, http.StatusUnauthorized, "authentication required")
+		return
+	}
+	list, err := h.vodService.ListCompletedRecordings(user.UserID, user.IsAdmin)
+	if err != nil {
+		h.log.Error().Err(err).Msg("list completed recordings failed")
+		respondError(w, http.StatusInternalServerError, "failed to list recordings")
+		return
+	}
+	respondJSON(w, http.StatusOK, list)
+}
+
+func (h *VODHandler) DeleteCompletedRecording(w http.ResponseWriter, r *http.Request) {
+	filename := chi.URLParam(r, "filename")
+	user := middleware.UserFromContext(r.Context())
+	if user == nil {
+		respondError(w, http.StatusUnauthorized, "authentication required")
+		return
+	}
+
+	targetUserID := user.UserID
+	if user.IsAdmin && r.URL.Query().Has("user_id") {
+		targetUserID = r.URL.Query().Get("user_id")
+	}
+
+	if err := h.vodService.DeleteCompletedRecording(filename, targetUserID); err != nil {
+		if err.Error() == "invalid filename" {
+			respondError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		if err.Error() == "file not found" {
+			respondError(w, http.StatusNotFound, err.Error())
+			return
+		}
+		h.log.Error().Err(err).Str("filename", filename).Msg("delete recording failed")
+		respondError(w, http.StatusInternalServerError, "failed to delete recording")
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *VODHandler) StopRecording(w http.ResponseWriter, r *http.Request) {
+	sessionID := chi.URLParam(r, "sessionID")
+	user := middleware.UserFromContext(r.Context())
+	if user == nil {
+		respondError(w, http.StatusUnauthorized, "authentication required")
+		return
+	}
+	if err := h.vodService.StopRecording(sessionID, user.UserID, user.IsAdmin); err != nil {
+		if err.Error() == "not authorized" {
+			respondError(w, http.StatusForbidden, err.Error())
+			return
+		}
+		respondError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *VODHandler) CancelRecording(w http.ResponseWriter, r *http.Request) {
+	sessionID := chi.URLParam(r, "sessionID")
+	user := middleware.UserFromContext(r.Context())
+	if user == nil {
+		respondError(w, http.StatusUnauthorized, "authentication required")
+		return
+	}
+	if err := h.vodService.CancelRecording(sessionID, user.UserID, user.IsAdmin); err != nil {
+		if err.Error() == "not authorized" {
+			respondError(w, http.StatusForbidden, err.Error())
+			return
+		}
+		respondError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *VODHandler) StreamCompletedRecording(w http.ResponseWriter, r *http.Request) {
+	filename := chi.URLParam(r, "filename")
+	user := middleware.UserFromContext(r.Context())
+	if user == nil {
+		respondError(w, http.StatusUnauthorized, "authentication required")
+		return
+	}
+
+	targetUserID := user.UserID
+	if user.IsAdmin && r.URL.Query().Has("user_id") {
+		targetUserID = r.URL.Query().Get("user_id")
+	}
+
+	fullPath, err := h.vodService.GetCompletedRecordingPath(filename, targetUserID)
+	if err != nil {
+		if err.Error() == "invalid filename" {
+			respondError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		respondError(w, http.StatusNotFound, err.Error())
+		return
+	}
+
+	http.ServeFile(w, r, fullPath)
 }

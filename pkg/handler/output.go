@@ -6,17 +6,14 @@ import (
 	"github.com/gavinmcnair/tvproxy/pkg/service"
 )
 
-// OutputHandler handles M3U and EPG output generation HTTP requests.
 type OutputHandler struct {
 	outputService *service.OutputService
 }
 
-// NewOutputHandler creates a new OutputHandler.
 func NewOutputHandler(outputService *service.OutputService) *OutputHandler {
 	return &OutputHandler{outputService: outputService}
 }
 
-// M3U generates and returns the M3U playlist output.
 func (h *OutputHandler) M3U(w http.ResponseWriter, r *http.Request) {
 	content, err := h.outputService.GenerateM3U(r.Context())
 	if err != nil {
@@ -30,7 +27,6 @@ func (h *OutputHandler) M3U(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte(content))
 }
 
-// EPG generates and returns the EPG XML output.
 func (h *OutputHandler) EPG(w http.ResponseWriter, r *http.Request) {
 	content, err := h.outputService.GenerateEPG(r.Context())
 	if err != nil {

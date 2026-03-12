@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/gavinmcnair/tvproxy/pkg/database"
 	"github.com/gavinmcnair/tvproxy/pkg/models"
 )
@@ -20,26 +22,22 @@ func NewStreamRepository(db *database.DB) *StreamRepository {
 
 func (r *StreamRepository) Create(ctx context.Context, stream *models.Stream) error {
 	now := time.Now()
-	result, err := r.db.ExecContext(ctx,
-		`INSERT INTO streams (m3u_account_id, name, url, "group", logo, tvg_id, tvg_name, content_hash, is_active, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		stream.M3UAccountID, stream.Name, stream.URL, stream.Group, stream.Logo,
+	stream.ID = uuid.New().String()
+	_, err := r.db.ExecContext(ctx,
+		`INSERT INTO streams (id, m3u_account_id, name, url, "group", logo, tvg_id, tvg_name, content_hash, is_active, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		stream.ID, stream.M3UAccountID, stream.Name, stream.URL, stream.Group, stream.Logo,
 		stream.TvgID, stream.TvgName, stream.ContentHash, stream.IsActive, now, now,
 	)
 	if err != nil {
 		return fmt.Errorf("creating stream: %w", err)
 	}
-	id, err := result.LastInsertId()
-	if err != nil {
-		return fmt.Errorf("getting last insert id: %w", err)
-	}
-	stream.ID = id
 	stream.CreatedAt = now
 	stream.UpdatedAt = now
 	return nil
 }
 
-func (r *StreamRepository) GetByID(ctx context.Context, id int64) (*models.Stream, error) {
+func (r *StreamRepository) GetByID(ctx context.Context, id string) (*models.Stream, error) {
 	stream := &models.Stream{}
 	err := r.db.QueryRowContext(ctx,
 		`SELECT id, m3u_account_id, name, url, "group", logo, tvg_id, tvg_name, content_hash, is_active, created_at, updated_at
@@ -61,7 +59,7 @@ func (r *StreamRepository) GetByID(ctx context.Context, id int64) (*models.Strea
 func (r *StreamRepository) List(ctx context.Context) ([]models.Stream, error) {
 	rows, err := r.db.QueryContext(ctx,
 		`SELECT id, m3u_account_id, name, url, "group", logo, tvg_id, tvg_name, content_hash, is_active, created_at, updated_at
-		FROM streams ORDER BY id`,
+		FROM streams ORDER BY created_at`,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("listing streams: %w", err)
@@ -86,11 +84,10 @@ func (r *StreamRepository) List(ctx context.Context) ([]models.Stream, error) {
 	return streams, nil
 }
 
-
-func (r *StreamRepository) ListByAccountID(ctx context.Context, accountID int64) ([]models.Stream, error) {
+func (r *StreamRepository) ListByAccountID(ctx context.Context, accountID string) ([]models.Stream, error) {
 	rows, err := r.db.QueryContext(ctx,
 		`SELECT id, m3u_account_id, name, url, "group", logo, tvg_id, tvg_name, content_hash, is_active, created_at, updated_at
-		FROM streams WHERE m3u_account_id = ? ORDER BY id`, accountID,
+		FROM streams WHERE m3u_account_id = ? ORDER BY created_at`, accountID,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("listing streams by account id: %w", err)
@@ -117,8 +114,8 @@ func (r *StreamRepository) ListByAccountID(ctx context.Context, accountID int64)
 
 // StreamSummary is a lightweight struct for list views.
 type StreamSummary struct {
-	ID           int64  `json:"id"`
-	M3UAccountID int64  `json:"m3u_account_id"`
+	ID           string `json:"id"`
+	M3UAccountID string `json:"m3u_account_id"`
 	Name         string `json:"name"`
 	Group        string `json:"group"`
 }
@@ -181,7 +178,7 @@ func (r *StreamRepository) Update(ctx context.Context, stream *models.Stream) er
 	return nil
 }
 
-func (r *StreamRepository) Delete(ctx context.Context, id int64) error {
+func (r *StreamRepository) Delete(ctx context.Context, id string) error {
 	_, err := r.db.ExecContext(ctx, `DELETE FROM streams WHERE id = ?`, id)
 	if err != nil {
 		return fmt.Errorf("deleting stream: %w", err)
@@ -189,7 +186,7 @@ func (r *StreamRepository) Delete(ctx context.Context, id int64) error {
 	return nil
 }
 
-func (r *StreamRepository) DeleteByAccountID(ctx context.Context, accountID int64) error {
+func (r *StreamRepository) DeleteByAccountID(ctx context.Context, accountID string) error {
 	_, err := r.db.ExecContext(ctx, `DELETE FROM streams WHERE m3u_account_id = ?`, accountID)
 	if err != nil {
 		return fmt.Errorf("deleting streams by account id: %w", err)
@@ -197,7 +194,7 @@ func (r *StreamRepository) DeleteByAccountID(ctx context.Context, accountID int6
 	return nil
 }
 
-func (r *StreamRepository) BulkUpdate(ctx context.Context, streams []*models.Stream) error {
+func (r *StreamRepository) BulkUpsert(ctx context.Context, streams []models.Stream) error {
 	const batchSize = 5000
 	for start := 0; start < len(streams); start += batchSize {
 		end := start + batchSize
@@ -207,8 +204,18 @@ func (r *StreamRepository) BulkUpdate(ctx context.Context, streams []*models.Str
 		batch := streams[start:end]
 		if err := r.db.InTx(ctx, func(tx *sql.Tx) error {
 			stmt, err := tx.PrepareContext(ctx,
-				`UPDATE streams SET m3u_account_id = ?, name = ?, url = ?, "group" = ?, logo = ?, tvg_id = ?, tvg_name = ?, content_hash = ?, is_active = ?, updated_at = ?
-				WHERE id = ?`,
+				`INSERT INTO streams (id, m3u_account_id, name, url, "group", logo, tvg_id, tvg_name, content_hash, is_active, created_at, updated_at)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+				ON CONFLICT(id) DO UPDATE SET
+					name = excluded.name,
+					url = excluded.url,
+					"group" = excluded."group",
+					logo = excluded.logo,
+					tvg_id = excluded.tvg_id,
+					tvg_name = excluded.tvg_name,
+					content_hash = excluded.content_hash,
+					is_active = excluded.is_active,
+					updated_at = excluded.updated_at`,
 			)
 			if err != nil {
 				return fmt.Errorf("preparing statement: %w", err)
@@ -218,12 +225,13 @@ func (r *StreamRepository) BulkUpdate(ctx context.Context, streams []*models.Str
 			now := time.Now()
 			for i := range batch {
 				if _, err := stmt.ExecContext(ctx,
-					batch[i].M3UAccountID, batch[i].Name, batch[i].URL, batch[i].Group,
+					batch[i].ID, batch[i].M3UAccountID, batch[i].Name, batch[i].URL, batch[i].Group,
 					batch[i].Logo, batch[i].TvgID, batch[i].TvgName, batch[i].ContentHash,
-					batch[i].IsActive, now, batch[i].ID,
+					batch[i].IsActive, now, now,
 				); err != nil {
-					return fmt.Errorf("updating stream %d: %w", batch[i].ID, err)
+					return fmt.Errorf("upserting stream %d: %w", start+i, err)
 				}
+				batch[i].CreatedAt = now
 				batch[i].UpdatedAt = now
 			}
 			return nil
@@ -234,46 +242,34 @@ func (r *StreamRepository) BulkUpdate(ctx context.Context, streams []*models.Str
 	return nil
 }
 
-func (r *StreamRepository) BulkCreate(ctx context.Context, streams []models.Stream) error {
-	const batchSize = 5000
-	for start := 0; start < len(streams); start += batchSize {
-		end := start + batchSize
-		if end > len(streams) {
-			end = len(streams)
-		}
-		batch := streams[start:end]
-		if err := r.db.InTx(ctx, func(tx *sql.Tx) error {
-			stmt, err := tx.PrepareContext(ctx,
-				`INSERT INTO streams (m3u_account_id, name, url, "group", logo, tvg_id, tvg_name, content_hash, is_active, created_at, updated_at)
-				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			)
-			if err != nil {
-				return fmt.Errorf("preparing statement: %w", err)
-			}
-			defer stmt.Close()
-
-			now := time.Now()
-			for i := range batch {
-				result, err := stmt.ExecContext(ctx,
-					batch[i].M3UAccountID, batch[i].Name, batch[i].URL, batch[i].Group,
-					batch[i].Logo, batch[i].TvgID, batch[i].TvgName, batch[i].ContentHash,
-					batch[i].IsActive, now, now,
-				)
-				if err != nil {
-					return fmt.Errorf("inserting stream %d: %w", start+i, err)
-				}
-				id, err := result.LastInsertId()
-				if err != nil {
-					return fmt.Errorf("getting last insert id for stream %d: %w", start+i, err)
-				}
-				batch[i].ID = id
-				batch[i].CreatedAt = now
-				batch[i].UpdatedAt = now
-			}
-			return nil
-		}); err != nil {
-			return err
-		}
+func (r *StreamRepository) DeleteStaleByAccountID(ctx context.Context, accountID string, keepIDs []string) error {
+	if len(keepIDs) == 0 {
+		return r.DeleteByAccountID(ctx, accountID)
 	}
-	return nil
+	return r.db.InTx(ctx, func(tx *sql.Tx) error {
+		if _, err := tx.ExecContext(ctx, `CREATE TEMP TABLE IF NOT EXISTS keep_ids (id TEXT PRIMARY KEY)`); err != nil {
+			return fmt.Errorf("creating temp table: %w", err)
+		}
+		defer tx.ExecContext(ctx, `DROP TABLE IF EXISTS temp.keep_ids`)
+
+		stmt, err := tx.PrepareContext(ctx, `INSERT OR IGNORE INTO temp.keep_ids (id) VALUES (?)`)
+		if err != nil {
+			return fmt.Errorf("preparing insert: %w", err)
+		}
+		defer stmt.Close()
+
+		for _, id := range keepIDs {
+			if _, err := stmt.ExecContext(ctx, id); err != nil {
+				return fmt.Errorf("inserting keep id: %w", err)
+			}
+		}
+
+		if _, err := tx.ExecContext(ctx,
+			`DELETE FROM streams WHERE m3u_account_id = ? AND id NOT IN (SELECT id FROM temp.keep_ids)`,
+			accountID,
+		); err != nil {
+			return fmt.Errorf("deleting stale streams: %w", err)
+		}
+		return nil
+	})
 }

@@ -36,7 +36,7 @@ type HDHRServerWorker struct {
 	cfg            *config.Config
 	log            zerolog.Logger
 	mu             sync.Mutex
-	servers        map[int64]*deviceServer
+	servers        map[string]*deviceServer
 }
 
 // NewHDHRServerWorker creates a new per-device HDHR HTTP server worker.
@@ -55,7 +55,7 @@ func NewHDHRServerWorker(
 		outputService:  outputService,
 		cfg:            cfg,
 		log:            log.With().Str("worker", "hdhr_servers").Logger(),
-		servers:        make(map[int64]*deviceServer),
+		servers:        make(map[string]*deviceServer),
 	}
 }
 
@@ -95,7 +95,7 @@ func (w *HDHRServerWorker) sync(ctx context.Context) {
 	defer w.mu.Unlock()
 
 	// Build set of desired device ID → port
-	desired := make(map[int64]int)
+	desired := make(map[string]int)
 	for _, d := range devices {
 		if d.IsEnabled && d.Port > 0 {
 			desired[d.ID] = d.Port
@@ -106,7 +106,7 @@ func (w *HDHRServerWorker) sync(ctx context.Context) {
 	for id, ds := range w.servers {
 		wantPort, ok := desired[id]
 		if !ok || wantPort != ds.port {
-			w.log.Info().Int64("device_id", id).Int("port", ds.port).Msg("stopping HDHR device server")
+			w.log.Info().Str("device_id", id).Int("port", ds.port).Msg("stopping HDHR device server")
 			ds.cancel()
 			ds.server.Close()
 			delete(w.servers, id)
@@ -268,7 +268,7 @@ func (w *HDHRServerWorker) stopAll() {
 	defer w.mu.Unlock()
 
 	for id, ds := range w.servers {
-		w.log.Info().Int64("device_id", id).Int("port", ds.port).Msg("stopping HDHR device server")
+		w.log.Info().Str("device_id", id).Int("port", ds.port).Msg("stopping HDHR device server")
 		ds.cancel()
 		ds.server.Close()
 		delete(w.servers, id)

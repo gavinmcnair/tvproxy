@@ -3,23 +3,24 @@ package handler
 import (
 	"net/http"
 
+	"github.com/go-chi/chi/v5"
+
+	"github.com/gavinmcnair/tvproxy/pkg/middleware"
 	"github.com/gavinmcnair/tvproxy/pkg/models"
-	"github.com/gavinmcnair/tvproxy/pkg/repository"
+	"github.com/gavinmcnair/tvproxy/pkg/service"
 )
 
-// ChannelGroupHandler handles channel group HTTP requests.
 type ChannelGroupHandler struct {
-	repo *repository.ChannelGroupRepository
+	channelService *service.ChannelService
 }
 
-// NewChannelGroupHandler creates a new ChannelGroupHandler.
-func NewChannelGroupHandler(repo *repository.ChannelGroupRepository) *ChannelGroupHandler {
-	return &ChannelGroupHandler{repo: repo}
+func NewChannelGroupHandler(channelService *service.ChannelService) *ChannelGroupHandler {
+	return &ChannelGroupHandler{channelService: channelService}
 }
 
-// List returns all channel groups.
 func (h *ChannelGroupHandler) List(w http.ResponseWriter, r *http.Request) {
-	groups, err := h.repo.List(r.Context())
+	user := middleware.UserFromContext(r.Context())
+	groups, err := h.channelService.ListChannelGroupsForUser(r.Context(), user.UserID)
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, "failed to list channel groups")
 		return
@@ -28,8 +29,9 @@ func (h *ChannelGroupHandler) List(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, http.StatusOK, groups)
 }
 
-// Create creates a new channel group.
 func (h *ChannelGroupHandler) Create(w http.ResponseWriter, r *http.Request) {
+	user := middleware.UserFromContext(r.Context())
+
 	var req struct {
 		Name      string `json:"name"`
 		IsEnabled bool   `json:"is_enabled"`
@@ -46,12 +48,13 @@ func (h *ChannelGroupHandler) Create(w http.ResponseWriter, r *http.Request) {
 	}
 
 	group := &models.ChannelGroup{
+		UserID:    user.UserID,
 		Name:      req.Name,
 		IsEnabled: req.IsEnabled,
 		SortOrder: req.SortOrder,
 	}
 
-	if err := h.repo.Create(r.Context(), group); err != nil {
+	if err := h.channelService.CreateChannelGroup(r.Context(), group); err != nil {
 		respondError(w, http.StatusInternalServerError, "failed to create channel group")
 		return
 	}
@@ -59,15 +62,11 @@ func (h *ChannelGroupHandler) Create(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, http.StatusCreated, group)
 }
 
-// Get returns a channel group by ID.
 func (h *ChannelGroupHandler) Get(w http.ResponseWriter, r *http.Request) {
-	id, err := urlParamInt64(r, "id")
-	if err != nil {
-		respondError(w, http.StatusBadRequest, "invalid channel group id")
-		return
-	}
+	user := middleware.UserFromContext(r.Context())
+	id := chi.URLParam(r, "id")
 
-	group, err := h.repo.GetByID(r.Context(), id)
+	group, err := h.channelService.GetChannelGroupForUser(r.Context(), id, user.UserID)
 	if err != nil {
 		respondError(w, http.StatusNotFound, "channel group not found")
 		return
@@ -76,15 +75,11 @@ func (h *ChannelGroupHandler) Get(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, http.StatusOK, group)
 }
 
-// Update updates a channel group by ID.
 func (h *ChannelGroupHandler) Update(w http.ResponseWriter, r *http.Request) {
-	id, err := urlParamInt64(r, "id")
-	if err != nil {
-		respondError(w, http.StatusBadRequest, "invalid channel group id")
-		return
-	}
+	user := middleware.UserFromContext(r.Context())
+	id := chi.URLParam(r, "id")
 
-	group, err := h.repo.GetByID(r.Context(), id)
+	group, err := h.channelService.GetChannelGroupForUser(r.Context(), id, user.UserID)
 	if err != nil {
 		respondError(w, http.StatusNotFound, "channel group not found")
 		return
@@ -106,7 +101,7 @@ func (h *ChannelGroupHandler) Update(w http.ResponseWriter, r *http.Request) {
 	group.IsEnabled = req.IsEnabled
 	group.SortOrder = req.SortOrder
 
-	if err := h.repo.Update(r.Context(), group); err != nil {
+	if err := h.channelService.UpdateChannelGroupForUser(r.Context(), group, user.UserID); err != nil {
 		respondError(w, http.StatusInternalServerError, "failed to update channel group")
 		return
 	}
@@ -114,15 +109,11 @@ func (h *ChannelGroupHandler) Update(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, http.StatusOK, group)
 }
 
-// Delete deletes a channel group by ID.
 func (h *ChannelGroupHandler) Delete(w http.ResponseWriter, r *http.Request) {
-	id, err := urlParamInt64(r, "id")
-	if err != nil {
-		respondError(w, http.StatusBadRequest, "invalid channel group id")
-		return
-	}
+	user := middleware.UserFromContext(r.Context())
+	id := chi.URLParam(r, "id")
 
-	if err := h.repo.Delete(r.Context(), id); err != nil {
+	if err := h.channelService.DeleteChannelGroupForUser(r.Context(), id, user.UserID); err != nil {
 		respondError(w, http.StatusInternalServerError, "failed to delete channel group")
 		return
 	}

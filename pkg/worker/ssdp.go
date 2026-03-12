@@ -19,7 +19,7 @@ type SSDPWorker struct {
 	hdhrDeviceRepo *repository.HDHRDeviceRepository
 	baseURL        string
 	log            zerolog.Logger
-	advertisers    map[int64]*ssdpAdvertiser
+	advertisers    map[string]*ssdpAdvertiser
 }
 
 type ssdpAdvertiser struct {
@@ -34,7 +34,7 @@ func NewSSDPWorker(hdhrDeviceRepo *repository.HDHRDeviceRepository, baseURL stri
 		hdhrDeviceRepo: hdhrDeviceRepo,
 		baseURL:        baseURL,
 		log:            log.With().Str("worker", "ssdp").Logger(),
-		advertisers:    make(map[int64]*ssdpAdvertiser),
+		advertisers:    make(map[string]*ssdpAdvertiser),
 	}
 }
 
@@ -71,7 +71,7 @@ func (w *SSDPWorker) syncAdvertisers(ctx context.Context) {
 	}
 
 	// Build desired set
-	desired := make(map[int64]*models.HDHRDevice)
+	desired := make(map[string]*models.HDHRDevice)
 	for i := range devices {
 		if devices[i].IsEnabled && devices[i].Port > 0 {
 			desired[devices[i].ID] = &devices[i]
@@ -82,7 +82,7 @@ func (w *SSDPWorker) syncAdvertisers(ctx context.Context) {
 	for id, adv := range w.advertisers {
 		dev, ok := desired[id]
 		if !ok || dev.Port != adv.port {
-			w.log.Debug().Int64("device_id", id).Msg("stopping SSDP advertiser")
+			w.log.Debug().Str("device_id", id).Msg("stopping SSDP advertiser")
 			adv.ad.Bye()
 			adv.ad.Close()
 			adv.cancel()
@@ -156,7 +156,7 @@ func (w *SSDPWorker) extractHost() string {
 
 func (w *SSDPWorker) stopAll() {
 	for id, adv := range w.advertisers {
-		w.log.Debug().Int64("device_id", id).Msg("stopping SSDP advertiser")
+		w.log.Debug().Str("device_id", id).Msg("stopping SSDP advertiser")
 		adv.ad.Bye()
 		adv.ad.Close()
 		adv.cancel()

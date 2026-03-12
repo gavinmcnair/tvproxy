@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/gavinmcnair/tvproxy/pkg/database"
 	"github.com/gavinmcnair/tvproxy/pkg/models"
 )
@@ -20,27 +22,23 @@ func NewM3UAccountRepository(db *database.DB) *M3UAccountRepository {
 
 func (r *M3UAccountRepository) Create(ctx context.Context, account *models.M3UAccount) error {
 	now := time.Now()
-	result, err := r.db.ExecContext(ctx,
-		`INSERT INTO m3u_accounts (name, url, type, username, password, max_streams, is_enabled, last_refreshed, stream_count, refresh_interval, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		account.Name, account.URL, account.Type, account.Username, account.Password,
+	account.ID = uuid.New().String()
+	_, err := r.db.ExecContext(ctx,
+		`INSERT INTO m3u_accounts (id, name, url, type, username, password, max_streams, is_enabled, last_refreshed, stream_count, refresh_interval, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		account.ID, account.Name, account.URL, account.Type, account.Username, account.Password,
 		account.MaxStreams, account.IsEnabled, account.LastRefreshed, account.StreamCount,
 		account.RefreshInterval, now, now,
 	)
 	if err != nil {
 		return fmt.Errorf("creating m3u account: %w", err)
 	}
-	id, err := result.LastInsertId()
-	if err != nil {
-		return fmt.Errorf("getting last insert id: %w", err)
-	}
-	account.ID = id
 	account.CreatedAt = now
 	account.UpdatedAt = now
 	return nil
 }
 
-func (r *M3UAccountRepository) GetByID(ctx context.Context, id int64) (*models.M3UAccount, error) {
+func (r *M3UAccountRepository) GetByID(ctx context.Context, id string) (*models.M3UAccount, error) {
 	account := &models.M3UAccount{}
 	var lastRefreshed sql.NullTime
 	err := r.db.QueryRowContext(ctx,
@@ -67,7 +65,7 @@ func (r *M3UAccountRepository) GetByID(ctx context.Context, id int64) (*models.M
 func (r *M3UAccountRepository) List(ctx context.Context) ([]models.M3UAccount, error) {
 	rows, err := r.db.QueryContext(ctx,
 		`SELECT id, name, url, type, username, password, max_streams, is_enabled, last_refreshed, stream_count, refresh_interval, created_at, updated_at
-		FROM m3u_accounts ORDER BY id`,
+		FROM m3u_accounts ORDER BY created_at`,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("listing m3u accounts: %w", err)
@@ -111,7 +109,7 @@ func (r *M3UAccountRepository) Update(ctx context.Context, account *models.M3UAc
 	return nil
 }
 
-func (r *M3UAccountRepository) Delete(ctx context.Context, id int64) error {
+func (r *M3UAccountRepository) Delete(ctx context.Context, id string) error {
 	_, err := r.db.ExecContext(ctx, `DELETE FROM m3u_accounts WHERE id = ?`, id)
 	if err != nil {
 		return fmt.Errorf("deleting m3u account: %w", err)
@@ -119,7 +117,7 @@ func (r *M3UAccountRepository) Delete(ctx context.Context, id int64) error {
 	return nil
 }
 
-func (r *M3UAccountRepository) UpdateLastRefreshed(ctx context.Context, id int64, lastRefreshed time.Time) error {
+func (r *M3UAccountRepository) UpdateLastRefreshed(ctx context.Context, id string, lastRefreshed time.Time) error {
 	_, err := r.db.ExecContext(ctx,
 		`UPDATE m3u_accounts SET last_refreshed = ?, updated_at = ? WHERE id = ?`,
 		lastRefreshed, time.Now(), id,
@@ -130,7 +128,7 @@ func (r *M3UAccountRepository) UpdateLastRefreshed(ctx context.Context, id int64
 	return nil
 }
 
-func (r *M3UAccountRepository) UpdateStreamCount(ctx context.Context, id int64, count int) error {
+func (r *M3UAccountRepository) UpdateStreamCount(ctx context.Context, id string, count int) error {
 	_, err := r.db.ExecContext(ctx,
 		`UPDATE m3u_accounts SET stream_count = ?, updated_at = ? WHERE id = ?`,
 		count, time.Now(), id,
