@@ -32,7 +32,12 @@ func ComposeStreamProfileArgs(sourceType, hwaccel, videoCodec, container string)
 
 	// M3U-specific probe settings (before -i)
 	if sourceType == "m3u" {
-		parts = append(parts, "-analyzeduration", "1000000", "-probesize", "1000000")
+		parts = append(parts, "-analyzeduration", "5000000", "-probesize", "5000000")
+	}
+
+	// SAT>IP input timeout (before -i, applies to input protocol)
+	if sourceType == "satip" {
+		parts = append(parts, "-rw_timeout", "5000000")
 	}
 
 	// Input
@@ -53,6 +58,13 @@ func ComposeStreamProfileArgs(sourceType, hwaccel, videoCodec, container string)
 	// (av1 uses -hwaccel vaapi which handles upload automatically)
 	if hwaccel == "vaapi" && videoCodec != "copy" && videoCodec != "av1" {
 		parts = append(parts, "-vf", "format=nv12,hwupload")
+	}
+
+	// VideoToolbox outputs videotoolbox_vld pixel format. HW encoders
+	// (h264_videotoolbox, hevc_videotoolbox) read it directly, but software
+	// encoders need frames downloaded back to CPU first.
+	if hwaccel == "videotoolbox" && !isVideoToolboxEncoder(videoCodec) && videoCodec != "copy" {
+		parts = append(parts, "-vf", "hwdownload,format=nv12")
 	}
 
 	// Video encoder
@@ -93,10 +105,6 @@ func ComposeStreamProfileArgs(sourceType, hwaccel, videoCodec, container string)
 
 	parts = append(parts, "pipe:1")
 
-	if sourceType == "satip" {
-		parts = append(parts, "-rw_timeout", "5000000")
-	}
-
 	return strings.Join(parts, " ")
 }
 
@@ -108,6 +116,10 @@ func DefaultContainer(videoCodec string) string {
 	default:
 		return "mpegts"
 	}
+}
+
+func isVideoToolboxEncoder(videoCodec string) bool {
+	return videoCodec == "h264" || videoCodec == "h265"
 }
 
 // encoderFlags returns the -c:v flags for the given hwaccel + videoCodec combination.

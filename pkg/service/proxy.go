@@ -3,6 +3,7 @@ package service
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -15,6 +16,12 @@ import (
 	"github.com/gavinmcnair/tvproxy/pkg/config"
 	"github.com/gavinmcnair/tvproxy/pkg/models"
 	"github.com/gavinmcnair/tvproxy/pkg/repository"
+)
+
+var (
+	ErrChannelNotFound  = errors.New("channel not found")
+	ErrChannelDisabled  = errors.New("channel is disabled")
+	ErrNoStreamsForChannel = errors.New("no streams available for channel")
 )
 
 const (
@@ -102,10 +109,10 @@ func writeStreamHeaders(w http.ResponseWriter, contentType string) {
 func (s *ProxyService) ProxyStream(ctx context.Context, w http.ResponseWriter, r *http.Request, channelID string, profileOverride string) error {
 	channel, err := s.channelRepo.GetByID(ctx, channelID)
 	if err != nil {
-		return fmt.Errorf("channel not found: %w", err)
+		return fmt.Errorf("%w: %s", ErrChannelNotFound, channelID)
 	}
 	if !channel.IsEnabled {
-		return fmt.Errorf("channel %s is disabled", channelID)
+		return fmt.Errorf("%w: %s", ErrChannelDisabled, channelID)
 	}
 
 	mode, streamProfile, dedicated := s.resolveProfile(ctx, r, channel, profileOverride)
@@ -122,7 +129,6 @@ func (s *ProxyService) ProxyStream(ctx context.Context, w http.ResponseWriter, r
 		done:    make(chan struct{}),
 	}
 
-	// Flush 200 OK immediately so clients like Plex don't timeout during ffmpeg startup
 	writeStreamHeaders(w, contentType)
 	flusher.Flush()
 
@@ -132,7 +138,6 @@ func (s *ProxyService) ProxyStream(ctx context.Context, w http.ResponseWriter, r
 		}
 	}
 
-	// Headers already sent — cannot return HTTP errors after this point
 	if err := s.startUpstream(ctx, r, channelID, c, mode, streamProfile); err != nil {
 		s.log.Error().Err(err).Str("channel_id", channelID).Msg("all streams failed for channel")
 	}
@@ -332,6 +337,22 @@ func InjectReconnect(args []string, inputURL string) []string {
 	return args
 }
 
+func ReplaceAudioMap(args []string, audioIndex int) []string {
+	if audioIndex <= 0 {
+		return args
+	}
+	target := fmt.Sprintf("0:a:%d", audioIndex)
+	for i, arg := range args {
+		if arg == "0:a:0" {
+			result := make([]string, len(args))
+			copy(result, args)
+			result[i] = target
+			return result
+		}
+	}
+	return args
+}
+
 func InjectUserAgent(args []string, userAgent string) []string {
 	for _, arg := range args {
 		if arg == "-user_agent" {
@@ -406,7 +427,11 @@ func (s *ProxyService) logFFmpegStderr(channelID string, stderr io.ReadCloser) {
 	defer stderr.Close()
 	scanner := bufio.NewScanner(stderr)
 	for scanner.Scan() {
-		s.log.Warn().Str("channel_id", channelID).Str("ffmpeg", scanner.Text()).Msg("ffmpeg output")
+		line := scanner.Text()
+		if isFFmpegNoise(line) {
+			continue
+		}
+		s.log.Warn().Str("channel_id", channelID).Str("ffmpeg", line).Msg("ffmpeg output")
 	}
 }
 

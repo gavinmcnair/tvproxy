@@ -3,6 +3,7 @@ package database
 import (
 	"context"
 	"database/sql"
+	"fmt"
 
 	"github.com/google/uuid"
 
@@ -246,6 +247,126 @@ var migrations = []migration{
 			return seedData(ctx, db)
 		},
 	},
+	{
+		name: "add_last_error_columns",
+		sql: `ALTER TABLE m3u_accounts ADD COLUMN last_error TEXT NOT NULL DEFAULT '';
+ALTER TABLE epg_sources ADD COLUMN last_error TEXT NOT NULL DEFAULT '';`,
+	},
+	{
+		name: "unique_stream_profile_names",
+		fn: func(ctx context.Context, db *sql.DB) error {
+			if _, err := db.ExecContext(ctx,
+				`UPDATE stream_profiles SET name = name || ' (Client)'
+				 WHERE is_client = 1 AND name IN (SELECT name FROM stream_profiles WHERE is_client = 0)`); err != nil {
+				return err
+			}
+			rows, err := db.QueryContext(ctx,
+				`SELECT id, name FROM stream_profiles WHERE name IN (
+					SELECT name FROM stream_profiles GROUP BY name HAVING COUNT(*) > 1
+				) ORDER BY name, created_at`)
+			if err != nil {
+				return err
+			}
+			defer rows.Close()
+
+			type row struct{ id, name string }
+			var dupes []row
+			for rows.Next() {
+				var r row
+				if err := rows.Scan(&r.id, &r.name); err != nil {
+					return err
+				}
+				dupes = append(dupes, r)
+			}
+
+			seen := map[string]int{}
+			for _, r := range dupes {
+				seen[r.name]++
+				if seen[r.name] <= 1 {
+					continue
+				}
+				newName := fmt.Sprintf("%s (%d)", r.name, seen[r.name])
+				if _, err := db.ExecContext(ctx,
+					`UPDATE stream_profiles SET name = ? WHERE id = ?`, newName, r.id); err != nil {
+					return err
+				}
+			}
+
+			_, err = db.ExecContext(ctx, `CREATE UNIQUE INDEX idx_stream_profiles_name ON stream_profiles(name)`)
+			return err
+		},
+	},
+	{
+		name: "recompose_stream_profile_args",
+		fn: func(ctx context.Context, db *sql.DB) error {
+			rows, err := db.QueryContext(ctx,
+				`SELECT id, stream_mode, source_type, hwaccel, video_codec, container FROM stream_profiles WHERE use_custom_args = 0`)
+			if err != nil {
+				return err
+			}
+			defer rows.Close()
+
+			type row struct {
+				id, streamMode, sourceType, hwaccel, videoCodec, container string
+			}
+			var updates []row
+			for rows.Next() {
+				var r row
+				if err := rows.Scan(&r.id, &r.streamMode, &r.sourceType, &r.hwaccel, &r.videoCodec, &r.container); err != nil {
+					return err
+				}
+				updates = append(updates, r)
+			}
+
+			for _, r := range updates {
+				args := ffmpeg.ComposeStreamProfileArgs(r.sourceType, r.hwaccel, r.videoCodec, r.container)
+				if r.streamMode == "direct" || r.streamMode == "proxy" {
+					args = ""
+				}
+				if _, err := db.ExecContext(ctx, `UPDATE stream_profiles SET args = ? WHERE id = ?`, args, r.id); err != nil {
+					return err
+				}
+			}
+			return nil
+		},
+	},
+	{
+		name: "add_program_data_epg_fields",
+		sql: `ALTER TABLE program_data ADD COLUMN subtitle TEXT NOT NULL DEFAULT '';
+ALTER TABLE program_data ADD COLUMN date TEXT NOT NULL DEFAULT '';
+ALTER TABLE program_data ADD COLUMN language TEXT NOT NULL DEFAULT '';
+ALTER TABLE program_data ADD COLUMN is_new INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE program_data ADD COLUMN is_previously_shown INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE program_data ADD COLUMN credits TEXT NOT NULL DEFAULT '';
+ALTER TABLE program_data ADD COLUMN rating TEXT NOT NULL DEFAULT '';
+ALTER TABLE program_data ADD COLUMN rating_icon TEXT NOT NULL DEFAULT '';
+ALTER TABLE program_data ADD COLUMN star_rating TEXT NOT NULL DEFAULT '';
+ALTER TABLE program_data ADD COLUMN sub_categories TEXT NOT NULL DEFAULT '';
+ALTER TABLE program_data ADD COLUMN episode_num_system TEXT NOT NULL DEFAULT '';`,
+	},
+	{
+		name: "create_scheduled_recordings",
+		sql: `CREATE TABLE scheduled_recordings (
+			id TEXT PRIMARY KEY,
+			user_id TEXT NOT NULL,
+			channel_id TEXT NOT NULL,
+			channel_name TEXT NOT NULL DEFAULT '',
+			program_title TEXT NOT NULL DEFAULT '',
+			start_at DATETIME NOT NULL,
+			stop_at DATETIME NOT NULL,
+			status TEXT NOT NULL DEFAULT 'pending',
+			session_id TEXT NOT NULL DEFAULT '',
+			segment_id TEXT NOT NULL DEFAULT '',
+			file_path TEXT NOT NULL DEFAULT '',
+			last_error TEXT NOT NULL DEFAULT '',
+			created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+			FOREIGN KEY (channel_id) REFERENCES channels(id) ON DELETE CASCADE
+		);
+		CREATE INDEX idx_scheduled_recordings_status ON scheduled_recordings(status);
+		CREATE INDEX idx_scheduled_recordings_start_at ON scheduled_recordings(start_at);`,
+	},
 }
 
 func seedData(ctx context.Context, db execContext) error {
@@ -344,10 +465,11 @@ func seedData(ctx context.Context, db execContext) error {
 	for _, c := range clients {
 		args := ffmpeg.ComposeStreamProfileArgs(c.sourceType, "none", "copy", c.container)
 		profileID := uuid.New().String()
+		profileName := c.name + " (Client)"
 		if _, err := db.ExecContext(ctx,
 			`INSERT INTO stream_profiles (id, name, stream_mode, source_type, hwaccel, video_codec, container, custom_args, command, args, is_default, is_system, is_client)
 			 VALUES (?, ?, 'ffmpeg', ?, 'none', 'copy', ?, '', 'ffmpeg', ?, 0, 0, 1)`,
-			profileID, c.name, c.sourceType, c.container, args); err != nil {
+			profileID, profileName, c.sourceType, c.container, args); err != nil {
 			return err
 		}
 

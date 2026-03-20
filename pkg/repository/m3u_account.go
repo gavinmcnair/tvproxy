@@ -42,13 +42,13 @@ func (r *M3UAccountRepository) GetByID(ctx context.Context, id string) (*models.
 	account := &models.M3UAccount{}
 	var lastRefreshed sql.NullTime
 	err := r.db.QueryRowContext(ctx,
-		`SELECT id, name, url, type, username, password, max_streams, is_enabled, last_refreshed, stream_count, refresh_interval, created_at, updated_at
+		`SELECT id, name, url, type, username, password, max_streams, is_enabled, last_refreshed, stream_count, refresh_interval, last_error, created_at, updated_at
 		FROM m3u_accounts WHERE id = ?`, id,
 	).Scan(
 		&account.ID, &account.Name, &account.URL, &account.Type,
 		&account.Username, &account.Password, &account.MaxStreams,
 		&account.IsEnabled, &lastRefreshed, &account.StreamCount,
-		&account.RefreshInterval, &account.CreatedAt, &account.UpdatedAt,
+		&account.RefreshInterval, &account.LastError, &account.CreatedAt, &account.UpdatedAt,
 	)
 	if err != nil {
 		if err == sql.ErrNoRows {
@@ -64,7 +64,7 @@ func (r *M3UAccountRepository) GetByID(ctx context.Context, id string) (*models.
 
 func (r *M3UAccountRepository) List(ctx context.Context) ([]models.M3UAccount, error) {
 	rows, err := r.db.QueryContext(ctx,
-		`SELECT id, name, url, type, username, password, max_streams, is_enabled, last_refreshed, stream_count, refresh_interval, created_at, updated_at
+		`SELECT id, name, url, type, username, password, max_streams, is_enabled, last_refreshed, stream_count, refresh_interval, last_error, created_at, updated_at
 		FROM m3u_accounts ORDER BY created_at`,
 	)
 	if err != nil {
@@ -79,7 +79,7 @@ func (r *M3UAccountRepository) List(ctx context.Context) ([]models.M3UAccount, e
 		if err := rows.Scan(
 			&a.ID, &a.Name, &a.URL, &a.Type, &a.Username, &a.Password,
 			&a.MaxStreams, &a.IsEnabled, &lastRefreshed, &a.StreamCount,
-			&a.RefreshInterval, &a.CreatedAt, &a.UpdatedAt,
+			&a.RefreshInterval, &a.LastError, &a.CreatedAt, &a.UpdatedAt,
 		); err != nil {
 			return nil, fmt.Errorf("scanning m3u account: %w", err)
 		}
@@ -124,6 +124,17 @@ func (r *M3UAccountRepository) UpdateLastRefreshed(ctx context.Context, id strin
 	)
 	if err != nil {
 		return fmt.Errorf("updating last refreshed: %w", err)
+	}
+	return nil
+}
+
+func (r *M3UAccountRepository) UpdateLastError(ctx context.Context, id, lastError string) error {
+	_, err := r.db.ExecContext(ctx,
+		`UPDATE m3u_accounts SET last_error = ?, updated_at = ? WHERE id = ?`,
+		lastError, time.Now(), id,
+	)
+	if err != nil {
+		return fmt.Errorf("updating last error: %w", err)
 	}
 	return nil
 }

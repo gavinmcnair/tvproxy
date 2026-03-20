@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"encoding/xml"
+	"errors"
 	"fmt"
 	"net/http"
 
@@ -52,6 +53,10 @@ func (h *HDHRHandler) Discover(w http.ResponseWriter, r *http.Request) {
 
 	data, err := h.hdhrService.GetDiscoverData(r.Context(), baseURL)
 	if err != nil {
+		if errors.Is(err, service.ErrNoHDHRDevice) {
+			respondError(w, http.StatusNotFound, err.Error())
+			return
+		}
 		respondError(w, http.StatusInternalServerError, "failed to get discover info")
 		return
 	}
@@ -87,6 +92,10 @@ func (h *HDHRHandler) DeviceXML(w http.ResponseWriter, r *http.Request) {
 
 	deviceXML, err := h.hdhrService.GetDeviceXML(r.Context(), baseURL)
 	if err != nil {
+		if errors.Is(err, service.ErrNoHDHRDevice) {
+			respondError(w, http.StatusNotFound, err.Error())
+			return
+		}
 		respondError(w, http.StatusInternalServerError, "failed to get device info")
 		return
 	}

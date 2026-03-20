@@ -76,6 +76,7 @@ func (m *FFmpegManager) Start(inputURL, outputPath, tempDir, command string, arg
 		}
 	}
 
+	args = append([]string{"-y"}, args...)
 	args = InjectUserAgent(args, m.config.UserAgent)
 	args = InjectReconnect(args, inputURL)
 	args = append(args, "-progress", "pipe:2")
@@ -178,7 +179,18 @@ func (m *FFmpegManager) run(ctx context.Context, proc *ManagedProcess, command s
 
 	go m.parseProgress(proc, stderr)
 
+	startupTimeout := time.AfterFunc(30*time.Second, func() {
+		proc.mu.Lock()
+		buffered := proc.BufferedSecs
+		proc.mu.Unlock()
+		if buffered == 0 {
+			m.log.Warn().Str("process_id", proc.ID).Msg("ffmpeg startup timeout, no data received in 30s")
+			proc.cancel()
+		}
+	})
+
 	waitErr := cmd.Wait()
+	startupTimeout.Stop()
 
 	if waitErr != nil && ctx.Err() == nil {
 		proc.mu.Lock()
@@ -189,7 +201,30 @@ func (m *FFmpegManager) run(ctx context.Context, proc *ManagedProcess, command s
 	close(proc.Ready)
 }
 
-var mgrNonAlphanumRe = regexp.MustCompile(`[^a-zA-Z0-9]+`)
+var nonAlphanumRe = regexp.MustCompile(`[^a-zA-Z0-9]+`)
+
+var ffmpegNoisePatterns = []string{
+	"non-existing PPS",
+	"non-existing SPS",
+	"no frame!",
+	"skipping",
+	"missing picture",
+	"concealing",
+	"decode_slice_header",
+	"error while decoding",
+	"missing reference picture",
+	"reference picture reordering",
+	"Last message repeated",
+}
+
+func isFFmpegNoise(line string) bool {
+	for _, pattern := range ffmpegNoisePatterns {
+		if strings.Contains(line, pattern) {
+			return true
+		}
+	}
+	return false
+}
 
 func (m *FFmpegManager) parseProgress(proc *ManagedProcess, r io.Reader) {
 	scanner := bufio.NewScanner(r)
@@ -200,6 +235,10 @@ func (m *FFmpegManager) parseProgress(proc *ManagedProcess, r io.Reader) {
 			us, err := strconv.ParseInt(usStr, 10, 64)
 			if err == nil && us > 0 {
 				secs := float64(us) / 1_000_000.0
+				if secs > 172800 {
+					m.log.Warn().Str("process_id", proc.ID).Float64("secs", secs).Msg("ffmpeg progress exceeds 48h cap")
+					secs = 172800
+				}
 				proc.mu.Lock()
 				proc.BufferedSecs = secs
 				proc.mu.Unlock()
@@ -215,6 +254,7 @@ func (m *FFmpegManager) parseProgress(proc *ManagedProcess, r io.Reader) {
 			!strings.HasPrefix(line, "speed=") &&
 			!strings.HasPrefix(line, "dup_frames=") &&
 			!strings.HasPrefix(line, "drop_frames=") &&
+			!isFFmpegNoise(line) &&
 			line != "" {
 			m.log.Warn().Str("process_id", proc.ID).Str("ffmpeg", line).Msg("ffmpeg output")
 		}
@@ -249,8 +289,8 @@ func (m *FFmpegManager) ExtractSegment(inputPath, outputPath string, startSecs, 
 	return nil
 }
 
-func mgrSanitizeFilename(title string, t time.Time) string {
-	name := mgrNonAlphanumRe.ReplaceAllString(title, "_")
+func sanitizeFilename(title string, t time.Time) string {
+	name := nonAlphanumRe.ReplaceAllString(title, "_")
 	name = strings.Trim(name, "_")
 	if len(name) > 60 {
 		name = name[:60]

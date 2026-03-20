@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+
+	"github.com/gavinmcnair/tvproxy/pkg/httputil"
 	"time"
 )
 
@@ -12,6 +14,7 @@ type Client struct {
 	baseURL    string
 	username   string
 	password   string
+	userAgent  string
 	httpClient *http.Client
 }
 
@@ -51,11 +54,12 @@ type AuthResponse struct {
 	ServerInfo ServerInfo `json:"server_info"`
 }
 
-func NewClient(baseURL, username, password string) *Client {
+func NewClient(baseURL, username, password, userAgent string) *Client {
 	return &Client{
 		baseURL:    baseURL,
 		username:   username,
 		password:   password,
+		userAgent:  userAgent,
 		httpClient: &http.Client{Timeout: 30 * time.Second},
 	}
 }
@@ -99,13 +103,22 @@ func (c *Client) get(ctx context.Context, url string, result interface{}) error 
 	if err != nil {
 		return err
 	}
+	if c.userAgent != "" {
+		req.Header.Set("User-Agent", c.userAgent)
+	}
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
+		resp.Body.Close()
 		return fmt.Errorf("unexpected status: %d", resp.StatusCode)
 	}
-	return json.NewDecoder(resp.Body).Decode(result)
+	reader, err := httputil.DecompressReader(resp.Body, url)
+	if err != nil {
+		resp.Body.Close()
+		return err
+	}
+	defer reader.Close()
+	return json.NewDecoder(reader).Decode(result)
 }

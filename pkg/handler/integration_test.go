@@ -23,7 +23,6 @@ import (
 	"github.com/gavinmcnair/tvproxy/pkg/service"
 )
 
-// fullTestEnv mirrors the real main.go wiring with all handlers and routes.
 type fullTestEnv struct {
 	router      *chi.Mux
 	authService *service.AuthService
@@ -51,7 +50,6 @@ func setupFullEnv(t *testing.T) *fullTestEnv {
 		APIKey:             "test-api-key",
 	}
 
-	// Repositories
 	userRepo := repository.NewUserRepository(db)
 	m3uAccountRepo := repository.NewM3UAccountRepository(db)
 	streamRepo := repository.NewStreamRepository(db)
@@ -67,10 +65,8 @@ func setupFullEnv(t *testing.T) *fullTestEnv {
 	settingsRepo := repository.NewCoreSettingsRepository(db)
 	clientRepo := repository.NewClientRepository(db)
 
-	// Services (auth first, need admin user ID for output/HDHR)
 	authService := service.NewAuthService(userRepo, cfg.JWTSecret, cfg.AccessTokenExpiry, cfg.RefreshTokenExpiry)
 
-	// Create test users BEFORE services that need adminUserID
 	adminUser, err := authService.CreateUser(context.Background(), "admin", "adminpass", true)
 	require.NoError(t, err)
 	_, err = authService.CreateUser(context.Background(), "user", "userpass", false)
@@ -87,11 +83,11 @@ func setupFullEnv(t *testing.T) *fullTestEnv {
 	outputService := service.NewOutputService(channelRepo, channelGroupRepo, streamRepo, channelProfileRepo, streamProfileRepo, epgDataRepo, programDataRepo, adminUserID, cfg, log)
 	ffmpegMgr := service.NewFFmpegManager(cfg, log)
 	vodService := service.NewVODService(channelRepo, streamRepo, streamProfileRepo, ffmpegMgr, cfg, log)
+	scheduledRecRepo := repository.NewScheduledRecordingRepository(db)
+	schedulerService := service.NewSchedulerService(scheduledRecRepo, channelRepo, vodService, cfg, log)
 
-	// Auth middleware
 	authMW := middleware.NewAuthMiddleware(authService, cfg.APIKey, adminUserID)
 
-	// Handlers
 	authHandler := NewAuthHandler(authService)
 	userHandler := NewUserHandler(authService)
 	m3uAccountHandler := NewM3UAccountHandler(m3uService)
@@ -108,38 +104,33 @@ func setupFullEnv(t *testing.T) *fullTestEnv {
 	vodHandler := NewVODHandler(vodService, log)
 	settingsHandler := NewSettingsHandler(settingsService, db, authService)
 	clientHandler := NewClientHandler(clientService)
+	schedulerHandler := NewSchedulerHandler(schedulerService, log)
 
-	// Router (mirrors main.go)
 	r := chi.NewRouter()
 
-	// Public routes
 	r.Post("/api/auth/login", authHandler.Login)
 	r.Post("/api/auth/refresh", authHandler.Refresh)
 	r.Post("/api/auth/invite/{token}", authHandler.AcceptInvite)
 
-	// HDHomeRun routes at root (no auth)
 	r.Get("/discover.json", hdhrHandler.Discover)
 	r.Get("/lineup_status.json", hdhrHandler.LineupStatus)
 	r.Get("/lineup.json", hdhrHandler.Lineup)
 	r.Get("/device.xml", hdhrHandler.DeviceXML)
 
-	// Output routes (no auth)
 	r.Get("/output/m3u", outputHandler.M3U)
 	r.Get("/output/epg", outputHandler.EPG)
 
-	// VOD routes (no auth)
 	r.Get("/stream/{streamID}/probe", vodHandler.ProbeStream)
 	r.Post("/stream/{streamID}/vod", vodHandler.CreateSession)
 	r.Post("/channel/{channelID}/vod", vodHandler.CreateChannelSession)
 	r.Get("/vod/{sessionID}/status", vodHandler.Status)
 	r.Get("/vod/{sessionID}/seek", vodHandler.Seek)
-	r.Delete("/vod/{sessionID}", vodHandler.DeleteSession)
+	r.Get("/vod/{sessionID}/stream", vodHandler.Stream)
 
-	// Authenticated API routes
 	r.Group(func(r chi.Router) {
 		r.Use(authMW.Authenticate)
 
-		// Recording routes (any authenticated user)
+		r.Delete("/vod/{sessionID}", vodHandler.DeleteSession)
 		r.Post("/vod/{sessionID}/record", vodHandler.MarkRecording)
 		r.Put("/vod/{sessionID}/record/{segmentID}", vodHandler.UpdateSegment)
 		r.Delete("/vod/{sessionID}/record/{segmentID}", vodHandler.DeleteSegment)
@@ -274,6 +265,10 @@ func setupFullEnv(t *testing.T) *fullTestEnv {
 			r.Get("/completed", vodHandler.ListCompletedRecordings)
 			r.Get("/completed/{filename}/stream", vodHandler.StreamCompletedRecording)
 			r.Delete("/completed/{filename}", vodHandler.DeleteCompletedRecording)
+			r.Post("/schedule", schedulerHandler.Schedule)
+			r.Get("/schedule", schedulerHandler.List)
+			r.Get("/schedule/{id}", schedulerHandler.Get)
+			r.Delete("/schedule/{id}", schedulerHandler.Cancel)
 		})
 	})
 
@@ -282,7 +277,6 @@ func setupFullEnv(t *testing.T) *fullTestEnv {
 		authService: authService,
 	}
 
-	// Login both users and store tokens
 	env.adminToken, _ = loginHelper(t, env, "admin", "adminpass")
 	env.userToken, _ = loginHelper(t, env, "user", "userpass")
 
@@ -303,7 +297,6 @@ func loginHelper(t *testing.T, env *fullTestEnv, username, password string) (str
 	return resp["access_token"], resp["refresh_token"]
 }
 
-// doRequest is a helper that performs an HTTP request with auth and returns the recorder.
 func doRequest(t *testing.T, env *fullTestEnv, method, path string, body interface{}, token string) *httptest.ResponseRecorder {
 	t.Helper()
 	var bodyReader *bytes.Reader
@@ -343,10 +336,6 @@ func findByName(t *testing.T, env *fullTestEnv, endpoint, name, token string) ma
 	t.Fatalf("item with name %q not found in %s", name, endpoint)
 	return nil
 }
-
-// =============================================================================
-// Auth Tests
-// =============================================================================
 
 func TestIntegration_AuthFlow(t *testing.T) {
 	env := setupFullEnv(t)
@@ -435,10 +424,6 @@ func TestIntegration_AuthFlow(t *testing.T) {
 	})
 }
 
-// =============================================================================
-// User CRUD Tests (admin only)
-// =============================================================================
-
 func TestIntegration_UserCRUD(t *testing.T) {
 	env := setupFullEnv(t)
 
@@ -447,7 +432,7 @@ func TestIntegration_UserCRUD(t *testing.T) {
 		assert.Equal(t, http.StatusOK, rec.Code)
 		var users []map[string]interface{}
 		decodeResponse(t, rec, &users)
-		assert.Len(t, users, 2) // admin + user
+		assert.Len(t, users, 2)
 	})
 
 	t.Run("list users as non-admin is forbidden", func(t *testing.T) {
@@ -475,7 +460,6 @@ func TestIntegration_UserCRUD(t *testing.T) {
 	})
 
 	t.Run("get user by id", func(t *testing.T) {
-		// List users and get the admin user's UUID
 		rec := doRequest(t, env, "GET", "/api/users/", nil, env.adminToken)
 		require.Equal(t, http.StatusOK, rec.Code)
 		var users []map[string]interface{}
@@ -502,7 +486,6 @@ func TestIntegration_UserCRUD(t *testing.T) {
 	})
 
 	t.Run("update user", func(t *testing.T) {
-		// Find the "user" account's UUID
 		rec := doRequest(t, env, "GET", "/api/users/", nil, env.adminToken)
 		require.Equal(t, http.StatusOK, rec.Code)
 		var users []map[string]interface{}
@@ -526,7 +509,6 @@ func TestIntegration_UserCRUD(t *testing.T) {
 	})
 
 	t.Run("delete user", func(t *testing.T) {
-		// Create a user to delete
 		rec := doRequest(t, env, "POST", "/api/users/", map[string]interface{}{
 			"username": "todelete", "password": "pass",
 		}, env.adminToken)
@@ -538,15 +520,10 @@ func TestIntegration_UserCRUD(t *testing.T) {
 		rec = doRequest(t, env, "DELETE", "/api/users/"+id, nil, env.adminToken)
 		assert.Equal(t, http.StatusNoContent, rec.Code)
 
-		// Verify deleted
 		rec = doRequest(t, env, "GET", "/api/users/"+id, nil, env.adminToken)
 		assert.Equal(t, http.StatusNotFound, rec.Code)
 	})
 }
-
-// =============================================================================
-// Channel Group CRUD
-// =============================================================================
 
 func TestIntegration_ChannelGroupCRUD(t *testing.T) {
 	env := setupFullEnv(t)
@@ -609,7 +586,6 @@ func TestIntegration_ChannelGroupCRUD(t *testing.T) {
 	})
 
 	t.Run("delete", func(t *testing.T) {
-		// Create one to delete
 		rec := doRequest(t, env, "POST", "/api/channel-groups/", map[string]interface{}{
 			"name": "ToDelete", "is_enabled": false,
 		}, env.adminToken)
@@ -630,10 +606,6 @@ func TestIntegration_ChannelGroupCRUD(t *testing.T) {
 		assert.Equal(t, http.StatusNotFound, rec.Code)
 	})
 }
-
-// =============================================================================
-// Channel Profile CRUD
-// =============================================================================
 
 func TestIntegration_ChannelProfileCRUD(t *testing.T) {
 	env := setupFullEnv(t)
@@ -685,10 +657,6 @@ func TestIntegration_ChannelProfileCRUD(t *testing.T) {
 	})
 }
 
-// =============================================================================
-// Stream Profile CRUD
-// =============================================================================
-
 func TestIntegration_StreamProfileCRUD(t *testing.T) {
 	env := setupFullEnv(t)
 
@@ -722,9 +690,9 @@ func TestIntegration_StreamProfileCRUD(t *testing.T) {
 		var profile map[string]interface{}
 		decodeResponse(t, rec, &profile)
 		assert.Equal(t, "ffmpeg", profile["command"])
-		assert.Equal(t, "-b:v 4M", profile["custom_args"])      // extras only
-		assert.Contains(t, profile["args"], "-b:v 4M")           // extras appended to composed
-		assert.Contains(t, profile["args"], "-i {input}")         // composed base present
+		assert.Equal(t, "-b:v 4M", profile["custom_args"])
+		assert.Contains(t, profile["args"], "-b:v 4M")
+		assert.Contains(t, profile["args"], "-i {input}")
 		createdProfileID2 = profile["id"].(string)
 	})
 
@@ -742,12 +710,18 @@ func TestIntegration_StreamProfileCRUD(t *testing.T) {
 		assert.Equal(t, "-i {input} -c:v copy -c:a copy -f mpegts pipe:1", profile["custom_args"])
 	})
 
+	t.Run("create duplicate name returns 409", func(t *testing.T) {
+		rec := doRequest(t, env, "POST", "/api/stream-profiles/", map[string]interface{}{
+			"name": "Browser", "source_type": "m3u", "hwaccel": "none", "video_codec": "copy",
+		}, env.adminToken)
+		assert.Equal(t, http.StatusConflict, rec.Code)
+	})
+
 	t.Run("list includes seeded defaults", func(t *testing.T) {
 		rec := doRequest(t, env, "GET", "/api/stream-profiles/", nil, env.adminToken)
 		assert.Equal(t, http.StatusOK, rec.Code)
 		var profiles []map[string]interface{}
 		decodeResponse(t, rec, &profiles)
-		// 2 system (Direct, Proxy) + 5 regular (Browser, SAT>IP Copy, M3U Copy, M3U->MP4, M3U->Matroska) + 3 client (Plex, VLC, Browser) + 3 created above = 13
 		assert.Len(t, profiles, 13)
 	})
 
@@ -798,15 +772,14 @@ func TestIntegration_StreamProfileCRUD(t *testing.T) {
 		assert.Equal(t, false, profile["is_client"])
 	})
 
-	t.Run("browser profile is client not system", func(t *testing.T) {
-		// Find the Browser profile that has is_client=true
+	t.Run("browser client profile is client not system", func(t *testing.T) {
 		rec := doRequest(t, env, "GET", "/api/stream-profiles/", nil, env.adminToken)
 		require.Equal(t, http.StatusOK, rec.Code)
 		var profiles []map[string]interface{}
 		decodeResponse(t, rec, &profiles)
 		var browserClientID string
 		for _, p := range profiles {
-			if p["name"] == "Browser" && p["is_client"] == true {
+			if p["name"] == "Browser (Client)" && p["is_client"] == true {
 				browserClientID = p["id"].(string)
 				break
 			}
@@ -817,20 +790,19 @@ func TestIntegration_StreamProfileCRUD(t *testing.T) {
 		assert.Equal(t, http.StatusOK, rec.Code)
 		var profile map[string]interface{}
 		decodeResponse(t, rec, &profile)
-		assert.Equal(t, "Browser", profile["name"])
+		assert.Equal(t, "Browser (Client)", profile["name"])
 		assert.Equal(t, false, profile["is_system"])
 		assert.Equal(t, true, profile["is_client"])
 	})
 
 	t.Run("delete client profile is forbidden", func(t *testing.T) {
-		// Find the Plex client profile (is_client=true)
 		rec := doRequest(t, env, "GET", "/api/stream-profiles/", nil, env.adminToken)
 		require.Equal(t, http.StatusOK, rec.Code)
 		var profiles []map[string]interface{}
 		decodeResponse(t, rec, &profiles)
 		var plexClientProfileID string
 		for _, p := range profiles {
-			if p["name"] == "Plex" && p["is_client"] == true {
+			if p["name"] == "Plex (Client)" && p["is_client"] == true {
 				plexClientProfileID = p["id"].(string)
 				break
 			}
@@ -851,14 +823,13 @@ func TestIntegration_StreamProfileCRUD(t *testing.T) {
 	})
 
 	t.Run("update client profile is allowed", func(t *testing.T) {
-		// Find the Plex client profile
 		rec := doRequest(t, env, "GET", "/api/stream-profiles/", nil, env.adminToken)
 		require.Equal(t, http.StatusOK, rec.Code)
 		var profiles []map[string]interface{}
 		decodeResponse(t, rec, &profiles)
 		var plexClientProfileID string
 		for _, p := range profiles {
-			if p["name"] == "Plex" && p["is_client"] == true {
+			if p["name"] == "Plex (Client)" && p["is_client"] == true {
 				plexClientProfileID = p["id"].(string)
 				break
 			}
@@ -881,18 +852,14 @@ func TestIntegration_StreamProfileCRUD(t *testing.T) {
 		assert.Equal(t, http.StatusOK, rec.Code)
 		var profiles []map[string]interface{}
 		decodeResponse(t, rec, &profiles)
-		// Verify system profiles come first
 		assert.Equal(t, true, profiles[0]["is_system"])
 		assert.Equal(t, true, profiles[1]["is_system"])
-		// Then client profiles
 		foundClient := false
 		for i := 2; i < len(profiles); i++ {
 			if profiles[i]["is_client"] == true {
 				foundClient = true
 			}
-			// Once we see a non-client, non-system profile, no more clients should follow
 			if profiles[i]["is_system"] != true && profiles[i]["is_client"] != true && foundClient {
-				// Verify no more client profiles after this
 				for j := i + 1; j < len(profiles); j++ {
 					assert.NotEqual(t, true, profiles[j]["is_client"], "client profile found after regular profile")
 				}
@@ -943,10 +910,6 @@ func TestIntegration_StreamProfileCRUD(t *testing.T) {
 	})
 }
 
-// =============================================================================
-// Logo CRUD
-// =============================================================================
-
 func TestIntegration_LogoCRUD(t *testing.T) {
 	env := setupFullEnv(t)
 
@@ -995,14 +958,9 @@ func TestIntegration_LogoCRUD(t *testing.T) {
 	})
 }
 
-// =============================================================================
-// Logo -> Channel FK Propagation
-// =============================================================================
-
 func TestIntegration_LogoChannelPropagation(t *testing.T) {
 	env := setupFullEnv(t)
 
-	// 1. Create a logo
 	rec := doRequest(t, env, "POST", "/api/logos/", map[string]interface{}{
 		"name": "BBC Logo", "url": "https://example.com/bbc.png",
 	}, env.adminToken)
@@ -1011,7 +969,6 @@ func TestIntegration_LogoChannelPropagation(t *testing.T) {
 	decodeResponse(t, rec, &logo)
 	logoID := logo["id"].(string)
 
-	// 2. Create channel with logo_id
 	rec = doRequest(t, env, "POST", "/api/channels/", map[string]interface{}{
 		"name": "BBC One", "logo_id": logoID, "is_enabled": true,
 	}, env.adminToken)
@@ -1023,19 +980,16 @@ func TestIntegration_LogoChannelPropagation(t *testing.T) {
 
 	channelID := ch["id"].(string)
 
-	// 3. Update the logo URL
 	rec = doRequest(t, env, "PUT", "/api/logos/"+logoID, map[string]interface{}{
 		"name": "BBC Logo", "url": "https://example.com/bbc-hd.png",
 	}, env.adminToken)
 	require.Equal(t, http.StatusOK, rec.Code)
 
-	// 4. Verify channel GET reflects the new logo URL
 	rec = doRequest(t, env, "GET", "/api/channels/"+channelID, nil, env.adminToken)
 	require.Equal(t, http.StatusOK, rec.Code)
 	decodeResponse(t, rec, &ch)
 	assert.Equal(t, "https://example.com/bbc-hd.png", ch["logo"])
 
-	// 5. Create channel with logo URL string (backward compat) -- auto-creates Logo
 	rec = doRequest(t, env, "POST", "/api/channels/", map[string]interface{}{
 		"name": "ITV", "logo": "https://example.com/itv.png", "is_enabled": true,
 	}, env.adminToken)
@@ -1044,14 +998,12 @@ func TestIntegration_LogoChannelPropagation(t *testing.T) {
 	assert.NotNil(t, ch["logo_id"])
 	assert.Equal(t, "https://example.com/itv.png", ch["logo"])
 
-	// 6. Verify the Logo was auto-created
 	rec = doRequest(t, env, "GET", "/api/logos/", nil, env.adminToken)
 	require.Equal(t, http.StatusOK, rec.Code)
 	var logos []map[string]interface{}
 	decodeResponse(t, rec, &logos)
-	assert.Len(t, logos, 2) // BBC Logo + auto-created ITV logo
+	assert.Len(t, logos, 2)
 
-	// 7. Delete logo -- channel logo_id should be nulled
 	rec = doRequest(t, env, "DELETE", "/api/logos/"+logoID, nil, env.adminToken)
 	require.Equal(t, http.StatusNoContent, rec.Code)
 
@@ -1062,10 +1014,6 @@ func TestIntegration_LogoChannelPropagation(t *testing.T) {
 	assert.Nil(t, chAfterDelete["logo_id"])
 	assert.Nil(t, chAfterDelete["logo"])
 }
-
-// =============================================================================
-// Channel Fail Count
-// =============================================================================
 
 func TestIntegration_ChannelFailCount(t *testing.T) {
 	env := setupFullEnv(t)
@@ -1098,10 +1046,6 @@ func TestIntegration_ChannelFailCount(t *testing.T) {
 	assert.Equal(t, float64(0), ch["fail_count"])
 }
 
-// =============================================================================
-// Settings CRUD
-// =============================================================================
-
 func TestIntegration_Settings(t *testing.T) {
 	env := setupFullEnv(t)
 
@@ -1129,7 +1073,6 @@ func TestIntegration_Settings(t *testing.T) {
 		decodeResponse(t, rec, &settings)
 		assert.Len(t, settings, 3)
 
-		// Verify key-value pairs
 		settingsMap := make(map[string]string)
 		for _, s := range settings {
 			settingsMap[s["key"].(string)] = s["value"].(string)
@@ -1155,10 +1098,6 @@ func TestIntegration_Settings(t *testing.T) {
 		assert.Equal(t, "TVProxy Updated", settingsMap["app_name"])
 	})
 }
-
-// =============================================================================
-// M3U Account CRUD (no refresh -- requires real URL)
-// =============================================================================
 
 func TestIntegration_M3UAccountCRUD(t *testing.T) {
 	env := setupFullEnv(t)
@@ -1266,9 +1205,123 @@ func TestIntegration_M3UAccountCRUD(t *testing.T) {
 	})
 }
 
-// =============================================================================
-// EPG Source CRUD (no refresh -- requires real URL)
-// =============================================================================
+func TestIntegration_XtreamRefresh(t *testing.T) {
+	env := setupFullEnv(t)
+
+	xtreamServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		action := r.URL.Query().Get("action")
+		username := r.URL.Query().Get("username")
+		password := r.URL.Query().Get("password")
+
+		if username != "testuser" || password != "testpass" {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		switch action {
+		case "get_live_streams":
+			json.NewEncoder(w).Encode([]map[string]interface{}{
+				{"num": 1, "name": "ESPN HD", "stream_type": "live", "stream_id": 101, "stream_icon": "http://example.com/espn.png", "epg_channel_id": "espn.us", "category_id": "1", "category_name": "Sports"},
+				{"num": 2, "name": "CNN", "stream_type": "live", "stream_id": 102, "stream_icon": "http://example.com/cnn.png", "epg_channel_id": "cnn.us", "category_id": "2", "category_name": "News"},
+			})
+		default:
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"user_info":   map[string]interface{}{"username": "testuser", "status": "Active", "max_connections": "2", "active_cons": "0"},
+				"server_info": map[string]interface{}{"url": "example.com", "port": "8080"},
+			})
+		}
+	}))
+	defer xtreamServer.Close()
+
+	var accountID string
+
+	t.Run("create xtream account", func(t *testing.T) {
+		rec := doRequest(t, env, "POST", "/api/m3u/accounts/", map[string]interface{}{
+			"name":       "Xtream Test",
+			"url":        xtreamServer.URL,
+			"type":       "xtream",
+			"username":   "testuser",
+			"password":   "testpass",
+			"is_enabled": true,
+		}, env.adminToken)
+		require.Equal(t, http.StatusCreated, rec.Code)
+		var account map[string]interface{}
+		decodeResponse(t, rec, &account)
+		accountID = account["id"].(string)
+	})
+
+	t.Run("refresh populates streams", func(t *testing.T) {
+		rec := doRequest(t, env, "POST", "/api/m3u/accounts/"+accountID+"/refresh", nil, env.adminToken)
+		assert.Equal(t, http.StatusAccepted, rec.Code)
+
+		require.Eventually(t, func() bool {
+			rec := doRequest(t, env, "GET", "/api/streams/?full=true", nil, env.adminToken)
+			var streams []map[string]interface{}
+			json.NewDecoder(rec.Body).Decode(&streams)
+			return len(streams) == 2
+		}, 5*time.Second, 100*time.Millisecond)
+
+		rec = doRequest(t, env, "GET", "/api/streams/?full=true", nil, env.adminToken)
+		require.Equal(t, http.StatusOK, rec.Code)
+		var streams []map[string]interface{}
+		decodeResponse(t, rec, &streams)
+		require.Len(t, streams, 2)
+
+		names := map[string]bool{}
+		for _, s := range streams {
+			names[s["name"].(string)] = true
+			assert.Equal(t, accountID, s["m3u_account_id"])
+			if s["name"] == "ESPN HD" {
+				assert.Equal(t, "Sports", s["group"])
+				assert.Equal(t, "espn.us", s["tvg_id"])
+				assert.Contains(t, s["url"].(string), "/101.ts")
+			}
+		}
+		assert.True(t, names["ESPN HD"])
+		assert.True(t, names["CNN"])
+	})
+
+	t.Run("account updated after refresh", func(t *testing.T) {
+		require.Eventually(t, func() bool {
+			rec := doRequest(t, env, "GET", "/api/m3u/accounts/"+accountID, nil, env.adminToken)
+			var account map[string]interface{}
+			json.NewDecoder(rec.Body).Decode(&account)
+			return account["stream_count"] == float64(2)
+		}, 5*time.Second, 100*time.Millisecond)
+
+		rec := doRequest(t, env, "GET", "/api/m3u/accounts/"+accountID, nil, env.adminToken)
+		require.Equal(t, http.StatusOK, rec.Code)
+		var account map[string]interface{}
+		decodeResponse(t, rec, &account)
+		assert.Equal(t, float64(2), account["stream_count"])
+		assert.NotNil(t, account["last_refreshed"])
+		assert.Equal(t, "", account["last_error"])
+	})
+
+	t.Run("refresh with bad credentials sets last_error", func(t *testing.T) {
+		rec := doRequest(t, env, "PUT", "/api/m3u/accounts/"+accountID, map[string]interface{}{
+			"name":       "Xtream Test",
+			"url":        xtreamServer.URL,
+			"type":       "xtream",
+			"username":   "baduser",
+			"password":   "badpass",
+			"is_enabled": true,
+		}, env.adminToken)
+		require.Equal(t, http.StatusOK, rec.Code)
+
+		rec = doRequest(t, env, "POST", "/api/m3u/accounts/"+accountID+"/refresh", nil, env.adminToken)
+		assert.Equal(t, http.StatusAccepted, rec.Code)
+
+		require.Eventually(t, func() bool {
+			rec := doRequest(t, env, "GET", "/api/m3u/accounts/"+accountID, nil, env.adminToken)
+			var account map[string]interface{}
+			json.NewDecoder(rec.Body).Decode(&account)
+			lastError, _ := account["last_error"].(string)
+			return lastError != ""
+		}, 5*time.Second, 100*time.Millisecond)
+	})
+}
 
 func TestIntegration_EPGSourceCRUD(t *testing.T) {
 	env := setupFullEnv(t)
@@ -1331,10 +1384,6 @@ func TestIntegration_EPGSourceCRUD(t *testing.T) {
 	})
 }
 
-// =============================================================================
-// EPG Data listing
-// =============================================================================
-
 func TestIntegration_EPGData(t *testing.T) {
 	env := setupFullEnv(t)
 
@@ -1362,10 +1411,6 @@ func TestIntegration_EPGData(t *testing.T) {
 		assert.Len(t, data, 0)
 	})
 }
-
-// =============================================================================
-// HDHR Device CRUD
-// =============================================================================
 
 func TestIntegration_HDHRDeviceCRUD(t *testing.T) {
 	env := setupFullEnv(t)
@@ -1395,12 +1440,11 @@ func TestIntegration_HDHRDeviceCRUD(t *testing.T) {
 		assert.Equal(t, "TVProxy HDHR", device["name"])
 		assert.Equal(t, "12345678", device["device_id"])
 		assert.Equal(t, float64(2), device["tuner_count"])
-		assert.Equal(t, float64(47601), device["port"]) // auto-assigned
+		assert.Equal(t, float64(47601), device["port"])
 		firstDeviceID = device["id"].(string)
 	})
 
 	t.Run("create with channel groups", func(t *testing.T) {
-		// Create two channel groups
 		rec := doRequest(t, env, "POST", "/api/channel-groups/", map[string]interface{}{
 			"name": "Sports", "is_enabled": true,
 		}, env.adminToken)
@@ -1427,7 +1471,6 @@ func TestIntegration_HDHRDeviceCRUD(t *testing.T) {
 		groupIDs := device["channel_group_ids"].([]interface{})
 		assert.Len(t, groupIDs, 2)
 
-		// Verify via GET
 		id := device["id"].(string)
 		rec = doRequest(t, env, "GET", "/api/hdhr/devices/"+id, nil, env.adminToken)
 		assert.Equal(t, http.StatusOK, rec.Code)
@@ -1471,7 +1514,7 @@ func TestIntegration_HDHRDeviceCRUD(t *testing.T) {
 		assert.Equal(t, http.StatusOK, rec.Code)
 		var devices []map[string]interface{}
 		decodeResponse(t, rec, &devices)
-		assert.Len(t, devices, 2) // original + multi-group device
+		assert.Len(t, devices, 2)
 	})
 
 	t.Run("delete", func(t *testing.T) {
@@ -1479,10 +1522,6 @@ func TestIntegration_HDHRDeviceCRUD(t *testing.T) {
 		assert.Equal(t, http.StatusNoContent, rec.Code)
 	})
 }
-
-// =============================================================================
-// HDHR Discovery Endpoints (public, no auth)
-// =============================================================================
 
 func TestIntegration_HDHRDiscovery(t *testing.T) {
 	env := setupFullEnv(t)
@@ -1497,11 +1536,10 @@ func TestIntegration_HDHRDiscovery(t *testing.T) {
 
 	t.Run("discover without devices fails", func(t *testing.T) {
 		rec := doRequest(t, env, "GET", "/discover.json", nil, "")
-		assert.Equal(t, http.StatusInternalServerError, rec.Code)
+		assert.Equal(t, http.StatusNotFound, rec.Code)
 	})
 
 	t.Run("discover with device", func(t *testing.T) {
-		// Create an HDHR device first
 		rec := doRequest(t, env, "POST", "/api/hdhr/devices/", map[string]interface{}{
 			"name": "Test HDHR", "device_id": "ABCD1234", "device_auth": "auth",
 			"firmware_version": "20240101", "tuner_count": 2, "port": 47601, "is_enabled": true,
@@ -1532,10 +1570,6 @@ func TestIntegration_HDHRDiscovery(t *testing.T) {
 		assert.Equal(t, "application/xml", rec.Header().Get("Content-Type"))
 	})
 }
-
-// =============================================================================
-// Streams (read via summary/full, delete)
-// =============================================================================
 
 func TestIntegration_Streams(t *testing.T) {
 	env := setupFullEnv(t)
@@ -1578,10 +1612,6 @@ func TestIntegration_Streams(t *testing.T) {
 	})
 }
 
-// =============================================================================
-// Channels CRUD + Stream Assignment
-// =============================================================================
-
 func TestIntegration_ChannelCRUD(t *testing.T) {
 	env := setupFullEnv(t)
 
@@ -1615,7 +1645,6 @@ func TestIntegration_ChannelCRUD(t *testing.T) {
 	})
 
 	t.Run("create with channel group", func(t *testing.T) {
-		// Create group first
 		rec := doRequest(t, env, "POST", "/api/channel-groups/", map[string]interface{}{
 			"name": "News", "is_enabled": true,
 		}, env.adminToken)
@@ -1673,7 +1702,6 @@ func TestIntegration_ChannelCRUD(t *testing.T) {
 	})
 
 	t.Run("delete", func(t *testing.T) {
-		// Create a channel to delete
 		rec := doRequest(t, env, "POST", "/api/channels/", map[string]interface{}{
 			"name": "ToDelete", "is_enabled": true,
 		}, env.adminToken)
@@ -1689,10 +1717,6 @@ func TestIntegration_ChannelCRUD(t *testing.T) {
 		assert.Equal(t, http.StatusNotFound, rec.Code)
 	})
 }
-
-// =============================================================================
-// Output Generation (public, no auth)
-// =============================================================================
 
 func TestIntegration_Output(t *testing.T) {
 	env := setupFullEnv(t)
@@ -1714,7 +1738,6 @@ func TestIntegration_Output(t *testing.T) {
 	})
 
 	t.Run("m3u with channels", func(t *testing.T) {
-		// Create a channel group and channel
 		rec := doRequest(t, env, "POST", "/api/channel-groups/", map[string]interface{}{
 			"name": "Entertainment", "is_enabled": true, "sort_order": 1,
 		}, env.adminToken)
@@ -1741,41 +1764,29 @@ func TestIntegration_Output(t *testing.T) {
 		assert.Contains(t, body, `tvg-id="ch1"`)
 		assert.Contains(t, body, `tvg-logo="https://example.com/logo.png"`)
 		assert.Contains(t, body, `group-title="Entertainment"`)
-		// Channel Two is disabled, should not appear
 		assert.NotContains(t, body, "Channel Two")
 	})
 }
 
-// =============================================================================
-// Full User Workflow -- simulates a real user setting up the system
-// =============================================================================
-
 func TestIntegration_FullUserWorkflow(t *testing.T) {
 	env := setupFullEnv(t)
 
-	// Step 1: Admin logs in (already done in setup, using env.adminToken)
-
-	// Step 2: Check who I am
 	rec := doRequest(t, env, "GET", "/api/auth/me", nil, env.adminToken)
 	require.Equal(t, http.StatusOK, rec.Code)
 
-	// Step 3: Create a non-admin user
 	rec = doRequest(t, env, "POST", "/api/users/", map[string]interface{}{
 		"username": "operator", "password": "oppass", "is_admin": false,
 	}, env.adminToken)
 	require.Equal(t, http.StatusCreated, rec.Code)
 
-	// Step 4: Operator logs in
 	operatorToken, _ := loginHelper(t, env, "operator", "oppass")
 
-	// Step 5: Create an M3U account (admin only)
 	rec = doRequest(t, env, "POST", "/api/m3u/accounts/", map[string]interface{}{
 		"name": "Primary IPTV", "url": "http://iptv.example.com/get.php?type=m3u_plus",
 		"type": "m3u", "max_streams": 2, "is_enabled": true,
 	}, env.adminToken)
 	require.Equal(t, http.StatusCreated, rec.Code)
 
-	// Step 7: Create channel groups (admin, so output/HDHR can see them)
 	rec = doRequest(t, env, "POST", "/api/channel-groups/", map[string]interface{}{
 		"name": "Sports", "is_enabled": true, "sort_order": 1,
 	}, env.adminToken)
@@ -1792,13 +1803,11 @@ func TestIntegration_FullUserWorkflow(t *testing.T) {
 	decodeResponse(t, rec, &moviesGroup)
 	moviesGroupID := moviesGroup["id"].(string)
 
-	// Step 8: Create stream profile (admin only)
 	rec = doRequest(t, env, "POST", "/api/stream-profiles/", map[string]interface{}{
 		"name": "My Direct Profile", "stream_mode": "direct", "is_default": true,
 	}, env.adminToken)
 	require.Equal(t, http.StatusCreated, rec.Code)
 
-	// Step 9: Create channels (admin, so output/HDHR can see them)
 	rec = doRequest(t, env, "POST", "/api/channels/", map[string]interface{}{
 		"name": "Sky Sports 1", "tvg_id": "skysports1", "channel_group_id": sportsGroupID,
 		"is_enabled": true,
@@ -1811,13 +1820,11 @@ func TestIntegration_FullUserWorkflow(t *testing.T) {
 	}, env.adminToken)
 	require.Equal(t, http.StatusCreated, rec.Code)
 
-	// Step 10: Create an EPG source (admin only)
 	rec = doRequest(t, env, "POST", "/api/epg/sources", map[string]interface{}{
 		"name": "EPG Source", "url": "http://epg.example.com/xmltv.xml", "is_enabled": true,
 	}, env.adminToken)
 	require.Equal(t, http.StatusCreated, rec.Code)
 
-	// Step 11: Create an HDHR device with channel groups (admin only)
 	rec = doRequest(t, env, "POST", "/api/hdhr/devices/", map[string]interface{}{
 		"name": "TVProxy Tuner", "device_id": "ABCDEF12", "device_auth": "auth123",
 		"firmware_version": "20240101", "tuner_count": 4, "port": 47601, "is_enabled": true,
@@ -1825,27 +1832,22 @@ func TestIntegration_FullUserWorkflow(t *testing.T) {
 	}, env.adminToken)
 	require.Equal(t, http.StatusCreated, rec.Code)
 
-	// Step 12: Configure settings (admin only)
 	rec = doRequest(t, env, "PUT", "/api/settings/", map[string]string{
 		"base_url": "http://myserver:8080",
 	}, env.adminToken)
 	require.Equal(t, http.StatusOK, rec.Code)
 
-	// Step 13: Create a logo (admin only)
 	rec = doRequest(t, env, "POST", "/api/logos/", map[string]interface{}{
 		"name": "Sky Sports Logo", "url": "https://example.com/sky-sports.png",
 	}, env.adminToken)
 	require.Equal(t, http.StatusCreated, rec.Code)
 
-	// Step 14: Verify everything via list endpoints
-	// Check channels (admin sees admin's channels)
 	rec = doRequest(t, env, "GET", "/api/channels/", nil, env.adminToken)
 	require.Equal(t, http.StatusOK, rec.Code)
 	var channels []map[string]interface{}
 	decodeResponse(t, rec, &channels)
 	assert.Len(t, channels, 2)
 
-	// Check M3U output includes admin's channels
 	rec = doRequest(t, env, "GET", "/output/m3u", nil, "")
 	require.Equal(t, http.StatusOK, rec.Code)
 	m3uBody := rec.Body.String()
@@ -1854,44 +1856,37 @@ func TestIntegration_FullUserWorkflow(t *testing.T) {
 	assert.Contains(t, m3uBody, `group-title="Sports"`)
 	assert.Contains(t, m3uBody, `group-title="Movies"`)
 
-	// Check HDHR discover works
 	rec = doRequest(t, env, "GET", "/discover.json", nil, "")
 	require.Equal(t, http.StatusOK, rec.Code)
 	var discover map[string]interface{}
 	decodeResponse(t, rec, &discover)
 	assert.Equal(t, "TVProxy Tuner", discover["FriendlyName"])
 
-	// Check HDHR lineup includes admin's channels
 	rec = doRequest(t, env, "GET", "/lineup.json", nil, "")
 	require.Equal(t, http.StatusOK, rec.Code)
 	var lineup []map[string]interface{}
 	decodeResponse(t, rec, &lineup)
 	assert.Len(t, lineup, 2)
 
-	// Check EPG output
 	rec = doRequest(t, env, "GET", "/output/epg", nil, "")
 	require.Equal(t, http.StatusOK, rec.Code)
 	assert.Contains(t, rec.Body.String(), `<tv generator-info-name="tvproxy">`)
 
-	// Check settings (admin only)
 	rec = doRequest(t, env, "GET", "/api/settings/", nil, env.adminToken)
 	require.Equal(t, http.StatusOK, rec.Code)
 	var settings []map[string]interface{}
 	decodeResponse(t, rec, &settings)
 	assert.Len(t, settings, 1)
 
-	// Step 15: Non-admin cannot access user management
 	rec = doRequest(t, env, "GET", "/api/users/", nil, operatorToken)
 	assert.Equal(t, http.StatusForbidden, rec.Code)
 
-	// Step 16: Unauthenticated requests are rejected for protected endpoints
 	rec = doRequest(t, env, "GET", "/api/channels/", nil, "")
 	assert.Equal(t, http.StatusUnauthorized, rec.Code)
 
 	rec = doRequest(t, env, "GET", "/api/m3u/accounts/", nil, "")
 	assert.Equal(t, http.StatusUnauthorized, rec.Code)
 
-	// But public endpoints work without auth
 	rec = doRequest(t, env, "GET", "/output/m3u", nil, "")
 	assert.Equal(t, http.StatusOK, rec.Code)
 
@@ -1899,14 +1894,9 @@ func TestIntegration_FullUserWorkflow(t *testing.T) {
 	assert.Equal(t, http.StatusOK, rec.Code)
 }
 
-// =============================================================================
-// Non-admin user access control
-// =============================================================================
-
 func TestIntegration_NonAdminAccess(t *testing.T) {
 	env := setupFullEnv(t)
 
-	// Non-admin CAN access user-scoped endpoints
 	t.Run("non-admin can list channels", func(t *testing.T) {
 		rec := doRequest(t, env, "GET", "/api/channels/", nil, env.userToken)
 		assert.Equal(t, http.StatusOK, rec.Code)
@@ -1936,7 +1926,6 @@ func TestIntegration_NonAdminAccess(t *testing.T) {
 		assert.Equal(t, http.StatusCreated, rec.Code)
 	})
 
-	// Non-admin CANNOT access admin-only endpoints
 	t.Run("non-admin cannot list users", func(t *testing.T) {
 		rec := doRequest(t, env, "GET", "/api/users/", nil, env.userToken)
 		assert.Equal(t, http.StatusForbidden, rec.Code)
@@ -2073,10 +2062,6 @@ func TestIntegration_NonAdminAccess(t *testing.T) {
 	})
 }
 
-// =============================================================================
-// Edge cases and error handling
-// =============================================================================
-
 func TestIntegration_EdgeCases(t *testing.T) {
 	env := setupFullEnv(t)
 
@@ -2102,7 +2087,6 @@ func TestIntegration_EdgeCases(t *testing.T) {
 	t.Run("nil slice responses are empty arrays", func(t *testing.T) {
 		rec := doRequest(t, env, "GET", "/api/channels/", nil, env.adminToken)
 		assert.Equal(t, http.StatusOK, rec.Code)
-		// Should be [] not null
 		assert.Contains(t, rec.Body.String(), "[]")
 	})
 
@@ -2170,10 +2154,6 @@ func TestIntegration_EdgeCases(t *testing.T) {
 	})
 }
 
-// =============================================================================
-// Client CRUD
-// =============================================================================
-
 func TestIntegration_ClientCRUD(t *testing.T) {
 	env := setupFullEnv(t)
 
@@ -2182,7 +2162,6 @@ func TestIntegration_ClientCRUD(t *testing.T) {
 		assert.Equal(t, http.StatusOK, rec.Code)
 		var clients []map[string]interface{}
 		decodeResponse(t, rec, &clients)
-		// 3 seeded: Plex, VLC, Browser
 		assert.Len(t, clients, 3)
 		assert.Equal(t, "Plex", clients[0]["name"])
 		assert.Equal(t, "VLC", clients[1]["name"])
@@ -2280,22 +2259,18 @@ func TestIntegration_ClientCRUD(t *testing.T) {
 	})
 
 	t.Run("delete client cleans up profile", func(t *testing.T) {
-		// Get the profile ID before deleting
 		rec := doRequest(t, env, "GET", "/api/clients/"+createdClientID, nil, env.adminToken)
 		require.Equal(t, http.StatusOK, rec.Code)
 		var client map[string]interface{}
 		decodeResponse(t, rec, &client)
 		profileID := client["stream_profile_id"].(string)
 
-		// Delete the client
 		rec = doRequest(t, env, "DELETE", "/api/clients/"+createdClientID, nil, env.adminToken)
 		assert.Equal(t, http.StatusNoContent, rec.Code)
 
-		// Verify client is gone
 		rec = doRequest(t, env, "GET", "/api/clients/"+createdClientID, nil, env.adminToken)
 		assert.Equal(t, http.StatusNotFound, rec.Code)
 
-		// Verify orphaned profile was cleaned up
 		rec = doRequest(t, env, "GET", "/api/stream-profiles/"+profileID, nil, env.adminToken)
 		assert.Equal(t, http.StatusNotFound, rec.Code)
 	})
@@ -2305,31 +2280,23 @@ func TestIntegration_ClientCRUD(t *testing.T) {
 		assert.Equal(t, http.StatusOK, rec.Code)
 		var clients []map[string]interface{}
 		decodeResponse(t, rec, &clients)
-		// 3 seeded remain (Oculus Quest was deleted)
 		assert.Len(t, clients, 3)
 	})
 }
 
-// =============================================================================
-// Channel Isolation (multi-user scoping)
-// =============================================================================
-
 func TestIntegration_ChannelIsolation(t *testing.T) {
 	env := setupFullEnv(t)
 
-	// Admin creates a channel
 	rec := doRequest(t, env, "POST", "/api/channels/", map[string]interface{}{
 		"name": "Admin Channel", "is_enabled": true,
 	}, env.adminToken)
 	require.Equal(t, http.StatusCreated, rec.Code)
 
-	// Non-admin creates a channel
 	rec = doRequest(t, env, "POST", "/api/channels/", map[string]interface{}{
 		"name": "User Channel", "is_enabled": true,
 	}, env.userToken)
 	require.Equal(t, http.StatusCreated, rec.Code)
 
-	// Admin sees only their channel
 	rec = doRequest(t, env, "GET", "/api/channels/", nil, env.adminToken)
 	require.Equal(t, http.StatusOK, rec.Code)
 	var adminChannels []map[string]interface{}
@@ -2337,7 +2304,6 @@ func TestIntegration_ChannelIsolation(t *testing.T) {
 	assert.Len(t, adminChannels, 1)
 	assert.Equal(t, "Admin Channel", adminChannels[0]["name"])
 
-	// Non-admin sees only their channel
 	rec = doRequest(t, env, "GET", "/api/channels/", nil, env.userToken)
 	require.Equal(t, http.StatusOK, rec.Code)
 	var userChannels []map[string]interface{}
@@ -2345,12 +2311,10 @@ func TestIntegration_ChannelIsolation(t *testing.T) {
 	assert.Len(t, userChannels, 1)
 	assert.Equal(t, "User Channel", userChannels[0]["name"])
 
-	// Non-admin cannot access admin's channel
 	adminChannelID := adminChannels[0]["id"].(string)
 	rec = doRequest(t, env, "GET", "/api/channels/"+adminChannelID, nil, env.userToken)
 	assert.Equal(t, http.StatusNotFound, rec.Code)
 
-	// Same for channel groups
 	rec = doRequest(t, env, "POST", "/api/channel-groups/", map[string]interface{}{
 		"name": "Admin Group", "is_enabled": true,
 	}, env.adminToken)
@@ -2376,14 +2340,9 @@ func TestIntegration_ChannelIsolation(t *testing.T) {
 	assert.Equal(t, "User Group", userGroups[0]["name"])
 }
 
-// =============================================================================
-// Invite Flow
-// =============================================================================
-
 func TestIntegration_InviteFlow(t *testing.T) {
 	env := setupFullEnv(t)
 
-	// Admin creates invite
 	rec := doRequest(t, env, "POST", "/api/users/invite", map[string]interface{}{
 		"username": "invited_user",
 	}, env.adminToken)
@@ -2394,34 +2353,26 @@ func TestIntegration_InviteFlow(t *testing.T) {
 	assert.NotNil(t, inviteResp["invite_token"])
 	token := inviteResp["invite_token"].(string)
 
-	// Cannot login before accepting invite
 	rec = doRequest(t, env, "POST", "/api/auth/login", map[string]string{
 		"username": "invited_user", "password": "newpass",
 	}, "")
 	assert.Equal(t, http.StatusUnauthorized, rec.Code)
 
-	// Accept invite
 	rec = doRequest(t, env, "POST", "/api/auth/invite/"+token, map[string]interface{}{
 		"password": "newpass",
 	}, "")
 	assert.Equal(t, http.StatusOK, rec.Code)
 
-	// Now login works
 	rec = doRequest(t, env, "POST", "/api/auth/login", map[string]string{
 		"username": "invited_user", "password": "newpass",
 	}, "")
 	assert.Equal(t, http.StatusOK, rec.Code)
 
-	// Non-admin cannot create invite
 	rec = doRequest(t, env, "POST", "/api/users/invite", map[string]interface{}{
 		"username": "another_user",
 	}, env.userToken)
 	assert.Equal(t, http.StatusForbidden, rec.Code)
 }
-
-// =============================================================================
-// Reset Tests
-// =============================================================================
 
 func TestIntegration_SoftReset(t *testing.T) {
 	env := setupFullEnv(t)
@@ -2437,31 +2388,26 @@ func TestIntegration_SoftReset(t *testing.T) {
 	})
 
 	t.Run("admin succeeds", func(t *testing.T) {
-		// Verify seeded stream profiles exist before reset
 		rec := doRequest(t, env, "GET", "/api/stream-profiles/", nil, env.adminToken)
 		assert.Equal(t, http.StatusOK, rec.Code)
 		var profiles []map[string]interface{}
 		decodeResponse(t, rec, &profiles)
 		assert.Greater(t, len(profiles), 0)
 
-		// Perform soft reset
 		rec = doRequest(t, env, "POST", "/api/settings/soft-reset", nil, env.adminToken)
 		assert.Equal(t, http.StatusOK, rec.Code)
 
-		// Stream profiles should be re-seeded (10 = 2 system + 5 regular + 3 client)
 		rec = doRequest(t, env, "GET", "/api/stream-profiles/", nil, env.adminToken)
 		assert.Equal(t, http.StatusOK, rec.Code)
 		decodeResponse(t, rec, &profiles)
 		assert.Equal(t, 10, len(profiles))
 
-		// Channels should be empty
 		rec = doRequest(t, env, "GET", "/api/channels/", nil, env.adminToken)
 		assert.Equal(t, http.StatusOK, rec.Code)
 		var channels []map[string]interface{}
 		decodeResponse(t, rec, &channels)
 		assert.Len(t, channels, 0)
 
-		// Users should still exist
 		rec = doRequest(t, env, "GET", "/api/users/", nil, env.adminToken)
 		assert.Equal(t, http.StatusOK, rec.Code)
 		var users []map[string]interface{}
@@ -2479,34 +2425,542 @@ func TestIntegration_HardReset(t *testing.T) {
 	})
 
 	t.Run("admin succeeds", func(t *testing.T) {
-		// Perform hard reset
 		rec := doRequest(t, env, "POST", "/api/settings/hard-reset", nil, env.adminToken)
 		assert.Equal(t, http.StatusOK, rec.Code)
 
-		// Old tokens are invalid after hard reset (users table was dropped and recreated)
-		// Login with the default admin/admin credentials
 		newToken, _ := loginHelper(t, env, "admin", "admin")
 
-		// Seeded stream profiles should be back
 		rec = doRequest(t, env, "GET", "/api/stream-profiles/", nil, newToken)
 		assert.Equal(t, http.StatusOK, rec.Code)
 		var profiles []map[string]interface{}
 		decodeResponse(t, rec, &profiles)
 		assert.Equal(t, 10, len(profiles))
 
-		// Seeded clients should be back
 		rec = doRequest(t, env, "GET", "/api/clients/", nil, newToken)
 		assert.Equal(t, http.StatusOK, rec.Code)
 		var clients []map[string]interface{}
 		decodeResponse(t, rec, &clients)
 		assert.Equal(t, 3, len(clients))
 
-		// Only the new default admin user should exist
 		rec = doRequest(t, env, "GET", "/api/users/", nil, newToken)
 		assert.Equal(t, http.StatusOK, rec.Code)
 		var users []map[string]interface{}
 		decodeResponse(t, rec, &users)
 		assert.Equal(t, 1, len(users))
 		assert.Equal(t, "admin", users[0]["username"])
+	})
+}
+
+func TestIntegration_VODDeleteSessionRequiresAuth(t *testing.T) {
+	env := setupFullEnv(t)
+
+	t.Run("unauthenticated delete returns 401", func(t *testing.T) {
+		rec := doRequest(t, env, "DELETE", "/vod/some-session", nil, "")
+		assert.Equal(t, http.StatusUnauthorized, rec.Code)
+	})
+
+	t.Run("authenticated delete on nonexistent returns 204", func(t *testing.T) {
+		rec := doRequest(t, env, "DELETE", "/vod/nonexistent-session", nil, env.adminToken)
+		assert.Equal(t, http.StatusNoContent, rec.Code)
+	})
+}
+
+func TestIntegration_VODStatusNotFound(t *testing.T) {
+	env := setupFullEnv(t)
+
+	rec := doRequest(t, env, "GET", "/vod/nonexistent/status", nil, "")
+	assert.Equal(t, http.StatusNotFound, rec.Code)
+}
+
+func TestIntegration_VODSeekNotFound(t *testing.T) {
+	env := setupFullEnv(t)
+
+	rec := doRequest(t, env, "GET", "/vod/nonexistent/seek?t=0", nil, "")
+	assert.Equal(t, http.StatusNotFound, rec.Code)
+}
+
+func TestIntegration_VODStreamNotFound(t *testing.T) {
+	env := setupFullEnv(t)
+
+	rec := doRequest(t, env, "GET", "/vod/nonexistent/stream", nil, "")
+	assert.Equal(t, http.StatusNotFound, rec.Code)
+}
+
+func TestIntegration_VODMarkRecordingRequiresAuth(t *testing.T) {
+	env := setupFullEnv(t)
+
+	t.Run("unauthenticated returns 401", func(t *testing.T) {
+		rec := doRequest(t, env, "POST", "/vod/some-session/record", map[string]string{
+			"program_title": "test",
+		}, "")
+		assert.Equal(t, http.StatusUnauthorized, rec.Code)
+	})
+
+	t.Run("authenticated on nonexistent session returns 404", func(t *testing.T) {
+		rec := doRequest(t, env, "POST", "/vod/nonexistent/record", map[string]interface{}{
+			"program_title": "test",
+			"channel_name":  "ch1",
+		}, env.adminToken)
+		assert.Equal(t, http.StatusNotFound, rec.Code)
+	})
+}
+
+func TestIntegration_VODStopRecordingRequiresAuth(t *testing.T) {
+	env := setupFullEnv(t)
+
+	t.Run("unauthenticated returns 401", func(t *testing.T) {
+		rec := doRequest(t, env, "POST", "/vod/some-session/stop", nil, "")
+		assert.Equal(t, http.StatusUnauthorized, rec.Code)
+	})
+
+	t.Run("nonexistent session returns 404", func(t *testing.T) {
+		rec := doRequest(t, env, "POST", "/vod/nonexistent/stop", nil, env.adminToken)
+		assert.Equal(t, http.StatusNotFound, rec.Code)
+	})
+}
+
+func TestIntegration_VODCancelRecordingRequiresAuth(t *testing.T) {
+	env := setupFullEnv(t)
+
+	t.Run("unauthenticated returns 401", func(t *testing.T) {
+		rec := doRequest(t, env, "POST", "/vod/some-session/cancel", nil, "")
+		assert.Equal(t, http.StatusUnauthorized, rec.Code)
+	})
+
+	t.Run("nonexistent session returns 404", func(t *testing.T) {
+		rec := doRequest(t, env, "POST", "/vod/nonexistent/cancel", nil, env.adminToken)
+		assert.Equal(t, http.StatusNotFound, rec.Code)
+	})
+}
+
+func TestIntegration_VODUpdateSegmentRequiresAuth(t *testing.T) {
+	env := setupFullEnv(t)
+
+	t.Run("unauthenticated returns 401", func(t *testing.T) {
+		rec := doRequest(t, env, "PUT", "/vod/some-session/record/some-seg", map[string]interface{}{
+			"start_offset": 5.0,
+		}, "")
+		assert.Equal(t, http.StatusUnauthorized, rec.Code)
+	})
+
+	t.Run("nonexistent session returns 404", func(t *testing.T) {
+		rec := doRequest(t, env, "PUT", "/vod/nonexistent/record/some-seg", map[string]interface{}{
+			"start_offset": 5.0,
+		}, env.adminToken)
+		assert.Equal(t, http.StatusNotFound, rec.Code)
+	})
+}
+
+func TestIntegration_VODDeleteSegmentRequiresAuth(t *testing.T) {
+	env := setupFullEnv(t)
+
+	t.Run("unauthenticated returns 401", func(t *testing.T) {
+		rec := doRequest(t, env, "DELETE", "/vod/some-session/record/some-seg", nil, "")
+		assert.Equal(t, http.StatusUnauthorized, rec.Code)
+	})
+
+	t.Run("nonexistent session returns 404", func(t *testing.T) {
+		rec := doRequest(t, env, "DELETE", "/vod/nonexistent/record/some-seg", nil, env.adminToken)
+		assert.Equal(t, http.StatusNotFound, rec.Code)
+	})
+}
+
+func TestIntegration_VODRecordingsListRequiresAuth(t *testing.T) {
+	env := setupFullEnv(t)
+
+	t.Run("unauthenticated returns 401", func(t *testing.T) {
+		rec := doRequest(t, env, "GET", "/api/recordings/", nil, "")
+		assert.Equal(t, http.StatusUnauthorized, rec.Code)
+	})
+
+	t.Run("authenticated returns empty list", func(t *testing.T) {
+		rec := doRequest(t, env, "GET", "/api/recordings/", nil, env.adminToken)
+		assert.Equal(t, http.StatusOK, rec.Code)
+		var list []interface{}
+		decodeResponse(t, rec, &list)
+		assert.Empty(t, list)
+	})
+}
+
+func TestIntegration_VODCompletedRecordingsRequiresAuth(t *testing.T) {
+	env := setupFullEnv(t)
+
+	t.Run("unauthenticated returns 401", func(t *testing.T) {
+		rec := doRequest(t, env, "GET", "/api/recordings/completed", nil, "")
+		assert.Equal(t, http.StatusUnauthorized, rec.Code)
+	})
+
+	t.Run("authenticated returns empty list", func(t *testing.T) {
+		rec := doRequest(t, env, "GET", "/api/recordings/completed", nil, env.adminToken)
+		assert.Equal(t, http.StatusOK, rec.Code)
+		var list []interface{}
+		decodeResponse(t, rec, &list)
+		assert.Empty(t, list)
+	})
+}
+
+func TestIntegration_VODDeleteCompletedRecordingRequiresAuth(t *testing.T) {
+	env := setupFullEnv(t)
+
+	t.Run("unauthenticated returns 401", func(t *testing.T) {
+		rec := doRequest(t, env, "DELETE", "/api/recordings/completed/test.mp4", nil, "")
+		assert.Equal(t, http.StatusUnauthorized, rec.Code)
+	})
+
+	t.Run("invalid filename returns 400", func(t *testing.T) {
+		rec := doRequest(t, env, "DELETE", "/api/recordings/completed/..%2Fetc%2Fpasswd", nil, env.adminToken)
+		// chi decodes URL params, so ../etc/passwd → invalid filename
+		assert.Contains(t, []int{http.StatusBadRequest, http.StatusNotFound}, rec.Code)
+	})
+}
+
+func TestIntegration_VODCreateSessionRequiresStreamID(t *testing.T) {
+	env := setupFullEnv(t)
+
+	t.Run("nonexistent stream returns 404", func(t *testing.T) {
+		rec := doRequest(t, env, "POST", "/stream/nonexistent-stream/vod", nil, "")
+		assert.Equal(t, http.StatusNotFound, rec.Code)
+	})
+}
+
+func TestIntegration_VODCreateChannelSessionNotFound(t *testing.T) {
+	env := setupFullEnv(t)
+
+	rec := doRequest(t, env, "POST", "/channel/nonexistent-channel/vod", nil, "")
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+}
+
+func TestIntegration_VODCreateRecordingRequiresAuth(t *testing.T) {
+	env := setupFullEnv(t)
+
+	t.Run("unauthenticated returns 401", func(t *testing.T) {
+		rec := doRequest(t, env, "POST", "/channel/some-channel/record", map[string]interface{}{
+			"program_title": "test",
+		}, "")
+		assert.Equal(t, http.StatusUnauthorized, rec.Code)
+	})
+}
+
+func TestIntegration_HDHR_Discover(t *testing.T) {
+	env := setupFullEnv(t)
+
+	rec := doRequest(t, env, "POST", "/api/hdhr/devices/", map[string]interface{}{
+		"name": "Test Tuner", "device_id": "AABBCCDD", "device_auth": "authkey123",
+		"firmware_version": "20240101", "tuner_count": 4, "port": 47601, "is_enabled": true,
+	}, env.adminToken)
+	require.Equal(t, http.StatusCreated, rec.Code)
+
+	rec = doRequest(t, env, "GET", "/discover.json", nil, "")
+	require.Equal(t, http.StatusOK, rec.Code)
+	assert.Equal(t, "application/json", rec.Header().Get("Content-Type"))
+
+	var discover map[string]interface{}
+	decodeResponse(t, rec, &discover)
+	assert.Equal(t, "Test Tuner", discover["FriendlyName"])
+	assert.Equal(t, "Silicondust", discover["Manufacturer"])
+	assert.Equal(t, "https://www.silicondust.com/", discover["ManufacturerURL"])
+	assert.Equal(t, "HDTC-2US", discover["ModelNumber"])
+	assert.Equal(t, "hdhomerun_atsc", discover["FirmwareName"])
+	assert.Equal(t, "20240101", discover["FirmwareVersion"])
+	assert.Equal(t, "AABBCCDD", discover["DeviceID"])
+	assert.Equal(t, "authkey123", discover["DeviceAuth"])
+	assert.NotEmpty(t, discover["BaseURL"])
+	assert.Contains(t, discover["LineupURL"].(string), "/lineup.json")
+	assert.Equal(t, float64(4), discover["TunerCount"])
+}
+
+func TestIntegration_HDHR_Lineup(t *testing.T) {
+	env := setupFullEnv(t)
+
+	rec := doRequest(t, env, "POST", "/api/hdhr/devices/", map[string]interface{}{
+		"name": "Lineup Tuner", "device_id": "11223344", "device_auth": "auth",
+		"firmware_version": "20240101", "tuner_count": 2, "port": 47602, "is_enabled": true,
+	}, env.adminToken)
+	require.Equal(t, http.StatusCreated, rec.Code)
+
+	doRequest(t, env, "POST", "/api/channels/", map[string]interface{}{
+		"name": "CH 1", "is_enabled": true,
+	}, env.adminToken)
+	doRequest(t, env, "POST", "/api/channels/", map[string]interface{}{
+		"name": "CH 2", "is_enabled": true,
+	}, env.adminToken)
+	doRequest(t, env, "POST", "/api/channels/", map[string]interface{}{
+		"name": "CH Disabled", "is_enabled": false,
+	}, env.adminToken)
+
+	rec = doRequest(t, env, "GET", "/lineup.json", nil, "")
+	require.Equal(t, http.StatusOK, rec.Code)
+	assert.Equal(t, "application/json", rec.Header().Get("Content-Type"))
+
+	var lineup []map[string]interface{}
+	decodeResponse(t, rec, &lineup)
+	require.Len(t, lineup, 2)
+
+	assert.Equal(t, "1", lineup[0]["GuideNumber"])
+	assert.Equal(t, "CH 1", lineup[0]["GuideName"])
+	assert.NotEmpty(t, lineup[0]["URL"])
+
+	assert.Equal(t, "2", lineup[1]["GuideNumber"])
+	assert.Equal(t, "CH 2", lineup[1]["GuideName"])
+	assert.NotEmpty(t, lineup[1]["URL"])
+}
+
+func TestIntegration_HDHR_LineupStatus(t *testing.T) {
+	env := setupFullEnv(t)
+
+	rec := doRequest(t, env, "GET", "/lineup_status.json", nil, "")
+	require.Equal(t, http.StatusOK, rec.Code)
+	assert.Equal(t, "application/json", rec.Header().Get("Content-Type"))
+
+	var status map[string]interface{}
+	decodeResponse(t, rec, &status)
+	assert.Equal(t, float64(0), status["ScanInProgress"])
+	assert.Equal(t, float64(1), status["ScanPossible"])
+	assert.Equal(t, "Cable", status["Source"])
+	sourceList := status["SourceList"].([]interface{})
+	require.Len(t, sourceList, 1)
+	assert.Equal(t, "Cable", sourceList[0])
+}
+
+func TestIntegration_HDHR_DeviceXML(t *testing.T) {
+	env := setupFullEnv(t)
+
+	rec := doRequest(t, env, "POST", "/api/hdhr/devices/", map[string]interface{}{
+		"name": "XML Tuner", "device_id": "DEADBEEF", "device_auth": "xmlauth",
+		"firmware_version": "20240101", "tuner_count": 3, "port": 47603, "is_enabled": true,
+	}, env.adminToken)
+	require.Equal(t, http.StatusCreated, rec.Code)
+
+	rec = doRequest(t, env, "GET", "/device.xml", nil, "")
+	require.Equal(t, http.StatusOK, rec.Code)
+	assert.Equal(t, "application/xml", rec.Header().Get("Content-Type"))
+
+	body := rec.Body.String()
+	assert.Contains(t, body, "urn:schemas-upnp-org:device-1-0")
+	assert.Contains(t, body, "urn:schemas-upnp-org:device:MediaServer:1")
+	assert.Contains(t, body, "XML Tuner")
+	assert.Contains(t, body, "Silicondust")
+	assert.Contains(t, body, "HDTC-2US")
+	assert.Contains(t, body, "DEADBEEF")
+	assert.Contains(t, body, "uuid:DEADBEEF")
+}
+
+func TestIntegration_HDHR_GroupFiltering(t *testing.T) {
+	env := setupFullEnv(t)
+
+	rec := doRequest(t, env, "POST", "/api/channel-groups/", map[string]interface{}{
+		"name": "Sports", "is_enabled": true, "sort_order": 1,
+	}, env.adminToken)
+	require.Equal(t, http.StatusCreated, rec.Code)
+	var sportsGroup map[string]interface{}
+	decodeResponse(t, rec, &sportsGroup)
+	sportsGroupID := sportsGroup["id"].(string)
+
+	rec = doRequest(t, env, "POST", "/api/channel-groups/", map[string]interface{}{
+		"name": "Movies", "is_enabled": true, "sort_order": 2,
+	}, env.adminToken)
+	require.Equal(t, http.StatusCreated, rec.Code)
+
+	doRequest(t, env, "POST", "/api/channels/", map[string]interface{}{
+		"name": "ESPN", "channel_group_id": sportsGroupID, "is_enabled": true,
+	}, env.adminToken)
+	doRequest(t, env, "POST", "/api/channels/", map[string]interface{}{
+		"name": "Sky Sports", "channel_group_id": sportsGroupID, "is_enabled": true,
+	}, env.adminToken)
+	doRequest(t, env, "POST", "/api/channels/", map[string]interface{}{
+		"name": "HBO", "is_enabled": true,
+	}, env.adminToken)
+
+	rec = doRequest(t, env, "POST", "/api/hdhr/devices/", map[string]interface{}{
+		"name": "Sports Tuner", "device_id": "SPORTS01", "device_auth": "auth",
+		"firmware_version": "20240101", "tuner_count": 2, "port": 47604, "is_enabled": true,
+		"channel_group_ids": []interface{}{sportsGroupID},
+	}, env.adminToken)
+	require.Equal(t, http.StatusCreated, rec.Code)
+	var device map[string]interface{}
+	decodeResponse(t, rec, &device)
+	deviceGroups := device["channel_group_ids"].([]interface{})
+	require.Len(t, deviceGroups, 1)
+	assert.Equal(t, sportsGroupID, deviceGroups[0])
+
+	t.Run("default lineup shows all enabled channels", func(t *testing.T) {
+		rec := doRequest(t, env, "GET", "/lineup.json", nil, "")
+		require.Equal(t, http.StatusOK, rec.Code)
+		var lineup []map[string]interface{}
+		decodeResponse(t, rec, &lineup)
+		assert.Len(t, lineup, 3)
+	})
+
+	t.Run("device has group filter configured", func(t *testing.T) {
+		deviceID := device["id"].(string)
+		rec := doRequest(t, env, "GET", "/api/hdhr/devices/"+deviceID, nil, env.adminToken)
+		require.Equal(t, http.StatusOK, rec.Code)
+		var d map[string]interface{}
+		decodeResponse(t, rec, &d)
+		groups := d["channel_group_ids"].([]interface{})
+		require.Len(t, groups, 1)
+		assert.Equal(t, sportsGroupID, groups[0])
+	})
+}
+
+func TestIntegration_HDHR_NoDevice(t *testing.T) {
+	env := setupFullEnv(t)
+
+	rec := doRequest(t, env, "GET", "/discover.json", nil, "")
+	assert.Equal(t, http.StatusNotFound, rec.Code)
+
+	rec = doRequest(t, env, "GET", "/device.xml", nil, "")
+	assert.Equal(t, http.StatusNotFound, rec.Code)
+}
+
+func createTestChannel(t *testing.T, env *fullTestEnv, name string, token string) string {
+	t.Helper()
+	rec := doRequest(t, env, "POST", "/api/channels/", map[string]interface{}{
+		"name": name, "tvg_id": name, "is_enabled": true,
+	}, token)
+	require.Equal(t, http.StatusCreated, rec.Code)
+	var ch map[string]interface{}
+	decodeResponse(t, rec, &ch)
+	return ch["id"].(string)
+}
+
+func TestIntegration_ScheduleRecording_CRUD(t *testing.T) {
+	env := setupFullEnv(t)
+	channelID := createTestChannel(t, env, "ITV1", env.adminToken)
+
+	var scheduleID string
+	startAt := time.Now().Add(1 * time.Hour).UTC().Truncate(time.Second)
+	stopAt := startAt.Add(1 * time.Hour)
+
+	t.Run("list empty", func(t *testing.T) {
+		rec := doRequest(t, env, "GET", "/api/recordings/schedule", nil, env.adminToken)
+		assert.Equal(t, http.StatusOK, rec.Code)
+		var list []map[string]interface{}
+		decodeResponse(t, rec, &list)
+		assert.Len(t, list, 0)
+	})
+
+	t.Run("create", func(t *testing.T) {
+		rec := doRequest(t, env, "POST", "/api/recordings/schedule", map[string]interface{}{
+			"channel_id":    channelID,
+			"channel_name":  "ITV1",
+			"program_title": "Coronation Street",
+			"start_at":      startAt.Format(time.RFC3339),
+			"stop_at":       stopAt.Format(time.RFC3339),
+		}, env.adminToken)
+		assert.Equal(t, http.StatusCreated, rec.Code)
+		var sr map[string]interface{}
+		decodeResponse(t, rec, &sr)
+		assert.Equal(t, "ITV1", sr["channel_name"])
+		assert.Equal(t, "Coronation Street", sr["program_title"])
+		assert.Equal(t, "pending", sr["status"])
+		scheduleID = sr["id"].(string)
+	})
+
+	t.Run("list", func(t *testing.T) {
+		rec := doRequest(t, env, "GET", "/api/recordings/schedule", nil, env.adminToken)
+		assert.Equal(t, http.StatusOK, rec.Code)
+		var list []map[string]interface{}
+		decodeResponse(t, rec, &list)
+		assert.Len(t, list, 1)
+		assert.Equal(t, scheduleID, list[0]["id"])
+	})
+
+	t.Run("get", func(t *testing.T) {
+		rec := doRequest(t, env, "GET", "/api/recordings/schedule/"+scheduleID, nil, env.adminToken)
+		assert.Equal(t, http.StatusOK, rec.Code)
+		var sr map[string]interface{}
+		decodeResponse(t, rec, &sr)
+		assert.Equal(t, scheduleID, sr["id"])
+		assert.Equal(t, "Coronation Street", sr["program_title"])
+	})
+
+	t.Run("cancel", func(t *testing.T) {
+		rec := doRequest(t, env, "DELETE", "/api/recordings/schedule/"+scheduleID, nil, env.adminToken)
+		assert.Equal(t, http.StatusNoContent, rec.Code)
+	})
+
+	t.Run("verify cancelled", func(t *testing.T) {
+		rec := doRequest(t, env, "GET", "/api/recordings/schedule/"+scheduleID, nil, env.adminToken)
+		assert.Equal(t, http.StatusOK, rec.Code)
+		var sr map[string]interface{}
+		decodeResponse(t, rec, &sr)
+		assert.Equal(t, "cancelled", sr["status"])
+	})
+}
+
+func TestIntegration_ScheduleRecording_Duplicate(t *testing.T) {
+	env := setupFullEnv(t)
+	channelID := createTestChannel(t, env, "BBC One", env.adminToken)
+
+	startAt := time.Now().Add(1 * time.Hour).UTC().Truncate(time.Second)
+	stopAt := startAt.Add(1 * time.Hour)
+
+	body := map[string]interface{}{
+		"channel_id":    channelID,
+		"channel_name":  "BBC One",
+		"program_title": "EastEnders",
+		"start_at":      startAt.Format(time.RFC3339),
+		"stop_at":       stopAt.Format(time.RFC3339),
+	}
+
+	rec := doRequest(t, env, "POST", "/api/recordings/schedule", body, env.adminToken)
+	assert.Equal(t, http.StatusCreated, rec.Code)
+
+	rec = doRequest(t, env, "POST", "/api/recordings/schedule", body, env.adminToken)
+	assert.Equal(t, http.StatusConflict, rec.Code)
+}
+
+func TestIntegration_ScheduleRecording_InvalidChannel(t *testing.T) {
+	env := setupFullEnv(t)
+
+	startAt := time.Now().Add(1 * time.Hour).UTC().Truncate(time.Second)
+	stopAt := startAt.Add(1 * time.Hour)
+
+	rec := doRequest(t, env, "POST", "/api/recordings/schedule", map[string]interface{}{
+		"channel_id":    "nonexistent-id",
+		"channel_name":  "Fake",
+		"program_title": "Nothing",
+		"start_at":      startAt.Format(time.RFC3339),
+		"stop_at":       stopAt.Format(time.RFC3339),
+	}, env.adminToken)
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+}
+
+func TestIntegration_ScheduleRecording_UserIsolation(t *testing.T) {
+	env := setupFullEnv(t)
+	channelID := createTestChannel(t, env, "Channel 4", env.adminToken)
+
+	startAt := time.Now().Add(1 * time.Hour).UTC().Truncate(time.Second)
+	stopAt := startAt.Add(1 * time.Hour)
+
+	rec := doRequest(t, env, "POST", "/api/recordings/schedule", map[string]interface{}{
+		"channel_id":    channelID,
+		"channel_name":  "Channel 4",
+		"program_title": "Hollyoaks",
+		"start_at":      startAt.Format(time.RFC3339),
+		"stop_at":       stopAt.Format(time.RFC3339),
+	}, env.adminToken)
+	require.Equal(t, http.StatusCreated, rec.Code)
+	var sr map[string]interface{}
+	decodeResponse(t, rec, &sr)
+	scheduleID := sr["id"].(string)
+
+	t.Run("user cannot see admin schedule", func(t *testing.T) {
+		rec := doRequest(t, env, "GET", "/api/recordings/schedule", nil, env.userToken)
+		assert.Equal(t, http.StatusOK, rec.Code)
+		var list []map[string]interface{}
+		decodeResponse(t, rec, &list)
+		assert.Len(t, list, 0)
+	})
+
+	t.Run("user cannot get admin schedule", func(t *testing.T) {
+		rec := doRequest(t, env, "GET", "/api/recordings/schedule/"+scheduleID, nil, env.userToken)
+		assert.Equal(t, http.StatusForbidden, rec.Code)
+	})
+
+	t.Run("user cannot cancel admin schedule", func(t *testing.T) {
+		rec := doRequest(t, env, "DELETE", "/api/recordings/schedule/"+scheduleID, nil, env.userToken)
+		assert.Equal(t, http.StatusForbidden, rec.Code)
 	})
 }

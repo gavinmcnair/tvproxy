@@ -1,6 +1,7 @@
 package config
 
 import (
+	"log"
 	"os"
 	"strconv"
 	"time"
@@ -43,6 +44,7 @@ type Config struct {
 	// Recording
 	RecordDir             string
 	RecordDefaultDuration time.Duration
+	RecordStopBuffer      time.Duration
 }
 
 func Load() *Config {
@@ -64,6 +66,7 @@ func Load() *Config {
 		VODSessionTimeout:    envDuration("TVPROXY_VOD_SESSION_TIMEOUT", 5*time.Minute),
 		RecordDir:             envStr("TVPROXY_RECORD_DIR", "/record"),
 		RecordDefaultDuration: envDuration("TVPROXY_RECORD_DEFAULT_DURATION", 4*time.Hour),
+		RecordStopBuffer:      envDuration("TVPROXY_RECORD_STOP_BUFFER", 5*time.Minute),
 	}
 }
 
@@ -99,6 +102,10 @@ func envBool(key string, fallback bool) bool {
 func envDuration(key string, fallback time.Duration) time.Duration {
 	if v := os.Getenv(key); v != "" {
 		if d, err := time.ParseDuration(v); err == nil {
+			if d < 0 {
+				log.Printf("WARNING: %s has negative duration %s, using default %s", key, d, fallback)
+				return fallback
+			}
 			return d
 		}
 	}

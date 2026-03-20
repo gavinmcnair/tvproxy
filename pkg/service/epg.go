@@ -10,6 +10,7 @@ import (
 	"github.com/rs/zerolog"
 
 	"github.com/gavinmcnair/tvproxy/pkg/config"
+	"github.com/gavinmcnair/tvproxy/pkg/httputil"
 	"github.com/gavinmcnair/tvproxy/pkg/models"
 	"github.com/gavinmcnair/tvproxy/pkg/repository"
 	"github.com/gavinmcnair/tvproxy/pkg/xmltv"
@@ -108,6 +109,16 @@ func (s *EPGService) RefreshSource(ctx context.Context, sourceID string) error {
 		return fmt.Errorf("getting source: %w", err)
 	}
 
+	if err := s.refreshSource(ctx, source); err != nil {
+		s.epgSourceRepo.UpdateLastError(ctx, source.ID, err.Error())
+		return err
+	}
+
+	s.epgSourceRepo.UpdateLastError(ctx, source.ID, "")
+	return nil
+}
+
+func (s *EPGService) refreshSource(ctx context.Context, source *models.EPGSource) error {
 	s.log.Info().Str("source_id", source.ID).Str("name", source.Name).Msg("refreshing epg source")
 
 	body, err := s.fetchURL(ctx, source.URL)
@@ -126,8 +137,7 @@ func (s *EPGService) RefreshSource(ctx context.Context, sourceID string) error {
 		Int("programmes", len(tv.Programmes)).
 		Msg("parsed xmltv data")
 
-	// Delete existing data for this source before inserting fresh data
-	existingData, err := s.epgDataRepo.ListBySourceID(ctx, sourceID)
+	existingData, err := s.epgDataRepo.ListBySourceID(ctx, source.ID)
 	if err != nil {
 		return fmt.Errorf("listing existing epg data: %w", err)
 	}
@@ -136,15 +146,14 @@ func (s *EPGService) RefreshSource(ctx context.Context, sourceID string) error {
 			s.log.Error().Err(err).Str("epg_data_id", ed.ID).Msg("failed to delete existing program data")
 		}
 	}
-	if err := s.epgDataRepo.DeleteBySourceID(ctx, sourceID); err != nil {
+	if err := s.epgDataRepo.DeleteBySourceID(ctx, source.ID); err != nil {
 		return fmt.Errorf("deleting existing epg data: %w", err)
 	}
 
-	// Store new EPG channel data via bulk insert
 	epgDataItems := make([]models.EPGData, 0, len(tv.Channels))
 	for _, ch := range tv.Channels {
 		epgDataItems = append(epgDataItems, models.EPGData{
-			EPGSourceID: sourceID,
+			EPGSourceID: source.ID,
 			ChannelID:   ch.ID,
 			Name:        ch.DisplayName,
 			Icon:        ch.Icon,
@@ -154,13 +163,11 @@ func (s *EPGService) RefreshSource(ctx context.Context, sourceID string) error {
 		return fmt.Errorf("bulk creating epg data: %w", err)
 	}
 
-	// Build channel ID to EPGData ID map from the bulk-created items
 	channelIDMap := make(map[string]string, len(epgDataItems))
 	for _, d := range epgDataItems {
 		channelIDMap[d.ChannelID] = d.ID
 	}
 
-	// Build program data slice and bulk insert in batches
 	programs := make([]models.ProgramData, 0, len(tv.Programmes))
 	for _, prog := range tv.Programmes {
 		epgDataID, ok := channelIDMap[prog.Channel]
@@ -168,14 +175,25 @@ func (s *EPGService) RefreshSource(ctx context.Context, sourceID string) error {
 			continue
 		}
 		programs = append(programs, models.ProgramData{
-			EPGDataID:   epgDataID,
-			Title:       prog.Title,
-			Description: prog.Description,
-			Start:       prog.Start,
-			Stop:        prog.Stop,
-			Category:    prog.Category,
-			EpisodeNum:  prog.EpisodeNum,
-			Icon:        prog.Icon,
+			EPGDataID:         epgDataID,
+			Title:             prog.Title,
+			Description:       prog.Description,
+			Start:             prog.Start,
+			Stop:              prog.Stop,
+			Category:          prog.Category,
+			EpisodeNum:        prog.EpisodeNum,
+			Icon:              prog.Icon,
+			Subtitle:          prog.Subtitle,
+			Date:              prog.Date,
+			Language:           prog.Language,
+			IsNew:             prog.IsNew,
+			IsPreviouslyShown: prog.IsPreviouslyShown,
+			Credits:           prog.Credits,
+			Rating:            prog.Rating,
+			RatingIcon:        prog.RatingIcon,
+			StarRating:        prog.StarRating,
+			SubCategories:     prog.SubCategories,
+			EpisodeNumSystem:  prog.EpisodeNumSystem,
 		})
 	}
 
@@ -256,5 +274,5 @@ func (s *EPGService) fetchURL(ctx context.Context, url string) (io.ReadCloser, e
 		return nil, fmt.Errorf("unexpected status code: %d", resp.StatusCode)
 	}
 
-	return resp.Body, nil
+	return httputil.DecompressReader(resp.Body, url)
 }

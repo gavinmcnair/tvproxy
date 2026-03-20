@@ -12,9 +12,11 @@ import (
 	"github.com/rs/zerolog"
 
 	"github.com/gavinmcnair/tvproxy/pkg/config"
+	"github.com/gavinmcnair/tvproxy/pkg/httputil"
 	"github.com/gavinmcnair/tvproxy/pkg/m3u"
 	"github.com/gavinmcnair/tvproxy/pkg/models"
 	"github.com/gavinmcnair/tvproxy/pkg/repository"
+	"github.com/gavinmcnair/tvproxy/pkg/xtream"
 )
 
 // M3UService handles M3U account management and stream synchronization.
@@ -97,6 +99,66 @@ func (s *M3UService) RefreshAccount(ctx context.Context, accountID string) error
 		return fmt.Errorf("getting account: %w", err)
 	}
 
+	if err := s.refreshAccount(ctx, account); err != nil {
+		s.m3uAccountRepo.UpdateLastError(ctx, account.ID, err.Error())
+		return err
+	}
+
+	s.m3uAccountRepo.UpdateLastError(ctx, account.ID, "")
+	return nil
+}
+
+func (s *M3UService) refreshAccount(ctx context.Context, account *models.M3UAccount) error {
+	if account.Type == "xtream" {
+		return s.refreshXtreamAccount(ctx, account)
+	}
+	return s.refreshM3UAccount(ctx, account)
+}
+
+func (s *M3UService) refreshXtreamAccount(ctx context.Context, account *models.M3UAccount) error {
+	s.log.Info().Str("account_id", account.ID).Str("name", account.Name).Msg("refreshing xtream account")
+
+	client := xtream.NewClient(account.URL, account.Username, account.Password, s.config.UserAgent)
+
+	if _, err := client.Authenticate(ctx); err != nil {
+		return fmt.Errorf("xtream authentication failed: %w", err)
+	}
+
+	liveStreams, err := client.GetLiveStreams(ctx)
+	if err != nil {
+		return fmt.Errorf("getting xtream live streams: %w", err)
+	}
+
+	s.log.Info().Int("streams", len(liveStreams)).Msg("fetched xtream live streams")
+
+	seen := make(map[string]struct{}, len(liveStreams))
+	streams := make([]models.Stream, 0, len(liveStreams))
+	keepIDs := make([]string, 0, len(liveStreams))
+	for _, xs := range liveStreams {
+		hash := computeContentHash(xs.Name, account.ID)
+		if _, dup := seen[hash]; dup {
+			continue
+		}
+		seen[hash] = struct{}{}
+		id := deterministicStreamID(hash)
+		keepIDs = append(keepIDs, id)
+		streams = append(streams, models.Stream{
+			ID:           id,
+			M3UAccountID: account.ID,
+			Name:         xs.Name,
+			URL:          client.GetStreamURL(xs.StreamID, "ts"),
+			Group:        xs.CategoryName,
+			Logo:         xs.StreamIcon,
+			TvgID:        xs.EPGChannelID,
+			ContentHash:  hash,
+			IsActive:     true,
+		})
+	}
+
+	return s.upsertAndFinalize(ctx, account, streams, keepIDs)
+}
+
+func (s *M3UService) refreshM3UAccount(ctx context.Context, account *models.M3UAccount) error {
 	s.log.Info().Str("account_id", account.ID).Str("name", account.Name).Msg("refreshing m3u account")
 
 	body, err := s.fetchURL(ctx, account.URL)
@@ -137,6 +199,10 @@ func (s *M3UService) RefreshAccount(ctx context.Context, accountID string) error
 		})
 	}
 
+	return s.upsertAndFinalize(ctx, account, streams, keepIDs)
+}
+
+func (s *M3UService) upsertAndFinalize(ctx context.Context, account *models.M3UAccount, streams []models.Stream, keepIDs []string) error {
 	if err := s.streamRepo.BulkUpsert(ctx, streams); err != nil {
 		return fmt.Errorf("upserting streams: %w", err)
 	}
@@ -148,7 +214,6 @@ func (s *M3UService) RefreshAccount(ctx context.Context, accountID string) error
 	s.streamRepo.Checkpoint(ctx)
 	s.log.Info().Int("count", len(streams)).Msg("upserted streams")
 
-	// Update account refresh time and stream count
 	now := time.Now()
 	if err := s.m3uAccountRepo.UpdateLastRefreshed(ctx, account.ID, now); err != nil {
 		return fmt.Errorf("updating last refreshed: %w", err)
@@ -208,7 +273,7 @@ func (s *M3UService) fetchURL(ctx context.Context, url string) (io.ReadCloser, e
 		return nil, fmt.Errorf("unexpected status code: %d", resp.StatusCode)
 	}
 
-	return resp.Body, nil
+	return httputil.DecompressReader(resp.Body, url)
 }
 
 var streamNamespace = uuid.MustParse("f47ac10b-58cc-4372-a567-0e02b2c3d479")

@@ -41,12 +41,12 @@ func (r *EPGSourceRepository) GetByID(ctx context.Context, id string) (*models.E
 	source := &models.EPGSource{}
 	var lastRefreshed sql.NullTime
 	err := r.db.QueryRowContext(ctx,
-		`SELECT id, name, url, is_enabled, last_refreshed, channel_count, program_count, created_at, updated_at
+		`SELECT id, name, url, is_enabled, last_refreshed, channel_count, program_count, last_error, created_at, updated_at
 		FROM epg_sources WHERE id = ?`, id,
 	).Scan(
 		&source.ID, &source.Name, &source.URL, &source.IsEnabled,
 		&lastRefreshed, &source.ChannelCount, &source.ProgramCount,
-		&source.CreatedAt, &source.UpdatedAt,
+		&source.LastError, &source.CreatedAt, &source.UpdatedAt,
 	)
 	if err != nil {
 		if err == sql.ErrNoRows {
@@ -62,7 +62,7 @@ func (r *EPGSourceRepository) GetByID(ctx context.Context, id string) (*models.E
 
 func (r *EPGSourceRepository) List(ctx context.Context) ([]models.EPGSource, error) {
 	rows, err := r.db.QueryContext(ctx,
-		`SELECT id, name, url, is_enabled, last_refreshed, channel_count, program_count, created_at, updated_at
+		`SELECT id, name, url, is_enabled, last_refreshed, channel_count, program_count, last_error, created_at, updated_at
 		FROM epg_sources ORDER BY created_at`,
 	)
 	if err != nil {
@@ -76,7 +76,7 @@ func (r *EPGSourceRepository) List(ctx context.Context) ([]models.EPGSource, err
 		var lastRefreshed sql.NullTime
 		if err := rows.Scan(
 			&s.ID, &s.Name, &s.URL, &s.IsEnabled, &lastRefreshed,
-			&s.ChannelCount, &s.ProgramCount, &s.CreatedAt, &s.UpdatedAt,
+			&s.ChannelCount, &s.ProgramCount, &s.LastError, &s.CreatedAt, &s.UpdatedAt,
 		); err != nil {
 			return nil, fmt.Errorf("scanning epg source: %w", err)
 		}
@@ -120,6 +120,17 @@ func (r *EPGSourceRepository) UpdateLastRefreshed(ctx context.Context, id string
 	)
 	if err != nil {
 		return fmt.Errorf("updating last refreshed: %w", err)
+	}
+	return nil
+}
+
+func (r *EPGSourceRepository) UpdateLastError(ctx context.Context, id, lastError string) error {
+	_, err := r.db.ExecContext(ctx,
+		`UPDATE epg_sources SET last_error = ?, updated_at = ? WHERE id = ?`,
+		lastError, time.Now(), id,
+	)
+	if err != nil {
+		return fmt.Errorf("updating last error: %w", err)
 	}
 	return nil
 }

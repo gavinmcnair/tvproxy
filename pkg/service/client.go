@@ -66,7 +66,7 @@ func (s *ClientService) GetClient(ctx context.Context, id string) (*models.Clien
 func (s *ClientService) CreateClient(ctx context.Context, client *models.Client, rules []models.ClientMatchRule) error {
 	args := ffmpeg.ComposeStreamProfileArgs("m3u", "none", "copy", "mpegts")
 	profile := &models.StreamProfile{
-		Name:       client.Name,
+		Name:       client.Name + " (Client)",
 		StreamMode: "ffmpeg",
 		SourceType: "m3u",
 		HWAccel:    "none",

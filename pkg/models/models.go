@@ -25,6 +25,7 @@ type M3UAccount struct {
 	LastRefreshed   *time.Time `json:"last_refreshed,omitempty"`
 	StreamCount     int        `json:"stream_count"`
 	RefreshInterval int        `json:"refresh_interval"` // seconds, 0 = use default
+	LastError       string     `json:"last_error"`
 	CreatedAt       time.Time  `json:"created_at"`
 	UpdatedAt       time.Time  `json:"updated_at"`
 }
@@ -119,6 +120,7 @@ type EPGSource struct {
 	LastRefreshed *time.Time `json:"last_refreshed,omitempty"`
 	ChannelCount  int        `json:"channel_count"`
 	ProgramCount  int        `json:"program_count"`
+	LastError     string     `json:"last_error"`
 	CreatedAt     time.Time  `json:"created_at"`
 	UpdatedAt     time.Time  `json:"updated_at"`
 }
@@ -132,15 +134,26 @@ type EPGData struct {
 }
 
 type ProgramData struct {
-	ID          string    `json:"id"`
-	EPGDataID   string    `json:"epg_data_id"`
-	Title       string    `json:"title"`
-	Description string    `json:"description,omitempty"`
-	Start       time.Time `json:"start"`
-	Stop        time.Time `json:"stop"`
-	Category    string    `json:"category,omitempty"`
-	EpisodeNum  string    `json:"episode_num,omitempty"`
-	Icon        string    `json:"icon,omitempty"`
+	ID               string    `json:"id"`
+	EPGDataID        string    `json:"epg_data_id"`
+	Title            string    `json:"title"`
+	Description      string    `json:"description,omitempty"`
+	Start            time.Time `json:"start"`
+	Stop             time.Time `json:"stop"`
+	Category         string    `json:"category,omitempty"`
+	EpisodeNum       string    `json:"episode_num,omitempty"`
+	Icon             string    `json:"icon,omitempty"`
+	Subtitle         string    `json:"subtitle,omitempty"`
+	Date             string    `json:"date,omitempty"`
+	Language         string    `json:"language,omitempty"`
+	IsNew            bool      `json:"is_new,omitempty"`
+	IsPreviouslyShown bool    `json:"is_previously_shown,omitempty"`
+	Credits          string    `json:"credits,omitempty"`
+	Rating           string    `json:"rating,omitempty"`
+	RatingIcon       string    `json:"rating_icon,omitempty"`
+	StarRating       string    `json:"star_rating,omitempty"`
+	SubCategories    string    `json:"sub_categories,omitempty"`
+	EpisodeNumSystem string    `json:"episode_num_system,omitempty"`
 }
 
 type HDHRDevice struct {
@@ -180,4 +193,21 @@ type ClientMatchRule struct {
 	HeaderName string `json:"header_name"`
 	MatchType  string `json:"match_type"`
 	MatchValue string `json:"match_value"`
+}
+
+type ScheduledRecording struct {
+	ID           string    `json:"id"`
+	UserID       string    `json:"user_id"`
+	ChannelID    string    `json:"channel_id"`
+	ChannelName  string    `json:"channel_name"`
+	ProgramTitle string    `json:"program_title"`
+	StartAt      time.Time `json:"start_at"`
+	StopAt       time.Time `json:"stop_at"`
+	Status       string    `json:"status"`
+	SessionID    string    `json:"session_id,omitempty"`
+	SegmentID    string    `json:"segment_id,omitempty"`
+	FilePath     string    `json:"file_path,omitempty"`
+	LastError    string    `json:"last_error,omitempty"`
+	CreatedAt    time.Time `json:"created_at"`
+	UpdatedAt    time.Time `json:"updated_at"`
 }

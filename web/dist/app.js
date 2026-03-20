@@ -1,15 +1,12 @@
-// TVProxy Web UI - Single Page Application
-
 (function() {
   'use strict';
-
-  // ─── DVR State Tracker ─────────────────────────────────────────────────
 
   function createDVRTracker(isLive, duration) {
     var buffered = 0;
     var seekOffset = 0;
     var seeking = false;
     var dur = duration || 0;
+    var live = isLive;
 
     return {
       getPos: function(videoCurrentTime) {
@@ -40,6 +37,11 @@
 
       completeSeek: function() { seeking = false; },
 
+      setDuration: function(d) {
+        if (d > 0) { dur = d; live = false; }
+      },
+      isLive: function() { return live; },
+
       reset: function() {
         seekOffset = 0;
         seeking = false;
@@ -47,14 +49,13 @@
 
       getDisplay: function(videoCurrentTime) {
         var pos = seekOffset + (videoCurrentTime || 0);
-        var total = isLive ? buffered : (dur || buffered);
+        var total = live ? buffered : (dur || buffered);
         var pct = total > 0 ? Math.min(100, Math.max(0, (pos / total) * 100)) : 0;
         return { pos: pos, total: total, pct: pct };
       },
     };
   }
 
-  // ─── State ────────────────────────────────────────────────────────────
   const state = {
     user: null,
     accessToken: localStorage.getItem('access_token'),
@@ -62,7 +63,6 @@
     currentPage: 'dashboard',
   };
 
-  // ─── API Client ───────────────────────────────────────────────────────
   const api = {
     async request(method, path, body) {
       const headers = { 'Content-Type': 'application/json' };
@@ -122,7 +122,6 @@
     },
   };
 
-  // ─── Auth ─────────────────────────────────────────────────────────────
   const auth = {
     async login(username, password) {
       const resp = await fetch('/api/auth/login', {
@@ -175,7 +174,6 @@
     },
   };
 
-  // ─── Toast ────────────────────────────────────────────────────────────
   const toast = {
     show(message, type = 'info') {
       let container = document.querySelector('.toast-container');
@@ -195,7 +193,6 @@
     info(msg) { this.show(msg, 'info'); },
   };
 
-  // ─── Data Cache Utility ───────────────────────────────────────────────
   class DataCache {
     constructor({ loader, searchKeys, label, storageKey }) {
       this._loader = loader;
@@ -310,11 +307,19 @@
   DataCache.offChange = function(fn) { DataCache._listeners = DataCache._listeners.filter(function(f) { return f !== fn; }); };
   DataCache._notify = function() { DataCache._listeners.forEach(function(fn) { fn(); }); };
 
-  // ─── Data Caches ──────────────────────────────────────────────────────
   const epgCache = new DataCache({
     label: 'EPG',
-    loader: () => api.get('/api/epg/data'),
-    searchKeys: ['name', 'channel_id'],
+    loader: async () => {
+      const [epgData, sources] = await Promise.all([
+        api.get('/api/epg/data'),
+        api.get('/api/epg/sources').catch(() => []),
+      ]);
+      const nameMap = {};
+      sources.forEach(s => { nameMap[s.id] = s.name; });
+      epgData.forEach(e => { e._display_name = (nameMap[e.epg_source_id] || 'Unknown') + '/' + e.name; });
+      return epgData;
+    },
+    searchKeys: ['_display_name', 'channel_id'],
     storageKey: 'epg',
   });
 
@@ -344,7 +349,17 @@
 
   const channelsCache = new DataCache({
     label: 'Channels',
-    loader: () => api.get('/api/channels'),
+    loader: async () => {
+      const [channels, nowMap] = await Promise.all([
+        api.get('/api/channels'),
+        api.get('/api/epg/now').catch(() => ({})),
+      ]);
+      channels.forEach(ch => {
+        var prog = ch.tvg_id ? nowMap[ch.tvg_id] : null;
+        ch._now_playing = prog ? prog.title : '';
+      });
+      return channels;
+    },
     searchKeys: ['name', 'tvg_id'],
   });
 
@@ -354,13 +369,19 @@
     searchKeys: ['name'],
   });
 
-  // ─── Router ───────────────────────────────────────────────────────────
   function navigate(page) {
     state.currentPage = page;
     render();
   }
 
-  // ─── HTML Helpers ─────────────────────────────────────────────────────
+  function matchesSearch(text, query) {
+    var words = query.split(/\s+/).filter(Boolean);
+    for (var i = 0; i < words.length; i++) {
+      if (text.indexOf(words[i]) === -1) return false;
+    }
+    return true;
+  }
+
   function h(tag, attrs, ...children) {
     const el = document.createElement(tag);
     if (attrs) {
@@ -383,7 +404,6 @@
     return el;
   }
 
-  // ─── Modal ────────────────────────────────────────────────────────────
   function showModal(title, bodyEl, onSave, saveLabel) {
     const overlay = h('div', { className: 'modal-overlay' });
     const modal = h('div', { className: 'modal' },
@@ -424,7 +444,6 @@
     });
   }
 
-  // ─── Login Page ───────────────────────────────────────────────────────
   function renderLoginPage() {
     const app = document.getElementById('app');
     app.innerHTML = '';
@@ -567,7 +586,6 @@
     passwordInput.focus();
   }
 
-  // ─── Navigation ───────────────────────────────────────────────────────
   let navItems = [
     { section: 'Overview', adminOnly: true },
     { id: 'dashboard', label: 'Dashboard', icon: '\u2302', tip: 'Overview of your TVProxy system status', adminOnly: true },
@@ -590,7 +608,6 @@
     { id: 'settings', label: 'Settings', icon: '\u2699', tip: 'Core application settings', adminOnly: true },
   ];
 
-  // Shared tooltip element
   const tooltipEl = h('div', { className: 'nav-tooltip' });
   tooltipEl.style.cssText = 'position:fixed;background:var(--bg-elevated);color:var(--text-primary);border:1px solid var(--border);border-radius:var(--radius-sm);padding:6px 10px;font-size:12px;max-width:240px;pointer-events:none;opacity:0;transition:opacity 0.15s;z-index:9999;box-shadow:0 4px 12px rgba(0,0,0,0.3);';
   document.body.appendChild(tooltipEl);
@@ -611,11 +628,10 @@
     tooltipEl.style.opacity = '0';
   }
 
-  // ─── EPG Guide Page ──────────────────────────────────────────────────
   function buildEpgGuidePage() {
     const HOUR_WIDTH = 240; // px per hour
     const PX_PER_MIN = HOUR_WIDTH / 60;
-    const CHANNEL_COL = 180;
+    const CHANNEL_COL = 270;
     let currentHours = 6;
     let windowOffset = 0; // in hours from initial start
 
@@ -623,28 +639,33 @@
       container.innerHTML = '';
       container.appendChild(h('div', { className: 'loading-page' }, h('div', { className: 'spinner' }), 'Loading guide...'));
 
-      let channels, groups, guideData;
+      let channels, groups, guideData, scheduledRecs;
       try {
-        [channels, groups, guideData] = await Promise.all([
+        [channels, groups, guideData, scheduledRecs] = await Promise.all([
           channelsCache.getAll(),
           channelGroupsCache.getAll(),
           api.get('/api/epg/guide?hours=' + currentHours),
+          api.get('/api/recordings/schedule').catch(function() { return []; }),
         ]);
       } catch (err) {
         container.innerHTML = '';
         container.appendChild(h('p', { style: 'color: var(--danger)' }, 'Failed to load: ' + err.message));
         return;
       }
+      if (!scheduledRecs) scheduledRecs = [];
+      var scheduledSet = {};
+      scheduledRecs.forEach(function(sr) {
+        if (sr.status === 'pending' || sr.status === 'recording') {
+          scheduledSet[sr.channel_id + '|' + sr.start_at] = sr.id;
+        }
+      });
 
-      // Only show enabled channels with tvg_id
       channels = channels.filter(function(c) { return c.is_enabled; });
       channels.sort(function(a, b) { return a.name.localeCompare(b.name); });
 
-      // Build group lookup
       var groupMap = {};
       groups.forEach(function(g) { groupMap[g.id] = g; });
 
-      // Group channels by channel_group_id, sorted by group sort_order
       var grouped = {};
       var ungrouped = [];
       channels.forEach(function(c) {
@@ -661,7 +682,6 @@
         return (groupMap[a].sort_order || 0) - (groupMap[b].sort_order || 0);
       });
 
-      // Parse guide window timestamps
       var windowStart = new Date(guideData.start).getTime();
       var windowStop = new Date(guideData.stop).getTime();
       var windowMinutes = (windowStop - windowStart) / 60000;
@@ -684,13 +704,11 @@
         return months[d.getMonth()] + ' ' + d.getDate() + ', ' + formatTime(ts);
       }
 
-      // Build hour marks HTML
       var hourMarksHtml = '';
       for (var m = 0; m < windowMinutes; m += 60) {
         hourMarksHtml += '<div class="epg-hour-mark" style="width:' + HOUR_WIDTH + 'px">' + formatTime(windowStart + m * 60000) + '</div>';
       }
 
-      // Build channel row HTML
       var channelCounter = 0;
       function buildChannelRow(ch) {
         channelCounter++;
@@ -714,7 +732,10 @@
           var tooltip = esc(p.title) + ' (' + timeStr + ')';
           if (p.description) tooltip += '&#10;' + esc(p.description.substring(0, 200));
 
-          var recBtnHtml = isPast ? '' : '<button class="epg-record-btn" data-ptitle="' + esc(p.title) + '" data-pstop="' + esc(p.stop) + '">\u23FA</button>';
+          var schedKey = ch.id + '|' + p.start;
+          var isScheduled = !!scheduledSet[schedKey];
+          var recBtnCls = 'epg-record-btn' + (isScheduled ? ' scheduled' : '');
+          var recBtnHtml = isPast ? '' : '<button class="' + recBtnCls + '" data-ptitle="' + esc(p.title) + '" data-pstart="' + esc(p.start) + '" data-pstop="' + esc(p.stop) + '"' + (isScheduled ? ' data-scheduled="' + esc(scheduledSet[schedKey]) + '"' : '') + '>\u23FA</button>';
           programsHtml += '<div class="' + cls + '" style="left:' + leftPx + 'px;width:' + widthPx + 'px" title="' + tooltip + '">' +
             recBtnHtml +
             '<div class="epg-program-title">' + esc(p.title) + '</div>' +
@@ -722,7 +743,6 @@
             '</div>';
         }
 
-        // Empty slot if no programs
         if (chPrograms.length === 0 && ch.tvg_id) {
           programsHtml = '<div class="epg-program" style="left:0;width:' + (totalWidth - 2) + 'px;opacity:0.3"><div class="epg-program-title">No EPG data</div></div>';
         } else if (!ch.tvg_id) {
@@ -743,7 +763,6 @@
         '</div>';
       }
 
-      // Build all rows grouped
       channelCounter = 0;
       var rowsHtml = '';
       for (var gi = 0; gi < sortedGroupIds.length; gi++) {
@@ -764,14 +783,12 @@
         }
       }
 
-      // Now line position
       var nowMin = (now - windowStart) / 60000;
       var nowPx = nowMin * PX_PER_MIN;
       var nowLineHtml = (nowMin >= 0 && nowMin <= windowMinutes)
         ? '<div class="epg-now-line" style="left:' + (CHANNEL_COL + nowPx) + 'px"></div>'
         : '';
 
-      // Build toolbar
       var timeLabelEl = h('span', { className: 'epg-time-label' }, formatDate(windowStart) + ' \u2014 ' + formatDate(windowStop));
 
       var prevBtn = h('button', { className: 'btn btn-secondary btn-sm', onClick: navigate.bind(null, -3) }, '\u2190 Earlier');
@@ -820,7 +837,6 @@
       }
 
       function renderFull() {
-        // Rebuild dynamic parts
         timeLabelEl.textContent = formatDate(windowStart) + ' \u2014 ' + formatDate(windowStop);
 
         hourMarksHtml = '';
@@ -880,22 +896,36 @@
 
         scrollEl.innerHTML = innerHtml;
 
-        // Event delegation for channel and program clicks (play + record)
         scrollEl.addEventListener('click', function(e) {
           var recBtn = e.target.closest('.epg-record-btn');
           if (recBtn) {
             e.stopPropagation();
-            if (recBtn.classList.contains('recording')) return;
+            if (recBtn.classList.contains('recording') || recBtn.classList.contains('scheduled')) return;
             var row = recBtn.closest('.epg-row');
             if (!row) return;
             var ch = row.querySelector('.epg-channel');
             if (!ch) return;
-            var body = { program_title: recBtn.dataset.ptitle || '', channel_name: ch.dataset.chname || '', stop_at: recBtn.dataset.pstop || '' };
-            recBtn.classList.add('recording');
-            recBtn.disabled = true;
-            api.post('/channel/' + ch.dataset.chid + '/record', body).catch(function() {
-              recBtn.classList.remove('recording'); recBtn.disabled = false;
-            });
+            var pStart = recBtn.dataset.pstart || '';
+            var pStop = recBtn.dataset.pstop || '';
+            var pStartTime = pStart ? new Date(pStart).getTime() : 0;
+            var isFuture = pStartTime > Date.now();
+            if (isFuture) {
+              var body = { channel_id: ch.dataset.chid, channel_name: ch.dataset.chname || '', program_title: recBtn.dataset.ptitle || '', start_at: pStart, stop_at: pStop };
+              recBtn.classList.add('scheduled');
+              recBtn.disabled = true;
+              api.post('/api/recordings/schedule', body).then(function() {
+                toast.success('Recording scheduled');
+              }).catch(function() {
+                recBtn.classList.remove('scheduled'); recBtn.disabled = false;
+              });
+            } else {
+              var body = { program_title: recBtn.dataset.ptitle || '', channel_name: ch.dataset.chname || '', stop_at: pStop };
+              recBtn.classList.add('recording');
+              recBtn.disabled = true;
+              api.post('/channel/' + ch.dataset.chid + '/record', body).catch(function() {
+                recBtn.classList.remove('recording'); recBtn.disabled = false;
+              });
+            }
             return;
           }
           var ch = e.target.closest('.epg-channel');
@@ -916,8 +946,6 @@
         container.appendChild(toolbar);
         container.appendChild(scrollEl);
 
-        // Auto-scroll so the now-line is centered in the visible viewport
-        // nowPx is relative to timeline start; subtract half the viewport, add back the sticky channel column
         if (nowMin >= 0 && nowMin <= windowMinutes) {
           var scrollTarget = nowPx - scrollEl.clientWidth / 2 + CHANNEL_COL;
           if (scrollTarget > 0) scrollEl.scrollLeft = scrollTarget;
@@ -934,7 +962,6 @@
     };
   }
 
-  // ─── Stream Groups Page ──────────────────────────────────────────────
   const streamGroupsCache = Object.create(null); // accountId -> { groups, sortedGroups, groupDisplay, groupSearch }
 
   function buildStreamGroupsPage(accountId) {
@@ -945,7 +972,6 @@
       let groups, sortedGroups, groupDisplay, groupSearch;
 
       if (streamGroupsCache[accountId]) {
-        // Use cached grouped data
         var c = streamGroupsCache[accountId];
         groups = c.groups;
         sortedGroups = c.sortedGroups;
@@ -962,7 +988,6 @@
           return;
         }
 
-        // Group streams by group field using plain object (faster than Map for string keys)
         groups = Object.create(null);
         for (let i = 0; i < allStreams.length; i++) {
           const g = allStreams[i].group || '';
@@ -970,14 +995,12 @@
           groups[g].push(allStreams[i]);
         }
 
-        // Sort group names: non-empty alphabetically, empty last
         sortedGroups = Object.keys(groups).sort((a, b) => {
           if (!a) return 1;
           if (!b) return -1;
           return a.localeCompare(b);
         });
 
-        // Pre-build lowercased display names for search
         groupDisplay = new Array(sortedGroups.length);
         groupSearch = new Array(sortedGroups.length);
         for (let i = 0; i < sortedGroups.length; i++) {
@@ -993,10 +1016,8 @@
       let searchTimer = null;
       const rendered = Object.create(null); // tracks which groups have had their table built
 
-      // Escape HTML to prevent XSS from stream names/groups
       function esc(s) { return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
 
-      // Persistent DOM
       const summaryEl = h('h3', null, '');
       const groupsContainer = h('div', null);
 
@@ -1013,7 +1034,6 @@
         }, 300);
       });
 
-      // Event delegation: handle toggle (lazy-render tables) and play button clicks
       groupsContainer.addEventListener('toggle', (e) => {
         const details = e.target;
         if (!details.open || details.tagName !== 'DETAILS') return;
@@ -1022,8 +1042,8 @@
         rendered[gIdx] = true;
         let streams = groups[sortedGroups[gIdx]];
         if (searchTerm) {
-          if (groupSearch[gIdx].indexOf(searchTerm) === -1) {
-            streams = streams.filter(function(s) { return s.name.toLowerCase().indexOf(searchTerm) !== -1; });
+          if (!matchesSearch(groupSearch[gIdx], searchTerm)) {
+            streams = streams.filter(function(s) { return matchesSearch(s.name.toLowerCase(), searchTerm); });
           }
         }
         const tableEl = document.createElement('table');
@@ -1067,11 +1087,9 @@
         for (let i = 0; i < sortedGroups.length; i++) {
           let streams = groups[sortedGroups[i]];
           if (searchTerm) {
-            if (groupSearch[i].indexOf(searchTerm) !== -1) {
-              // Group name matches — show all streams
+            if (matchesSearch(groupSearch[i], searchTerm)) {
             } else {
-              // Filter individual streams by name
-              streams = streams.filter(function(s) { return s.name.toLowerCase().indexOf(searchTerm) !== -1; });
+              streams = streams.filter(function(s) { return matchesSearch(s.name.toLowerCase(), searchTerm); });
               if (streams.length === 0) continue;
             }
           }
@@ -1094,7 +1112,6 @@
         groupsContainer.innerHTML = html.join('');
       }
 
-      // Build shell
       container.innerHTML = '';
       container.appendChild(h('div', { className: 'table-container' },
         h('div', { className: 'stream-groups-header' },
@@ -1110,11 +1127,8 @@
 
   async function rebuildStreamNav() {
     const accounts = await api.get('/api/m3u/accounts').catch(() => []);
-    // Remove existing dynamic stream nav items
     navItems = navItems.filter(n => !n.id || !n.id.startsWith('streams-'));
-    // Remove old dynamic page entries
     Object.keys(pages).forEach(k => { if (k.startsWith('streams-')) delete pages[k]; });
-    // Find the Streams section header and insert account items after it
     const idx = navItems.findIndex(n => n.section === 'Streams');
     if (idx === -1) return;
     const accountNavItems = accounts.map(a => ({
@@ -1124,7 +1138,6 @@
       tip: 'Streams from ' + a.name,
     }));
     navItems.splice(idx + 1, 0, ...accountNavItems);
-    // Register a page for each account
     accounts.forEach(a => {
       pages['streams-' + a.id] = buildStreamGroupsPage(a.id);
     });
@@ -1201,7 +1214,6 @@
     );
   }
 
-  // ─── Dashboard ────────────────────────────────────────────────────────
   async function renderDashboard(container) {
     container.innerHTML = '';
     container.appendChild(h('div', { className: 'loading-page' }, h('div', { className: 'spinner' }), 'Loading...'));
@@ -1215,7 +1227,6 @@
         api.get('/api/hdhr/devices').catch(() => []),
       ]);
 
-      // Stream count from account totals to avoid loading all streams
       const streamCount = accounts.reduce((sum, a) => sum + (a.stream_count || 0), 0);
 
       container.innerHTML = '';
@@ -1239,7 +1250,6 @@
         ),
       );
 
-      // Per-device URLs table
       const enabledDevices = devices.filter(d => d.is_enabled && d.port > 0);
       const hostname = window.location.hostname;
       let deviceUrlsSection;
@@ -1281,7 +1291,6 @@
         );
       }
 
-      // Data cache status section
       const cachesInfo = [
         { cache: streamsCache, icon: '\u25b6' },
         { cache: epgCache, icon: '\ud83d\udcc5' },
@@ -1302,7 +1311,6 @@
         h('div', { style: 'padding: 12px 16px; display: flex; flex-direction: column; gap: 10px' }, ...cacheRows),
       );
 
-      // Live-update the cache section
       function updateDashCache() {
         cachesInfo.forEach(function(ci, i) {
           var c = ci.cache;
@@ -1327,9 +1335,6 @@
     }
   }
 
-  // ─── Generic CRUD Page Builder ────────────────────────────────────────
-  // Loads all data once into memory, then does client-side search/filter/pagination.
-  // Only renders the visible page slice to the DOM.
   function buildCrudPage(config) {
     const perPage = config.perPage || 50;
 
@@ -1344,7 +1349,7 @@
       let groupsInitialized = false;
       const groupsContainerEl = config.groupBy ? h('table') : null;
       try {
-        allItems = await api.get(config.apiPath);
+        allItems = config.cache ? await config.cache.getAll() : await api.get(config.apiPath);
         if (config.groupBy) groupsData = await config.groupBy.loadGroups();
       } catch (err) {
         container.innerHTML = '';
@@ -1378,7 +1383,7 @@
         const q = searchTerm.toLowerCase();
         const result = [];
         for (let i = 0; i < allItems.length; i++) {
-          if (searchIndex[i].indexOf(q) !== -1) {
+          if (matchesSearch(searchIndex[i], q)) {
             result.push(allItems[i]);
           }
         }
@@ -1386,7 +1391,6 @@
         return result;
       }
 
-      // Persistent DOM elements - built once, updated in place
       const countEl = h('h3', null, '');
       const tbodyEl = h('tbody', null);
       const paginationEl = h('div', {
@@ -1497,7 +1501,7 @@
         if (searchTerm) {
           const q = searchTerm.toLowerCase();
           (groupsData || []).forEach(g => {
-            if ((g[gb.nameKey] || '').toLowerCase().indexOf(q) !== -1) {
+            if (matchesSearch((g[gb.nameKey] || '').toLowerCase(), q)) {
               for (let i = 0; i < allItems.length; i++) {
                 if (allItems[i][gb.key] === g.id && !seen.has(allItems[i])) {
                   if (!grouped[g.id]) grouped[g.id] = [];
@@ -1528,7 +1532,6 @@
           groupsInitialized = true;
         }
 
-        // Clear all tbody elements, keep thead
         groupsContainerEl.querySelectorAll('tbody').forEach(el => el.remove());
         let hasContent = false;
 
@@ -1536,7 +1539,6 @@
           const tbody = document.createElement('tbody');
           tbody.dataset.gid = gid;
 
-          // Group header row
           const headerTr = document.createElement('tr');
           headerTr.className = 'group-header-row';
           const headerTd = document.createElement('td');
@@ -1547,7 +1549,6 @@
           headerTd.appendChild(document.createTextNode(label));
           headerTd.appendChild(h('span', { className: 'stream-group-count', style: 'margin-left:8px' }, String(items.length)));
 
-          // Edit/delete buttons for real groups (not ungrouped)
           if (gid !== '__ungrouped__') {
             const group = (groupsData || []).find(g => g.id === gid);
             if (group) {
@@ -1567,7 +1568,6 @@
 
           headerTr.appendChild(headerTd);
 
-          // Toggle data rows on click
           const dataRows = [];
           headerTr.addEventListener('click', (e) => {
             if (e.target.closest('button')) return;
@@ -1638,8 +1638,8 @@
           });
           await api.put(gb.apiPath + '/' + group.id, body);
           toast.success((gb.singular || 'Group') + ' updated');
-          groupsData = await gb.loadGroups();
           if (gb.onChanged) gb.onChanged();
+          groupsData = await gb.loadGroups();
           filteredCache = null;
           updateTable();
         });
@@ -1652,8 +1652,8 @@
         try {
           await api.del(gb.apiPath + '/' + group.id);
           toast.success((gb.singular || 'Group') + ' deleted');
-          groupsData = await gb.loadGroups();
           if (gb.onChanged) gb.onChanged();
+          groupsData = await gb.loadGroups();
           await reloadData();
         } catch (err) {
           toast.error(err.message);
@@ -1684,8 +1684,8 @@
               });
               await api.post(gb.apiPath, body);
               toast.success((gb.singular || 'Group') + ' created');
-              groupsData = await gb.loadGroups();
               if (gb.onChanged) gb.onChanged();
+              groupsData = await gb.loadGroups();
               renderGroupList();
               filteredCache = null;
               updateTable();
@@ -1709,8 +1709,8 @@
                 try {
                   await api.del(gb.apiPath + '/' + group.id);
                   toast.success((gb.singular || 'Group') + ' deleted');
-                  groupsData = await gb.loadGroups();
                   if (gb.onChanged) gb.onChanged();
+                  groupsData = await gb.loadGroups();
                   renderGroupList();
                   filteredCache = null;
                   updateTable();
@@ -1726,7 +1726,6 @@
         showModal('Manage ' + (gb.plural || 'Groups'), bodyEl);
       }
 
-      // Build the shell once
       function buildShell() {
         container.innerHTML = '';
 
@@ -1784,7 +1783,6 @@
         }
       }
 
-      // Fast update - only swaps tbody rows, count text, and pagination
       function updateTable() {
         const filtered = getFiltered();
 
@@ -1798,13 +1796,11 @@
         const start = (currentPage - 1) * perPage;
         const pageItems = filtered.slice(start, start + perPage);
 
-        // Update count
         const countText = searchTerm
           ? config.title + ' (' + filtered.length + ' of ' + allItems.length + ')'
           : config.title + ' (' + allItems.length + ')';
         countEl.textContent = countText;
 
-        // Swap tbody contents
         tbodyEl.innerHTML = '';
         if (pageItems.length === 0) {
           tbodyEl.appendChild(
@@ -1817,7 +1813,6 @@
           }
         }
 
-        // Update pagination
         paginationEl.innerHTML = '';
         if (totalPages > 1) {
           const prevBtn = h('button', { className: 'btn btn-secondary btn-sm',
@@ -1861,9 +1856,9 @@
 
       async function reloadData() {
         try {
-          allItems = await api.get(config.apiPath);
+          if (config.cache) { config.cache.invalidate(); allItems = await config.cache.getAll(); }
+          else { allItems = await api.get(config.apiPath); }
           if (config.groupBy) groupsData = await config.groupBy.loadGroups();
-          if (config.onDataLoaded) await config.onDataLoaded(allItems);
           buildSearchIndex();
           filteredCache = null;
           updateTable();
@@ -1911,6 +1906,14 @@
               placeholder: field.placeholder || '',
             });
             inp.value = isEdit ? (item[field.key] || '') : '';
+            if (isEdit && field.displayValueKey && field.cache && item[field.key]) {
+              var editVal = item[field.key];
+              inp._selectedValue = editVal;
+              field.cache.getAll().then(function(allItems) {
+                var match = allItems.find(function(o) { return o[field.valueKey] === editVal; });
+                if (match) inp.value = match[field.displayValueKey] || editVal;
+              }).catch(function() {});
+            }
             const dropdown = h('div', { className: 'autocomplete-dropdown' });
             dropdown.style.display = 'none';
 
@@ -1969,7 +1972,8 @@
                 }
                 row.appendChild(text);
                 row.addEventListener('click', () => {
-                  inp.value = opt[field.valueKey] || '';
+                  inp.value = (field.displayValueKey ? opt[field.displayValueKey] : opt[field.valueKey]) || '';
+                  inp._selectedValue = opt[field.valueKey] || '';
                   dropdown.style.display = 'none';
                   if (field.onSelect) field.onSelect(opt, inputs);
                 });
@@ -1982,7 +1986,7 @@
               await ensureOptions();
               renderDropdown(inp.value);
             });
-            inp.addEventListener('input', () => { renderDropdown(inp.value); });
+            inp.addEventListener('input', () => { delete inp._selectedValue; renderDropdown(inp.value); });
 
             inp.addEventListener('keydown', (e) => {
               const items = dropdown.querySelectorAll('.autocomplete-item');
@@ -2005,7 +2009,6 @@
               }
             });
 
-            // Close dropdown on outside click
             setTimeout(() => {
               document.addEventListener('click', function acClose(e) {
                 if (!wrapper.contains(e.target)) {
@@ -2240,7 +2243,6 @@
           }
         });
 
-        // showWhen: conditionally show/hide fields based on other field values
         const conditionalFields = [];
         fields.forEach(field => {
           if (field.showWhen && inputs[field.key]) {
@@ -2259,7 +2261,6 @@
               wrapper.style.display = field.showWhen(formValues) ? '' : 'none';
             });
           };
-          // Listen for changes on all inputs
           fields.forEach(f => {
             const el = inputs[f.key];
             if (el) el.addEventListener('change', updateVisibility);
@@ -2291,6 +2292,8 @@
                 body[field.key] = checked;
               } else if (field.type === 'logo-picker') {
                 body[field.key] = el._selectedLogoId || null;
+              } else if (field.type === 'autocomplete' && el._selectedValue !== undefined) {
+                body[field.key] = el._selectedValue;
               } else {
                 body[field.key] = el.value;
               }
@@ -2330,7 +2333,6 @@
     };
   }
 
-  // ─── Video Player Modal ──────────────────────────────────────────────
   const CODEC_NAMES = {
     avc1:'H.264', h264:'H.264', hev1:'H.265', hvc1:'H.265',
     vp8:'VP8', vp9:'VP9', av01:'AV1', mp4a:'AAC', aac:'AAC',
@@ -2339,27 +2341,46 @@
   function codecName(s) { if (!s) return '?'; return CODEC_NAMES[s.split('.')[0].toLowerCase()] || s; }
 
   let activePlayerCleanup = null;
+  let playInProgress = false;
 
   async function playStreamWithVODDetection(streamID, name, tvgId) {
-    let session = null;
+    if (playInProgress) return;
+    playInProgress = true;
+    document.body.style.cursor = 'wait';
     try {
-      const resp = await fetch('/stream/' + streamID + '/vod?profile=Browser', { method: 'POST' }).then(r => r.json());
-      if (resp.session_id) {
-        session = { id: resp.session_id, duration: resp.duration };
-      }
-    } catch(e) {}
-    openVideoPlayer(name, '/stream/' + streamID + '?profile=Browser', tvgId, session);
+      if (activePlayerCleanup) { activePlayerCleanup(); activePlayerCleanup = null; }
+      let session = null;
+      try {
+        const resp = await fetch('/stream/' + streamID + '/vod?profile=Browser', { method: 'POST' }).then(r => r.json());
+        if (resp.session_id) {
+          session = { id: resp.session_id, duration: resp.duration };
+        }
+      } catch(e) {}
+      openVideoPlayer(name, '/stream/' + streamID + '?profile=Browser', tvgId, session);
+    } finally {
+      playInProgress = false;
+      document.body.style.cursor = '';
+    }
   }
 
   async function playChannelWithDVR(channelID, name, tvgId) {
-    let session = null;
+    if (playInProgress) return;
+    playInProgress = true;
+    document.body.style.cursor = 'wait';
     try {
-      const resp = await fetch('/channel/' + channelID + '/vod?profile=Browser', { method: 'POST' }).then(r => r.json());
-      if (resp.session_id) {
-        session = { id: resp.session_id, duration: resp.duration };
-      }
-    } catch(e) {}
-    openVideoPlayer(name, '/channel/' + channelID + '?profile=Browser', tvgId, session, channelID);
+      if (activePlayerCleanup) { activePlayerCleanup(); activePlayerCleanup = null; }
+      let session = null;
+      try {
+        const resp = await fetch('/channel/' + channelID + '/vod?profile=Browser', { method: 'POST' }).then(r => r.json());
+        if (resp.session_id) {
+          session = { id: resp.session_id, duration: resp.duration };
+        }
+      } catch(e) {}
+      openVideoPlayer(name, '/channel/' + channelID + '?profile=Browser', tvgId, session, channelID);
+    } finally {
+      playInProgress = false;
+      document.body.style.cursor = '';
+    }
   }
 
   function openVideoPlayer(title, url, tvgId, dvr, channelID) {
@@ -2378,10 +2399,15 @@
     let stallTimeout = null;
     let isRecording = false;
     let activeSegmentID = null;
-    let segmentOverlays = [];
     let dragState = null;
     let pollFailures = 0;
-    const isLive = !dvr || !dvr.duration;
+    let audioSelect = null;
+    let currentAudioIndex = 0;
+    let profileSelect = null;
+    let currentProfile = 'Browser';
+    let probeData = null;
+    const playerCtx = new AbortController();
+    let isLive = !dvr || !dvr.duration;
     const dvrTracker = dvr ? createDVRTracker(isLive, dvr.duration) : null;
 
     function destroyPlayer() {
@@ -2394,17 +2420,25 @@
       }
     }
 
+    function clearDvrIntervals() {
+      if (dvrPollInterval) { clearInterval(dvrPollInterval); dvrPollInterval = null; }
+      if (dvrPosInterval) { clearInterval(dvrPosInterval); dvrPosInterval = null; }
+    }
+
     function cleanup() {
       activePlayerCleanup = null;
+      playerCtx.abort();
       if (retryTimeout) { clearTimeout(retryTimeout); retryTimeout = null; }
       if (statsInterval) { clearInterval(statsInterval); statsInterval = null; }
       if (progInterval) { clearInterval(progInterval); progInterval = null; }
-      if (dvrPollInterval) { clearInterval(dvrPollInterval); dvrPollInterval = null; }
-      if (dvrPosInterval) { clearInterval(dvrPosInterval); dvrPosInterval = null; }
+      clearDvrIntervals();
       if (stallTimeout) { clearTimeout(stallTimeout); stallTimeout = null; }
       destroyPlayer();
+      document.removeEventListener('fullscreenchange', onFullscreenChange);
+      document.removeEventListener('mousemove', onDocMouseMove);
+      document.removeEventListener('mouseup', onDocMouseUp);
       if (dvr && !isRecording) {
-        fetch('/vod/' + dvr.id, { method: 'DELETE' }).catch(() => {});
+        api.del('/vod/' + dvr.id).catch(() => {});
       }
       video.oncanplay = null;
       video.onerror = null;
@@ -2426,13 +2460,11 @@
                     : m + ':' + String(s).padStart(2,'0');
     }
 
-    // ── Build UI ──
     const overlay = document.createElement('div');
     overlay.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.8);z-index:10000;display:flex;align-items:center;justify-content:center;';
     const modal = document.createElement('div');
     modal.style.cssText = 'background:var(--bg-card);border-radius:8px;padding:16px;max-width:800px;width:90%;position:relative;';
 
-    // Header: title + stats/close buttons
     const header = document.createElement('div');
     header.style.cssText = 'display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;';
     const titleEl = document.createElement('h3');
@@ -2460,6 +2492,65 @@
       recordBtn.title = 'Record';
       if (recFlash) { recFlash.cancel(); recFlash = null; }
     }
+    async function switchProfile(profileName) {
+      if (isRecording) {
+        toast.error('Cannot switch profile while recording');
+        if (profileSelect) profileSelect.value = currentProfile;
+        return;
+      }
+      currentProfile = profileName;
+      audioSelect = null;
+      currentAudioIndex = 0;
+      destroyPlayer();
+      try {
+        await api.del('/vod/' + dvr.id).catch(function() {});
+        var resp;
+        if (channelID) {
+          resp = await fetch('/channel/' + channelID + '/vod?profile=' + encodeURIComponent(profileName), { method: 'POST' }).then(function(r) { return r.json(); });
+        } else {
+          var streamID = url.split('/stream/')[1];
+          if (streamID) streamID = streamID.split('/')[0].split('?')[0];
+          resp = await fetch('/stream/' + streamID + '/vod?profile=' + encodeURIComponent(profileName), { method: 'POST' }).then(function(r) { return r.json(); });
+        }
+        if (resp.session_id) {
+          dvr = { id: resp.session_id, duration: resp.duration };
+          if (dvrTracker) dvrTracker.reset();
+        }
+      } catch(e) {
+        toast.error('Profile switch failed: ' + e.message);
+      }
+      startPlayback();
+    }
+
+    async function switchAudioTrack(trackIndex) {
+      if (isRecording) {
+        toast.error('Cannot switch audio while recording');
+        if (audioSelect) audioSelect.value = currentAudioIndex;
+        return;
+      }
+      currentAudioIndex = trackIndex;
+      destroyPlayer();
+      try {
+        await api.del('/vod/' + dvr.id).catch(function() {});
+        var audioParam = trackIndex > 0 ? '&audio=' + trackIndex : '';
+        var resp;
+        if (channelID) {
+          resp = await fetch('/channel/' + channelID + '/vod?profile=' + encodeURIComponent(currentProfile) + audioParam, { method: 'POST' }).then(function(r) { return r.json(); });
+        } else {
+          var streamID = url.split('/stream/')[1];
+          if (streamID) streamID = streamID.split('/')[0].split('?')[0];
+          resp = await fetch('/stream/' + streamID + '/vod?profile=' + encodeURIComponent(currentProfile) + audioParam, { method: 'POST' }).then(function(r) { return r.json(); });
+        }
+        if (resp.session_id) {
+          dvr = { id: resp.session_id, duration: resp.duration };
+          if (dvrTracker) dvrTracker.reset();
+        }
+      } catch(e) {
+        toast.error('Audio switch failed: ' + e.message);
+      }
+      startPlayback();
+    }
+
     recordBtn.onclick = async function() {
       if (!dvr || !dvrTracker) return;
       if (isRecording) {
@@ -2486,6 +2577,40 @@
     statsBtn.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 294 294" width="14" height="14" fill="currentColor"><path d="M279,250H15c-8.284,0-15,6.716-15,15s6.716,15,15,15h264c8.284,0,15-6.716,15-15S287.284,250,279,250z"/><path d="M30.5,228h47c5.247,0,9.5-4.253,9.5-9.5v-130c0-5.247-4.253-9.5-9.5-9.5h-47c-5.247,0-9.5,4.253-9.5,9.5v130C21,223.747,25.253,228,30.5,228z"/><path d="M123.5,228h47c5.247,0,9.5-4.253,9.5-9.5v-195c0-5.247-4.253-9.5-9.5-9.5h-47c-5.247,0-9.5,4.253-9.5,9.5v195C114,223.747,118.253,228,123.5,228z"/><path d="M216.5,228h47c5.247,0,9.5-4.253,9.5-9.5v-105c0-5.247-4.253-9.5-9.5-9.5h-47c-5.247,0-9.5,4.253-9.5,9.5v105C207,223.747,211.253,228,216.5,228z"/></svg>';
     const closeBtn = document.createElement('button');
     closeBtn.className = 'btn btn-danger btn-sm btn-icon-circle'; closeBtn.textContent = '\u2715'; closeBtn.title = 'Close'; closeBtn.onclick = cleanup;
+    if (dvr) {
+      api.get('/api/settings').then(function(allSettings) {
+        var enabled = false;
+        if (Array.isArray(allSettings)) {
+          allSettings.forEach(function(s) {
+            if (s.key === 'vod_profile_selector' && s.value === 'true') enabled = true;
+          });
+        }
+        if (!enabled) return;
+        profileSelect = document.createElement('select');
+        profileSelect.className = 'btn btn-sm';
+        profileSelect.title = 'Stream Profile';
+        profileSelect.style.cssText = 'padding:2px 6px;font-size:12px;background:var(--bg-card);color:#e0e0e0;border:1px solid var(--border);border-radius:4px;cursor:pointer;max-width:140px;';
+        var defaultOpt = document.createElement('option');
+        defaultOpt.value = 'Browser';
+        defaultOpt.textContent = 'Browser';
+        profileSelect.appendChild(defaultOpt);
+        profileSelect.value = currentProfile;
+        profileSelect.onchange = function() { switchProfile(profileSelect.value); };
+        hdrBtns.insertBefore(profileSelect, recordBtn);
+        return api.get('/api/stream-profiles');
+      }).then(function(profiles) {
+        if (!profileSelect || !Array.isArray(profiles)) return;
+        profileSelect.innerHTML = '';
+        profiles.forEach(function(p) {
+          if (p.is_system && p.name === 'Direct') return;
+          var opt = document.createElement('option');
+          opt.value = p.name;
+          opt.textContent = p.name;
+          profileSelect.appendChild(opt);
+        });
+        profileSelect.value = currentProfile;
+      }).catch(function() {});
+    }
     hdrBtns.appendChild(recordBtn);
     hdrBtns.appendChild(statsBtn);
     hdrBtns.appendChild(closeBtn);
@@ -2493,7 +2618,6 @@
     header.appendChild(hdrBtns);
     modal.appendChild(header);
 
-    // Video container
     const videoWrap = document.createElement('div');
     videoWrap.style.cssText = 'position:relative;background:#000;border-radius:4px;overflow:hidden;';
     const video = document.createElement('video');
@@ -2502,7 +2626,6 @@
     video.volume = parseFloat(localStorage.getItem('tvproxy_volume') || '0.5');
     video.addEventListener('volumechange', () => localStorage.setItem('tvproxy_volume', video.volume));
 
-    // Stats overlay
     const statsOverlay = document.createElement('div');
     statsOverlay.style.cssText = 'display:none;position:absolute;top:8px;left:8px;background:rgba(0,0,0,0.75);color:#fff;padding:8px 10px;border-radius:6px;font-size:11px;font-family:monospace;pointer-events:none;line-height:1.6;z-index:10;';
     statsBtn.onclick = () => { statsOverlay.style.display = statsOverlay.style.display === 'none' ? 'block' : 'none'; };
@@ -2511,11 +2634,9 @@
     videoWrap.appendChild(statsOverlay);
     modal.appendChild(videoWrap);
 
-    // ── Custom Controls ──
     const controls = document.createElement('div');
     controls.style.cssText = 'background:var(--bg-card);padding:6px 0 0;';
 
-    // Seek bar
     const seekOuter = document.createElement('div');
     seekOuter.style.cssText = 'height:6px;background:var(--border);border-radius:3px;cursor:pointer;position:relative;margin-top:20px;margin-bottom:6px;';
     const seekBuf = document.createElement('div');
@@ -2538,7 +2659,6 @@
     seekOuter.appendChild(segDeleteContainer);
     controls.appendChild(seekOuter);
 
-    // Button row: play/pause | time | spacer | live badge | volume | fullscreen
     const btnRow = document.createElement('div');
     btnRow.style.cssText = 'display:flex;align-items:center;gap:8px;font-size:12px;color:#ccc;';
 
@@ -2607,7 +2727,7 @@
       if (document.fullscreenElement) document.exitFullscreen();
       else videoWrap.requestFullscreen().catch(() => {});
     };
-    document.addEventListener('fullscreenchange', () => {
+    function onFullscreenChange() {
       if (document.fullscreenElement === videoWrap) {
         video.style.maxHeight = '100vh';
         videoWrap.style.borderRadius = '0';
@@ -2615,7 +2735,8 @@
         video.style.maxHeight = '450px';
         videoWrap.style.borderRadius = '4px';
       }
-    });
+    }
+    document.addEventListener('fullscreenchange', onFullscreenChange);
 
     btnRow.appendChild(playPauseBtn);
     btnRow.appendChild(timeLabel);
@@ -2626,7 +2747,6 @@
     controls.appendChild(btnRow);
     modal.appendChild(controls);
 
-    // Status bar (EPG info, codec info)
     const statusEl = document.createElement('div');
     statusEl.style.cssText = 'color:#999;font-size:12px;margin-top:6px;';
     modal.appendChild(statusEl);
@@ -2635,7 +2755,6 @@
     overlay.onclick = (e) => { if (e.target === overlay) cleanup(); };
     document.body.appendChild(overlay);
 
-    // ── DVR seek bar logic ──
     function seekTo(seekTime) {
       if (!dvrTracker || !dvr) return;
       var result = dvrTracker.seekTo(seekTime);
@@ -2660,6 +2779,7 @@
 
     seekOuter.onclick = (e) => {
       const rect = seekOuter.getBoundingClientRect();
+      if (rect.width === 0) return;
       const pct = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
       if (!dvrTracker) {
         if (video.duration && isFinite(video.duration)) {
@@ -2772,19 +2892,22 @@
       dragState = { segID: handle.dataset.segId, edge: handle.dataset.edge, rect: seekOuter.getBoundingClientRect(), handle: handle };
     });
 
-    document.addEventListener('mousemove', function(e) {
+    function onDocMouseMove(e) {
       if (!dragState || !dragState.handle) return;
+      if (dragState.rect.width === 0) return;
       e.preventDefault();
       var pct = Math.max(0, Math.min(1, (e.clientX - dragState.rect.left) / dragState.rect.width));
       dragState.handle.style.left = 'calc(' + (pct * 100) + '% - 4px)';
-    });
+    }
+    document.addEventListener('mousemove', onDocMouseMove);
 
-    document.addEventListener('mouseup', function(e) {
+    function onDocMouseUp(e) {
       if (!dragState || !dragState.handle) return;
       var rect = dragState.rect;
       var segID = dragState.segID;
       var edge = dragState.edge;
       dragState = null;
+      if (rect.width === 0) return;
       var pct = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
       var buf = dvrTracker.getBuffered();
       var newOffset = Math.max(0, Math.min(buf, segOffsetFromPct(pct, buf)));
@@ -2797,7 +2920,8 @@
       api.put('/vod/' + dvr.id + '/record/' + segID, body).catch(function(err) {
         toast.error('Update segment failed: ' + err.message);
       });
-    });
+    }
+    document.addEventListener('mouseup', onDocMouseUp);
 
     liveBadge.onclick = () => {
       if (!dvr) return;
@@ -2830,13 +2954,19 @@
 
     if (dvr && dvrTracker) {
       dvrPollInterval = setInterval(async () => {
+        if (playerCtx.signal.aborted) { clearDvrIntervals(); return; }
         try {
-          const resp = await fetch('/vod/' + dvr.id + '/status');
+          const resp = await fetch('/vod/' + dvr.id + '/status', { signal: playerCtx.signal });
+          if (resp.status === 404) {
+            clearDvrIntervals();
+            statusEl.style.color = '#ff6b6b';
+            statusEl.textContent = 'Session ended';
+            return;
+          }
           if (!resp.ok) {
             pollFailures++;
             if (pollFailures >= 3) {
-              if (dvrPollInterval) { clearInterval(dvrPollInterval); dvrPollInterval = null; }
-              if (dvrPosInterval) { clearInterval(dvrPosInterval); dvrPosInterval = null; }
+              clearDvrIntervals();
             }
             return;
           }
@@ -2845,11 +2975,19 @@
           if (st.error && !st.recording) {
             statusEl.style.color = '#ff6b6b';
             statusEl.textContent = 'Source failed: ' + st.error;
-            if (dvrPollInterval) { clearInterval(dvrPollInterval); dvrPollInterval = null; }
-            if (dvrPosInterval) { clearInterval(dvrPosInterval); dvrPosInterval = null; }
+            clearDvrIntervals();
             return;
           }
           dvrTracker.updateBuffered(st.buffered);
+          if (isLive && st.duration > 0) {
+            isLive = false;
+            dvrTracker.setDuration(st.duration);
+            dvr.duration = st.duration;
+          }
+          if (st.profile && st.profile !== currentProfile) {
+            currentProfile = st.profile;
+            if (profileSelect) profileSelect.value = currentProfile;
+          }
           if (st.segments && st.segments.length > 0) {
             var activeSeg = st.segments.find(function(seg) { return seg.status === 'recording'; });
             if (activeSeg) {
@@ -2863,6 +3001,27 @@
             if (isRecording) stopRecordingUI();
             renderSegmentOverlays([], st.buffered);
           }
+          if (st.video || st.audio_tracks) {
+            probeData = { video: st.video || null, audio_tracks: st.audio_tracks || [], duration: st.duration, profile: st.profile || '' };
+          }
+          if (st.audio_tracks && st.audio_tracks.length > 1 && !audioSelect) {
+            audioSelect = document.createElement('select');
+            audioSelect.className = 'btn btn-sm';
+            audioSelect.title = 'Audio Track';
+            audioSelect.style.cssText = 'padding:2px 6px;font-size:12px;background:var(--bg-card);color:#e0e0e0;border:1px solid var(--border);border-radius:4px;cursor:pointer;max-width:120px;';
+            st.audio_tracks.forEach(function(t) {
+              var opt = document.createElement('option');
+              opt.value = t.index;
+              var label = t.language ? t.language.toUpperCase() : 'Track ' + (t.index + 1);
+              if (t.codec) label += ' (' + t.codec + ')';
+              opt.textContent = label;
+              audioSelect.appendChild(opt);
+            });
+            audioSelect.value = st.audio_index || 0;
+            currentAudioIndex = st.audio_index || 0;
+            audioSelect.onchange = function() { switchAudioTrack(parseInt(audioSelect.value, 10)); };
+            hdrBtns.insertBefore(audioSelect, recordBtn);
+          }
           var buf = st.buffered;
           const epg = getEpgTiming();
           if (isLive && epg) {
@@ -2873,6 +3032,8 @@
             epgMarker.style.display = 'block';
             epgMarker.style.left = Math.min(100, (epg.elapsed / epg.duration) * 100) + '%';
           } else if (!isLive) {
+            seekBuf.style.left = '0%';
+            epgMarker.style.display = 'none';
             const total = dvr.duration || buf;
             if (total > 0) seekBuf.style.width = Math.min(100, (buf / total) * 100) + '%';
             if (st.ready) {
@@ -2880,18 +3041,20 @@
               seekBuf.style.background = 'rgba(76,175,80,0.5)';
             }
           } else {
+            seekBuf.style.left = '0%';
             seekBuf.style.width = '100%';
+            epgMarker.style.display = 'none';
           }
         } catch(e) {
           pollFailures++;
           if (pollFailures >= 3) {
-            if (dvrPollInterval) { clearInterval(dvrPollInterval); dvrPollInterval = null; }
-            if (dvrPosInterval) { clearInterval(dvrPosInterval); dvrPosInterval = null; }
+            clearDvrIntervals();
           }
         }
       }, 2000);
 
       dvrPosInterval = setInterval(() => {
+        if (playerCtx.signal.aborted) { clearDvrIntervals(); return; }
         if (!video || dvrTracker.isSeeking()) return;
         var d = dvrTracker.getDisplay(video.currentTime);
         const epg = getEpgTiming();
@@ -2915,6 +3078,7 @@
       }, 500);
     } else {
       dvrPosInterval = setInterval(() => {
+        if (playerCtx.signal.aborted) { clearDvrIntervals(); return; }
         if (!video || !video.duration || !isFinite(video.duration)) return;
         var pct = (video.currentTime / video.duration) * 100;
         seekPos.style.width = pct + '%';
@@ -2923,33 +3087,53 @@
       }, 500);
     }
 
-    // ── Stats updater ──
     function updateStats() {
-      const res = (video.videoWidth && video.videoHeight) ? video.videoWidth + 'x' + video.videoHeight : '?';
-      const buf = video.buffered.length > 0 ? (video.buffered.end(0) - video.currentTime).toFixed(1) + 's' : '0s';
+      if (playerCtx.signal.aborted) return;
+      var lines = [];
+      var res = (video.videoWidth && video.videoHeight) ? video.videoWidth + 'x' + video.videoHeight : null;
+      var buf = video.buffered.length > 0 ? (video.buffered.end(0) - video.currentTime).toFixed(1) + 's' : '0s';
+      var vi = probeData && probeData.video ? probeData.video : null;
+      var at = probeData && probeData.audio_tracks ? probeData.audio_tracks : [];
+      var activeAudio = at.length > 0 ? at[currentAudioIndex] || at[0] : null;
+
       if (mpegtsPlayer && mpegtsPlayer.statisticsInfo) {
-        const stats = mpegtsPlayer.statisticsInfo;
-        const mi = mpegtsPlayer.mediaInfo || {};
-        const speed = stats.speed != null ? (stats.speed / 1024).toFixed(2) + ' MB/s' : '?';
-        const fps = mi.fps || '?';
-        const dropped = (stats.droppedFrames != null) ? stats.droppedFrames : '?';
-        statsOverlay.innerHTML =
-          'Res: ' + res + '<br>' +
-          'Speed: ' + speed + '<br>' +
-          'FPS: ' + fps + '<br>' +
-          'Dropped: ' + dropped + '<br>' +
-          'Buffer: ' + buf + '<br>' +
-          'Video: ' + codecName(mi.videoCodec) + '<br>' +
-          'Audio: ' + codecName(mi.audioCodec);
+        var stats = mpegtsPlayer.statisticsInfo;
+        var mi = mpegtsPlayer.mediaInfo || {};
+        lines.push('Resolution: ' + (res || '?'));
+        lines.push('Video: ' + codecName(mi.videoCodec) + (vi && vi.profile ? ' (' + vi.profile + ')' : ''));
+        lines.push('FPS: ' + (vi && vi.fps ? vi.fps : (mi.fps || '?')));
+        lines.push('Audio: ' + codecName(mi.audioCodec) + (activeAudio && activeAudio.language ? ' [' + activeAudio.language + ']' : ''));
+        if (activeAudio && activeAudio.channels) lines.push('Channels: ' + activeAudio.channels + 'ch' + (activeAudio.sample_rate ? ' @ ' + activeAudio.sample_rate + ' Hz' : ''));
+        if (vi && vi.color_space && vi.color_space !== 'unknown') lines.push('Color: ' + vi.color_space + (vi.color_transfer && vi.color_transfer !== 'unknown' ? '/' + vi.color_transfer : ''));
+        if (vi && vi.pix_fmt) lines.push('Pixel: ' + vi.pix_fmt);
+        if (vi && vi.field_order && vi.field_order !== 'unknown' && vi.field_order !== 'progressive') lines.push('Scan: ' + vi.field_order);
+        lines.push('Container: ' + (currentContainer || '?'));
+        lines.push('Buffer: ' + buf);
+        lines.push('Speed: ' + (stats.speed != null ? (stats.speed / 1024).toFixed(2) + ' MB/s' : '?'));
+        lines.push('Dropped: ' + (stats.droppedFrames != null ? stats.droppedFrames : '?'));
       } else {
-        statsOverlay.innerHTML =
-          'Res: ' + res + '<br>' +
-          'Container: ' + (currentContainer || '?') + '<br>' +
-          'Buffer: ' + buf;
+        lines.push('Resolution: ' + (res || (vi ? vi.codec : '?')));
+        if (vi) {
+          lines.push('Video: ' + vi.codec + (vi.profile ? ' (' + vi.profile + ')' : ''));
+          if (vi.fps) lines.push('FPS: ' + vi.fps);
+          if (vi.bit_rate) lines.push('Video BR: ' + (parseInt(vi.bit_rate) / 1000).toFixed(0) + ' kbps');
+        }
+        if (activeAudio) {
+          lines.push('Audio: ' + activeAudio.codec + (activeAudio.language ? ' [' + activeAudio.language + ']' : '') + (activeAudio.profile ? ' (' + activeAudio.profile + ')' : ''));
+          if (activeAudio.channels) lines.push('Channels: ' + activeAudio.channels + 'ch' + (activeAudio.sample_rate ? ' @ ' + activeAudio.sample_rate + ' Hz' : ''));
+          if (activeAudio.bit_rate) lines.push('Audio BR: ' + (parseInt(activeAudio.bit_rate) / 1000).toFixed(0) + ' kbps');
+        }
+        if (vi && vi.color_space && vi.color_space !== 'unknown') lines.push('Color: ' + vi.color_space + (vi.color_transfer && vi.color_transfer !== 'unknown' ? '/' + vi.color_transfer : '') + (vi.color_primaries && vi.color_primaries !== 'unknown' ? '/' + vi.color_primaries : ''));
+        if (vi && vi.pix_fmt) lines.push('Pixel: ' + vi.pix_fmt);
+        if (vi && vi.field_order && vi.field_order !== 'unknown' && vi.field_order !== 'progressive') lines.push('Scan: ' + vi.field_order);
+        lines.push('Container: ' + (currentContainer || '?'));
+        lines.push('Buffer: ' + buf);
       }
+      if (probeData && probeData.duration > 0) lines.push('Duration: ' + fmtTime(probeData.duration));
+      if (probeData && probeData.profile) lines.push('Profile: ' + probeData.profile);
+      statsOverlay.innerHTML = lines.join('<br>');
     }
 
-    // ── EPG Now Playing ──
     function formatTime(d) {
       return new Date(d).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
     }
@@ -2974,7 +3158,7 @@
     }
 
     function fetchNowPlaying() {
-      if (!tvgId) return;
+      if (!tvgId || playerCtx.signal.aborted) return;
       api.get('/api/epg/now?channel_id=' + encodeURIComponent(tvgId)).then(program => {
         if (program && program.title) {
           nowProgram = program;
@@ -2988,7 +3172,6 @@
       progInterval = setInterval(fetchNowPlaying, 60000);
     }
 
-    // ── Playback ──
     const isBrowserProfile = url.includes('profile=Browser');
 
     function startPlayback() {
@@ -3053,6 +3236,7 @@
     }
 
     function handleRetry() {
+      if (playerCtx.signal.aborted) return;
       if (retryCount >= MAX_RETRIES) {
         statusEl.style.color = '#ff6b6b';
         statusEl.textContent = 'Source unavailable. ';
@@ -3072,8 +3256,9 @@
       if (dvr && channelID) {
         retryTimeout = setTimeout(async () => {
           try {
-            fetch('/vod/' + dvr.id, { method: 'DELETE' }).catch(() => {});
-            const resp = await fetch('/channel/' + channelID + '/vod?profile=Browser', { method: 'POST' }).then(r => r.json());
+            await api.del('/vod/' + dvr.id).catch(() => {});
+            var audioParam = currentAudioIndex > 0 ? '&audio=' + currentAudioIndex : '';
+            const resp = await fetch('/channel/' + channelID + '/vod?profile=' + encodeURIComponent(currentProfile) + audioParam, { method: 'POST' }).then(r => r.json());
             if (resp.session_id) {
               dvr = { id: resp.session_id, duration: resp.duration };
               if (dvrTracker) dvrTracker.reset();
@@ -3096,7 +3281,6 @@
             var pos = dvrTracker.getPos(video.currentTime);
             seekTo(Math.min(pos, dvrTracker.getBuffered()));
           }
-          // Non-DVR: just keep waiting, video element will resume when data arrives
         }
       }, dvr ? 5000 : 30000);
     });
@@ -3133,7 +3317,6 @@
     }
   }
 
-  // ─── Quick Add Channel from Streams ──────────────────────────────────
   async function quickAddChannel(streamId, streamName, tvgId, logoUrl) {
     const nameInp = h('input', { type: 'text', value: streamName });
     const groupSelect = h('select');
@@ -3146,7 +3329,6 @@
       });
     } catch {}
 
-    // Auto-match EPG
     let matchedEpg = null;
     if (tvgId) {
       const epgData = await epgCache.getAll().catch(() => []);
@@ -3163,7 +3345,7 @@
 
     const tvgInp = h('input', { type: 'text', value: matchedEpg ? matchedEpg.channel_id : (tvgId || '') });
     const statusEl = matchedEpg
-      ? h('small', { style: 'color:var(--success)' }, 'Auto-matched: ' + matchedEpg.name)
+      ? h('small', { style: 'color:var(--success)' }, 'Auto-matched: ' + (matchedEpg._display_name || matchedEpg.name))
       : h('small', { style: 'color:var(--text-muted)' }, tvgId ? 'Using stream tvg-id' : 'No EPG match found');
 
     const bodyEl = h('div', null,
@@ -3182,7 +3364,6 @@
         is_enabled: true,
       };
 
-      // Resolve logo
       if (logoUrl || (matchedEpg && matchedEpg.icon)) {
         channelData.logo = logoUrl || matchedEpg.icon;
       }
@@ -3194,7 +3375,6 @@
     }, 'Add Channel');
   }
 
-  // ─── Page Definitions ─────────────────────────────────────────────────
   const pages = {
     dashboard: renderDashboard,
 
@@ -3205,7 +3385,11 @@
       create: true,
       update: true,
       columns: [
-        { key: 'name', label: 'Name' },
+        { key: 'name', label: 'Name', render: item => {
+          const wrap = h('span', null, item.name);
+          if (item.last_error) wrap.appendChild(h('div', { style: 'color:var(--danger);font-size:0.85em;margin-top:2px' }, item.last_error));
+          return wrap;
+        }},
         { key: 'type', label: 'Type', render: item => h('span', { className: 'badge badge-info' }, item.type || 'm3u') },
         { key: 'url', label: 'URL', render: item => {
           const url = item.url || '';
@@ -3248,6 +3432,7 @@
       title: 'Channels',
       singular: 'Channel',
       apiPath: '/api/channels',
+      cache: channelsCache,
       create: true,
       update: true,
       onChange: () => channelsCache.invalidate(),
@@ -3277,7 +3462,10 @@
           }
           return span;
         }},
-        { key: 'is_enabled', label: 'Status', render: item =>
+        { key: '_now_playing', label: 'Now Playing', tdStyle: 'font-weight:normal;color:var(--text-secondary);font-size:13px', render: item =>
+          item._now_playing ? h('span', null, item._now_playing) : h('span', { style: 'color:var(--text-muted)' }, '-')
+        },
+        { key: 'is_enabled', label: 'Status', thStyle: 'width:80px', render: item =>
           h('span', { className: 'badge ' + (item.is_enabled ? 'badge-success' : 'badge-danger') }, item.is_enabled ? 'Enabled' : 'Disabled')
         },
       ],
@@ -3289,7 +3477,9 @@
           help: 'Type to search EPG channels. Auto-matches when you enter a channel name above.',
           cache: epgCache,
           valueKey: 'channel_id',
-          displayKey: 'name',
+          displayValueKey: '_display_name',
+          displayKey: '_display_name',
+          secondaryKey: 'channel_id',
           onSelect: (epg, inputs) => {
             if (epg.icon && inputs.logo_id && !inputs.logo_id._selectedLogoId) {
               findOrCreateLogoByUrl(epg.icon, epg.name, inputs);
@@ -3342,7 +3532,6 @@
         { label: 'Play', icon: '\u25B6', handler: () => playChannelWithDVR(item.id, item.name, item.tvg_id || undefined) },
       ],
       postFormSetup: (inputs, isEdit, item) => {
-        // Load existing stream assignment when editing
         if (isEdit && inputs._stream && item.id) {
           Promise.all([
             api.get('/api/channels/' + item.id + '/streams'),
@@ -3357,18 +3546,15 @@
             }
           }).catch(() => {});
         }
-        // Auto-match EPG when channel name is entered
         if (inputs.name) {
           inputs.name.addEventListener('blur', async () => {
             const nameVal = inputs.name.value.trim();
             if (!nameVal) return;
-            // Only auto-match if tvg_id is empty
             if (inputs.tvg_id && inputs.tvg_id.value) return;
 
             const epgData = await epgCache.getAll();
             if (!epgData.length) return;
 
-            // Normalize name for matching: lowercase, remove common suffixes
             const normalized = nameVal.toLowerCase().replace(/\s*(hd|sd|fhd|uhd|\+1|_hd|_sd)\s*$/i, '').trim();
 
             let bestMatch = null;
@@ -3388,11 +3574,12 @@
             }
 
             if (bestMatch && bestScore >= 70) {
-              inputs.tvg_id.value = bestMatch.channel_id;
+              inputs.tvg_id.value = bestMatch._display_name || bestMatch.name;
+              inputs.tvg_id._selectedValue = bestMatch.channel_id;
               if (bestMatch.icon && inputs.logo_id && !inputs.logo_id._selectedLogoId) {
                 findOrCreateLogoByUrl(bestMatch.icon, bestMatch.name, inputs);
               }
-              toast.info('Auto-matched EPG: ' + bestMatch.name + ' (' + bestMatch.channel_id + ')');
+              toast.info('Auto-matched EPG: ' + (bestMatch._display_name || bestMatch.name) + ' (' + bestMatch.channel_id + ')');
             }
           });
         }
@@ -3468,7 +3655,11 @@
         update: isAdmin,
         delete: isAdmin,
         columns: [
-          { key: 'name', label: 'Name' },
+          { key: 'name', label: 'Name', render: item => {
+            const wrap = h('span', null, item.name);
+            if (item.last_error) wrap.appendChild(h('div', { style: 'color:var(--danger);font-size:0.85em;margin-top:2px' }, item.last_error));
+            return wrap;
+          }},
           { key: 'url', label: 'URL', render: item => {
             const url = item.url || '';
             return url.length > 50 ? url.substring(0, 50) + '...' : url;
@@ -3774,7 +3965,6 @@
                 match_rules: matchRules,
               });
               clients.push(created);
-              // Refresh profiles since a new one was auto-created
               try { profiles = await api.get('/api/stream-profiles'); profiles = Array.isArray(profiles) ? profiles : []; profiles.forEach(p => { profileMap[p.id] = p.name; }); } catch(e) {}
               toast.success('Client created');
             }
@@ -3971,9 +4161,57 @@
         }
       }
 
+      async function renderScheduled(scheduledDiv) {
+        try {
+          var recordings = await api.get('/api/recordings/schedule');
+          scheduledDiv.innerHTML = '';
+          if (!recordings || recordings.length === 0) {
+            scheduledDiv.appendChild(h('p', { style: 'color: var(--text-muted); padding: 16px;' }, 'No scheduled recordings.'));
+            return;
+          }
+          var table = h('table', { className: 'table' });
+          table.innerHTML = '<thead><tr><th>Channel</th><th>Program</th><th>Start</th><th>Stop</th><th>Status</th><th>Actions</th></tr></thead>';
+          var tbody = h('tbody');
+          recordings.forEach(function(rec) {
+            var startStr = new Date(rec.start_at).toLocaleString();
+            var stopStr = new Date(rec.stop_at).toLocaleString();
+            var badge = h('span', { className: 'schedule-status-badge ' + rec.status }, rec.status);
+            var actions = h('td', { style: 'display:flex;gap:4px;' });
+            if (rec.status === 'pending' || rec.status === 'recording') {
+              var cancelBtn = h('button', { className: 'btn btn-danger btn-sm', onClick: async function() {
+                if (!confirm('Cancel scheduled recording "' + (rec.program_title || '') + '"?')) return;
+                await api.del('/api/recordings/schedule/' + rec.id);
+                renderScheduled(scheduledDiv);
+              }}, 'Cancel');
+              actions.appendChild(cancelBtn);
+            }
+            var tr = h('tr', null,
+              h('td', null, rec.channel_name),
+              h('td', null, rec.program_title),
+              h('td', null, startStr),
+              h('td', null, stopStr),
+              h('td', null, badge),
+              actions
+            );
+            tbody.appendChild(tr);
+          });
+          table.appendChild(tbody);
+          scheduledDiv.appendChild(table);
+        } catch(err) {
+          scheduledDiv.innerHTML = '';
+          scheduledDiv.appendChild(h('p', { style: 'color: var(--danger)' }, 'Failed to load: ' + err.message));
+        }
+      }
+
       container.innerHTML = '';
 
-      var activeSection = h('div', { className: 'table-container' },
+      var scheduledSection = h('div', { className: 'table-container' },
+        h('div', { className: 'table-header' }, h('h3', null, 'Scheduled Recordings'))
+      );
+      var scheduledDiv = h('div');
+      scheduledSection.appendChild(scheduledDiv);
+
+      var activeSection = h('div', { className: 'table-container', style: 'margin-top: 16px;' },
         h('div', { className: 'table-header' }, h('h3', null, 'Active Recordings'))
       );
       var activeDiv = h('div');
@@ -3985,13 +4223,15 @@
       var completedDiv = h('div');
       completedSection.appendChild(completedDiv);
 
+      container.appendChild(scheduledSection);
       container.appendChild(activeSection);
       container.appendChild(completedSection);
 
+      renderScheduled(scheduledDiv);
       renderActive(activeDiv);
       renderCompleted(completedDiv);
 
-      pollTimer = setInterval(function() { renderActive(activeDiv); }, 5000);
+      pollTimer = setInterval(function() { renderScheduled(scheduledDiv); renderActive(activeDiv); }, 5000);
 
       var observer = new MutationObserver(function() {
         if (!document.body.contains(container)) {
@@ -4010,42 +4250,30 @@
         const settings = await api.get('/api/settings');
         container.innerHTML = '';
 
-        const inputs = {};
-        const formEl = h('div');
-
-        (Array.isArray(settings) ? settings : []).forEach(s => {
-          const inp = h('input', { type: 'text', id: 'setting-' + s.key });
-          inp.value = s.value || '';
-          inputs[s.key] = inp;
-          formEl.appendChild(h('div', { className: 'form-group' },
-            h('label', { for: 'setting-' + s.key }, s.key),
-            inp,
-          ));
-        });
-
-        if (Object.keys(inputs).length === 0) {
-          formEl.appendChild(h('p', { style: 'color: var(--text-muted)' }, 'No settings configured yet.'));
-        }
-
-        const saveBtn = h('button', { className: 'btn btn-primary', onClick: async () => {
-          saveBtn.disabled = true;
+        const vodProfileEnabled = (Array.isArray(settings) ? settings : []).some(s => s.key === 'vod_profile_selector' && s.value === 'true');
+        const vodProfileToggle = h('input', { type: 'checkbox', id: 'setting-vod-profile-selector' });
+        vodProfileToggle.checked = vodProfileEnabled;
+        vodProfileToggle.onchange = async function() {
+          vodProfileToggle.disabled = true;
           try {
-            const body = {};
-            for (const [k, inp] of Object.entries(inputs)) {
-              body[k] = inp.value;
-            }
-            await api.put('/api/settings', body);
-            toast.success('Settings saved');
+            await api.put('/api/settings', { vod_profile_selector: vodProfileToggle.checked ? 'true' : 'false' });
+            toast.success('Setting saved');
           } catch (err) {
             toast.error(err.message);
+            vodProfileToggle.checked = !vodProfileToggle.checked;
           }
-          saveBtn.disabled = false;
-        }}, 'Save Settings');
+          vodProfileToggle.disabled = false;
+        };
 
         container.appendChild(h('div', { className: 'table-container' },
-          h('div', { className: 'table-header' }, h('h3', null, 'Application Settings')),
-          h('div', { style: 'padding: 16px' }, formEl,
-            Object.keys(inputs).length > 0 ? h('div', { style: 'margin-top: 16px' }, saveBtn) : null,
+          h('div', { className: 'table-header' }, h('h3', null, 'Player Settings')),
+          h('div', { style: 'padding: 16px; font-size: 15px' },
+            h('div', { style: 'display:flex;align-items:center;gap:10px' },
+              vodProfileToggle,
+              h('label', { for: 'setting-vod-profile-selector', style: 'cursor:pointer;margin:0' }, 'Show profile selector in VOD player'),
+            ),
+            h('p', { style: 'color: var(--text-muted); margin-top: 8px; font-size: 13px' },
+              'When enabled, the VOD player shows a dropdown to switch between stream profiles for testing transcoding. When disabled, Browser profile is always used.'),
           ),
         ));
 
@@ -4090,7 +4318,6 @@
     },
   };
 
-  // ─── Main Render ──────────────────────────────────────────────────────
   function render() {
     if (!auth.isLoggedIn()) {
       if (state.currentPage === 'invite') {
@@ -4133,7 +4360,6 @@
     }
   }
 
-  // ─── Init ─────────────────────────────────────────────────────────────
   async function init() {
     const hash = window.location.hash.replace(/^#\/?/, '');
     if (hash.startsWith('invite/')) {

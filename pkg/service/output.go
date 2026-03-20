@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -254,24 +255,102 @@ func (s *OutputService) writeXMLProgramme(b *strings.Builder, channelID string, 
 	b.WriteString(fmt.Sprintf(`    <title>%s</title>`, xmlEscape(prog.Title)))
 	b.WriteString("\n")
 
+	if prog.Subtitle != "" {
+		b.WriteString(fmt.Sprintf(`    <sub-title>%s</sub-title>`, xmlEscape(prog.Subtitle)))
+		b.WriteString("\n")
+	}
 	if prog.Description != "" {
 		b.WriteString(fmt.Sprintf(`    <desc>%s</desc>`, xmlEscape(prog.Description)))
 		b.WriteString("\n")
+	}
+	if prog.Date != "" {
+		b.WriteString(fmt.Sprintf(`    <date>%s</date>`, xmlEscape(prog.Date)))
+		b.WriteString("\n")
+	}
+	if prog.Credits != "" {
+		s.writeXMLCredits(b, prog.Credits)
 	}
 	if prog.Category != "" {
 		b.WriteString(fmt.Sprintf(`    <category>%s</category>`, xmlEscape(prog.Category)))
 		b.WriteString("\n")
 	}
+	if prog.SubCategories != "" {
+		var extras []string
+		if json.Unmarshal([]byte(prog.SubCategories), &extras) == nil {
+			for _, cat := range extras {
+				b.WriteString(fmt.Sprintf(`    <category>%s</category>`, xmlEscape(cat)))
+				b.WriteString("\n")
+			}
+		}
+	}
+	if prog.Language != "" {
+		b.WriteString(fmt.Sprintf(`    <language>%s</language>`, xmlEscape(prog.Language)))
+		b.WriteString("\n")
+	}
 	if prog.EpisodeNum != "" {
-		b.WriteString(fmt.Sprintf(`    <episode-num system="onscreen">%s</episode-num>`, xmlEscape(prog.EpisodeNum)))
+		system := prog.EpisodeNumSystem
+		if system == "" {
+			system = "onscreen"
+		}
+		b.WriteString(fmt.Sprintf(`    <episode-num system="%s">%s</episode-num>`, xmlEscape(system), xmlEscape(prog.EpisodeNum)))
 		b.WriteString("\n")
 	}
 	if prog.Icon != "" {
 		b.WriteString(fmt.Sprintf(`    <icon src="%s" />`, xmlEscape(prog.Icon)))
 		b.WriteString("\n")
 	}
+	if prog.Rating != "" {
+		b.WriteString(`    <rating>` + "\n")
+		b.WriteString(fmt.Sprintf(`      <value>%s</value>`, xmlEscape(prog.Rating)))
+		b.WriteString("\n")
+		if prog.RatingIcon != "" {
+			b.WriteString(fmt.Sprintf(`      <icon src="%s" />`, xmlEscape(prog.RatingIcon)))
+			b.WriteString("\n")
+		}
+		b.WriteString(`    </rating>` + "\n")
+	}
+	if prog.StarRating != "" {
+		b.WriteString(`    <star-rating>` + "\n")
+		b.WriteString(fmt.Sprintf(`      <value>%s</value>`, xmlEscape(prog.StarRating)))
+		b.WriteString("\n")
+		b.WriteString(`    </star-rating>` + "\n")
+	}
+	if prog.IsPreviouslyShown {
+		b.WriteString(`    <previously-shown />` + "\n")
+	}
+	if prog.IsNew {
+		b.WriteString(`    <new />` + "\n")
+	}
 
 	b.WriteString("  </programme>\n")
+}
+
+func (s *OutputService) writeXMLCredits(b *strings.Builder, creditsJSON string) {
+	var creds struct {
+		Directors []string `json:"directors"`
+		Actors    []string `json:"actors"`
+		Writers   []string `json:"writers"`
+	}
+	if json.Unmarshal([]byte(creditsJSON), &creds) != nil {
+		return
+	}
+	if len(creds.Directors) == 0 && len(creds.Actors) == 0 && len(creds.Writers) == 0 {
+		return
+	}
+	b.WriteString(`    <credits>` + "\n")
+	for _, d := range creds.Directors {
+		b.WriteString(fmt.Sprintf(`      <director>%s</director>`, xmlEscape(d)))
+		b.WriteString("\n")
+	}
+	for _, a := range creds.Actors {
+		b.WriteString(fmt.Sprintf(`      <actor>%s</actor>`, xmlEscape(a)))
+		b.WriteString("\n")
+	}
+	for _, w := range creds.Writers {
+		b.WriteString(fmt.Sprintf(`      <writer>%s</writer>`, xmlEscape(w)))
+		b.WriteString("\n")
+	}
+	b.WriteString(`    </credits>` + "\n")
 }
 
 func xmlEscape(s string) string {

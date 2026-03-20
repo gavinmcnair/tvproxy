@@ -12,6 +12,9 @@ import (
 	"github.com/gavinmcnair/tvproxy/pkg/models"
 )
 
+const programDataCols = `id, epg_data_id, title, description, start, stop, category, episode_num, icon,
+	subtitle, date, language, is_new, is_previously_shown, credits, rating, rating_icon, star_rating, sub_categories, episode_num_system`
+
 type GuideProgram struct {
 	ChannelID   string    `json:"channel_id"`
 	Title       string    `json:"title"`
@@ -33,14 +36,25 @@ func (r *ProgramDataRepository) Checkpoint(ctx context.Context) {
 	r.db.Checkpoint(ctx)
 }
 
+func scanProgramData(scanner interface{ Scan(...any) error }, p *models.ProgramData) error {
+	return scanner.Scan(
+		&p.ID, &p.EPGDataID, &p.Title, &p.Description,
+		&p.Start, &p.Stop, &p.Category, &p.EpisodeNum, &p.Icon,
+		&p.Subtitle, &p.Date, &p.Language, &p.IsNew, &p.IsPreviouslyShown,
+		&p.Credits, &p.Rating, &p.RatingIcon, &p.StarRating, &p.SubCategories, &p.EpisodeNumSystem,
+	)
+}
+
 func (r *ProgramDataRepository) Create(ctx context.Context, program *models.ProgramData) error {
 	program.ID = uuid.New().String()
 	_, err := r.db.ExecContext(ctx,
-		`INSERT INTO program_data (id, epg_data_id, title, description, start, stop, category, episode_num, icon)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		`INSERT INTO program_data (`+programDataCols+`)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		program.ID, program.EPGDataID, program.Title, program.Description,
 		program.Start, program.Stop, program.Category,
 		program.EpisodeNum, program.Icon,
+		program.Subtitle, program.Date, program.Language, program.IsNew, program.IsPreviouslyShown,
+		program.Credits, program.Rating, program.RatingIcon, program.StarRating, program.SubCategories, program.EpisodeNumSystem,
 	)
 	if err != nil {
 		return fmt.Errorf("creating program data: %w", err)
@@ -50,8 +64,7 @@ func (r *ProgramDataRepository) Create(ctx context.Context, program *models.Prog
 
 func (r *ProgramDataRepository) List(ctx context.Context) ([]models.ProgramData, error) {
 	rows, err := r.db.QueryContext(ctx,
-		`SELECT id, epg_data_id, title, description, start, stop, category, episode_num, icon
-		FROM program_data ORDER BY start`,
+		`SELECT `+programDataCols+` FROM program_data ORDER BY start`,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("listing program data: %w", err)
@@ -61,10 +74,7 @@ func (r *ProgramDataRepository) List(ctx context.Context) ([]models.ProgramData,
 	var programs []models.ProgramData
 	for rows.Next() {
 		var p models.ProgramData
-		if err := rows.Scan(
-			&p.ID, &p.EPGDataID, &p.Title, &p.Description,
-			&p.Start, &p.Stop, &p.Category, &p.EpisodeNum, &p.Icon,
-		); err != nil {
+		if err := scanProgramData(rows, &p); err != nil {
 			return nil, fmt.Errorf("scanning program data: %w", err)
 		}
 		programs = append(programs, p)
@@ -77,8 +87,7 @@ func (r *ProgramDataRepository) List(ctx context.Context) ([]models.ProgramData,
 
 func (r *ProgramDataRepository) ListByEPGDataID(ctx context.Context, epgDataID string) ([]models.ProgramData, error) {
 	rows, err := r.db.QueryContext(ctx,
-		`SELECT id, epg_data_id, title, description, start, stop, category, episode_num, icon
-		FROM program_data WHERE epg_data_id = ? ORDER BY start`, epgDataID,
+		`SELECT `+programDataCols+` FROM program_data WHERE epg_data_id = ? ORDER BY start`, epgDataID,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("listing program data by epg data id: %w", err)
@@ -88,10 +97,7 @@ func (r *ProgramDataRepository) ListByEPGDataID(ctx context.Context, epgDataID s
 	var programs []models.ProgramData
 	for rows.Next() {
 		var p models.ProgramData
-		if err := rows.Scan(
-			&p.ID, &p.EPGDataID, &p.Title, &p.Description,
-			&p.Start, &p.Stop, &p.Category, &p.EpisodeNum, &p.Icon,
-		); err != nil {
+		if err := scanProgramData(rows, &p); err != nil {
 			return nil, fmt.Errorf("scanning program data: %w", err)
 		}
 		programs = append(programs, p)
@@ -104,8 +110,7 @@ func (r *ProgramDataRepository) ListByEPGDataID(ctx context.Context, epgDataID s
 
 func (r *ProgramDataRepository) ListByTimeRange(ctx context.Context, start, stop time.Time) ([]models.ProgramData, error) {
 	rows, err := r.db.QueryContext(ctx,
-		`SELECT id, epg_data_id, title, description, start, stop, category, episode_num, icon
-		FROM program_data WHERE start < ? AND stop > ? ORDER BY start`, stop, start,
+		`SELECT `+programDataCols+` FROM program_data WHERE start < ? AND stop > ? ORDER BY start`, stop, start,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("listing program data by time range: %w", err)
@@ -115,10 +120,7 @@ func (r *ProgramDataRepository) ListByTimeRange(ctx context.Context, start, stop
 	var programs []models.ProgramData
 	for rows.Next() {
 		var p models.ProgramData
-		if err := rows.Scan(
-			&p.ID, &p.EPGDataID, &p.Title, &p.Description,
-			&p.Start, &p.Stop, &p.Category, &p.EpisodeNum, &p.Icon,
-		); err != nil {
+		if err := scanProgramData(rows, &p); err != nil {
 			return nil, fmt.Errorf("scanning program data: %w", err)
 		}
 		programs = append(programs, p)
@@ -132,17 +134,45 @@ func (r *ProgramDataRepository) ListByTimeRange(ctx context.Context, start, stop
 func (r *ProgramDataRepository) GetNowByChannelID(ctx context.Context, channelID string, now time.Time) (*models.ProgramData, error) {
 	var p models.ProgramData
 	err := r.db.QueryRowContext(ctx,
-		`SELECT p.id, p.epg_data_id, p.title, p.description, p.start, p.stop, p.category, p.episode_num, p.icon
+		`SELECT p.id, p.epg_data_id, p.title, p.description, p.start, p.stop, p.category, p.episode_num, p.icon,
+			p.subtitle, p.date, p.language, p.is_new, p.is_previously_shown, p.credits, p.rating, p.rating_icon, p.star_rating, p.sub_categories, p.episode_num_system
 		FROM program_data p
 		JOIN epg_data e ON e.id = p.epg_data_id
 		WHERE e.channel_id = ? AND p.start <= ? AND p.stop > ?
 		ORDER BY p.start DESC LIMIT 1`,
 		channelID, now, now,
-	).Scan(&p.ID, &p.EPGDataID, &p.Title, &p.Description, &p.Start, &p.Stop, &p.Category, &p.EpisodeNum, &p.Icon)
+	).Scan(&p.ID, &p.EPGDataID, &p.Title, &p.Description, &p.Start, &p.Stop, &p.Category, &p.EpisodeNum, &p.Icon,
+		&p.Subtitle, &p.Date, &p.Language, &p.IsNew, &p.IsPreviouslyShown,
+		&p.Credits, &p.Rating, &p.RatingIcon, &p.StarRating, &p.SubCategories, &p.EpisodeNumSystem)
 	if err != nil {
 		return nil, err
 	}
 	return &p, nil
+}
+
+func (r *ProgramDataRepository) ListNowPlaying(ctx context.Context, now time.Time) ([]GuideProgram, error) {
+	rows, err := r.db.QueryContext(ctx,
+		`SELECT e.channel_id, p.title, p.description, p.start, p.stop, p.category
+		FROM program_data p
+		JOIN epg_data e ON e.id = p.epg_data_id
+		WHERE p.start <= ? AND p.stop > ?
+		ORDER BY e.channel_id`,
+		now, now,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("listing now playing: %w", err)
+	}
+	defer rows.Close()
+
+	var programs []GuideProgram
+	for rows.Next() {
+		var g GuideProgram
+		if err := rows.Scan(&g.ChannelID, &g.Title, &g.Description, &g.Start, &g.Stop, &g.Category); err != nil {
+			return nil, fmt.Errorf("scanning now playing: %w", err)
+		}
+		programs = append(programs, g)
+	}
+	return programs, rows.Err()
 }
 
 func (r *ProgramDataRepository) ListForGuide(ctx context.Context, start, stop time.Time) ([]GuideProgram, error) {
@@ -192,8 +222,8 @@ func (r *ProgramDataRepository) DeleteByEPGDataID(ctx context.Context, epgDataID
 func (r *ProgramDataRepository) BulkCreate(ctx context.Context, programs []models.ProgramData) error {
 	return r.db.InTx(ctx, func(tx *sql.Tx) error {
 		stmt, err := tx.PrepareContext(ctx,
-			`INSERT INTO program_data (id, epg_data_id, title, description, start, stop, category, episode_num, icon)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			`INSERT INTO program_data (`+programDataCols+`)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		)
 		if err != nil {
 			return fmt.Errorf("preparing statement: %w", err)
@@ -206,6 +236,10 @@ func (r *ProgramDataRepository) BulkCreate(ctx context.Context, programs []model
 				programs[i].ID, programs[i].EPGDataID, programs[i].Title, programs[i].Description,
 				programs[i].Start, programs[i].Stop, programs[i].Category,
 				programs[i].EpisodeNum, programs[i].Icon,
+				programs[i].Subtitle, programs[i].Date, programs[i].Language,
+				programs[i].IsNew, programs[i].IsPreviouslyShown,
+				programs[i].Credits, programs[i].Rating, programs[i].RatingIcon,
+				programs[i].StarRating, programs[i].SubCategories, programs[i].EpisodeNumSystem,
 			); err != nil {
 				return fmt.Errorf("inserting program data %d: %w", i, err)
 			}

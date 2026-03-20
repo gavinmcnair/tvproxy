@@ -46,7 +46,6 @@ func main() {
 	}
 	defer db.Close()
 
-	// Repositories
 	userRepo := repository.NewUserRepository(db)
 	m3uAccountRepo := repository.NewM3UAccountRepository(db)
 	streamRepo := repository.NewStreamRepository(db)
@@ -61,11 +60,10 @@ func main() {
 	hdhrDeviceRepo := repository.NewHDHRDeviceRepository(db)
 	settingsRepo := repository.NewCoreSettingsRepository(db)
 	clientRepo := repository.NewClientRepository(db)
+	scheduledRecRepo := repository.NewScheduledRecordingRepository(db)
 
-	// Services
 	authService := service.NewAuthService(userRepo, cfg.JWTSecret, cfg.AccessTokenExpiry, cfg.RefreshTokenExpiry)
 
-	// Create default admin user if no users exist
 	users, err := userRepo.List(ctx)
 	if err != nil {
 		log.Fatal().Err(err).Msg("failed to check existing users")
@@ -92,11 +90,10 @@ func main() {
 	outputService := service.NewOutputService(channelRepo, channelGroupRepo, streamRepo, channelProfileRepo, streamProfileRepo, epgDataRepo, programDataRepo, adminUserID, cfg, log)
 	ffmpegMgr := service.NewFFmpegManager(cfg, log)
 	vodService := service.NewVODService(channelRepo, streamRepo, streamProfileRepo, ffmpegMgr, cfg, log)
+	schedulerService := service.NewSchedulerService(scheduledRecRepo, channelRepo, vodService, cfg, log)
 
-	// Auth middleware
 	authMW := middleware.NewAuthMiddleware(authService, cfg.APIKey, adminUserID)
 
-	// Handlers
 	authHandler := handler.NewAuthHandler(authService)
 	userHandler := handler.NewUserHandler(authService)
 	m3uAccountHandler := handler.NewM3UAccountHandler(m3uService)
@@ -114,8 +111,8 @@ func main() {
 	vodHandler := handler.NewVODHandler(vodService, log)
 	settingsHandler := handler.NewSettingsHandler(settingsService, db, authService)
 	clientHandler := handler.NewClientHandler(clientService)
+	schedulerHandler := handler.NewSchedulerHandler(schedulerService, log)
 
-	// Router
 	r := chi.NewRouter()
 	r.Use(chimw.RequestID)
 	r.Use(chimw.RealIP)
@@ -129,44 +126,44 @@ func main() {
 		AllowCredentials: true,
 		MaxAge:           300,
 	}))
+	r.Use(func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Body != nil {
+				r.Body = http.MaxBytesReader(w, r.Body, 1<<20) // 1MB
+			}
+			next.ServeHTTP(w, r)
+		})
+	})
 
-	// OpenAPI spec
 	r.Get("/api/openapi.yaml", openapi.SpecHandler())
 
-	// Public routes
 	r.Post("/api/auth/login", authHandler.Login)
 	r.Post("/api/auth/refresh", authHandler.Refresh)
 	r.Post("/api/auth/invite/{token}", authHandler.AcceptInvite)
 
-	// HDHomeRun routes at root (no auth - Plex/Emby/Jellyfin need direct access)
 	r.Get("/discover.json", hdhrHandler.Discover)
 	r.Get("/lineup_status.json", hdhrHandler.LineupStatus)
 	r.Get("/lineup.json", hdhrHandler.Lineup)
 	r.Get("/device.xml", hdhrHandler.DeviceXML)
 	r.Get("/capability", hdhrHandler.DeviceXML)
 
-	// Output routes (no auth for player access)
 	r.Get("/output/m3u", outputHandler.M3U)
 	r.Get("/output/epg", outputHandler.EPG)
 
-	// Stream routes (no auth for player access)
 	r.Get("/channel/{channelID}", proxyHandler.Stream)
 	r.Get("/stream/{streamID}", proxyHandler.RawStream)
 
-	// VOD routes (no auth for player access)
 	r.Get("/stream/{streamID}/probe", vodHandler.ProbeStream)
 	r.Post("/stream/{streamID}/vod", vodHandler.CreateSession)
 	r.Post("/channel/{channelID}/vod", vodHandler.CreateChannelSession)
 	r.Get("/vod/{sessionID}/status", vodHandler.Status)
 	r.Get("/vod/{sessionID}/seek", vodHandler.Seek)
 	r.Get("/vod/{sessionID}/stream", vodHandler.Stream)
-	r.Delete("/vod/{sessionID}", vodHandler.DeleteSession)
 
-	// Authenticated API routes
 	r.Group(func(r chi.Router) {
 		r.Use(authMW.Authenticate)
 
-		// Recording routes (any authenticated user)
+		r.Delete("/vod/{sessionID}", vodHandler.DeleteSession)
 		r.Post("/vod/{sessionID}/record", vodHandler.MarkRecording)
 		r.Put("/vod/{sessionID}/record/{segmentID}", vodHandler.UpdateSegment)
 		r.Delete("/vod/{sessionID}/record/{segmentID}", vodHandler.DeleteSegment)
@@ -301,29 +298,29 @@ func main() {
 			r.Get("/completed", vodHandler.ListCompletedRecordings)
 			r.Get("/completed/{filename}/stream", vodHandler.StreamCompletedRecording)
 			r.Delete("/completed/{filename}", vodHandler.DeleteCompletedRecording)
+			r.Post("/schedule", schedulerHandler.Schedule)
+			r.Get("/schedule", schedulerHandler.List)
+			r.Get("/schedule/{id}", schedulerHandler.Get)
+			r.Delete("/schedule/{id}", schedulerHandler.Cancel)
 		})
 	})
 
-	// Embedded web frontend
 	distFS, err := fs.Sub(web.Assets, "dist")
 	if err != nil {
 		log.Fatal().Err(err).Msg("failed to load embedded web assets")
 	}
 	fileServer := http.FileServer(http.FS(distFS))
 	r.Get("/*", func(w http.ResponseWriter, req *http.Request) {
-		// Try to serve the static file first
 		path := strings.TrimPrefix(req.URL.Path, "/")
 		if f, err := distFS.Open(path); err == nil {
 			f.Close()
 			fileServer.ServeHTTP(w, req)
 			return
 		}
-		// Fall back to index.html for SPA routing
 		req.URL.Path = "/"
 		fileServer.ServeHTTP(w, req)
 	})
 
-	// Workers
 	wm := worker.NewManager(log)
 	wm.Add("m3u_refresh", worker.NewM3URefreshWorker(m3uService, cfg.M3URefreshInterval, log))
 	wm.Add("epg_refresh", worker.NewEPGRefreshWorker(epgService, cfg.EPGRefreshInterval, log))
@@ -332,11 +329,11 @@ func main() {
 	wm.Add("hdhr_discover", worker.NewHDHRDiscoverWorker(hdhrDeviceRepo, cfg.BaseURL, log))
 	wm.Add("hdhr_servers", worker.NewHDHRServerWorker(hdhrDeviceRepo, hdhrService, proxyService, outputService, cfg, log))
 	wm.Add("vod_cleanup", worker.NewVODCleanupWorker(vodService, 60*time.Second, log))
+	wm.Add("recording_scheduler", worker.NewSchedulerWorker(schedulerService, 30*time.Second, log))
 	wm.Add("wal_checkpoint", worker.NewWALCheckpointWorker(db, 5*time.Minute, log))
 
 	wm.Start(ctx)
 
-	// HTTP Server
 	srv := &http.Server{
 		Addr:         cfg.ListenAddr(),
 		Handler:      r,
@@ -354,6 +351,8 @@ func main() {
 
 	<-ctx.Done()
 	log.Info().Msg("shutting down")
+
+	vodService.Shutdown()
 
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer shutdownCancel()

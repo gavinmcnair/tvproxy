@@ -18,7 +18,7 @@ func TestComposeStreamProfileArgs(t *testing.T) {
 			hwaccel:    "none",
 			videoCodec: "copy",
 			container:  "mpegts",
-			want:       "-hide_banner -loglevel warning -i {input} -c:v copy -c:a copy -bsf:v dump_extra -f mpegts pipe:1 -rw_timeout 5000000",
+			want:       "-hide_banner -loglevel warning -rw_timeout 5000000 -i {input} -c:v copy -c:a copy -bsf:v dump_extra -f mpegts pipe:1",
 		},
 		{
 			name:       "m3u copy no hwaccel",
@@ -26,7 +26,7 @@ func TestComposeStreamProfileArgs(t *testing.T) {
 			hwaccel:    "none",
 			videoCodec: "copy",
 			container:  "mpegts",
-			want:       "-hide_banner -loglevel warning -analyzeduration 1000000 -probesize 1000000 -i {input} -map 0:v -map 0:a:0 -c:v copy -c:a aac -b:a 192k -ac 2 -c:s copy -f mpegts -fflags +genpts -copyts pipe:1",
+			want:       "-hide_banner -loglevel warning -analyzeduration 5000000 -probesize 5000000 -i {input} -map 0:v -map 0:a:0 -c:v copy -c:a aac -b:a 192k -ac 2 -c:s copy -f mpegts -fflags +genpts -copyts pipe:1",
 		},
 		// Software encode
 		{
@@ -35,7 +35,7 @@ func TestComposeStreamProfileArgs(t *testing.T) {
 			hwaccel:    "none",
 			videoCodec: "h264",
 			container:  "mpegts",
-			want:       "-hide_banner -loglevel warning -i {input} -c:v libx264 -preset fast -c:a copy -bsf:v dump_extra -f mpegts pipe:1 -rw_timeout 5000000",
+			want:       "-hide_banner -loglevel warning -rw_timeout 5000000 -i {input} -c:v libx264 -preset fast -c:a copy -bsf:v dump_extra -f mpegts pipe:1",
 		},
 		{
 			name:       "satip software h265",
@@ -43,7 +43,7 @@ func TestComposeStreamProfileArgs(t *testing.T) {
 			hwaccel:    "none",
 			videoCodec: "h265",
 			container:  "mpegts",
-			want:       "-hide_banner -loglevel warning -i {input} -c:v libx265 -preset fast -c:a copy -bsf:v dump_extra -f mpegts pipe:1 -rw_timeout 5000000",
+			want:       "-hide_banner -loglevel warning -rw_timeout 5000000 -i {input} -c:v libx265 -preset fast -c:a copy -bsf:v dump_extra -f mpegts pipe:1",
 		},
 		{
 			name:       "m3u software h265",
@@ -51,7 +51,7 @@ func TestComposeStreamProfileArgs(t *testing.T) {
 			hwaccel:    "none",
 			videoCodec: "h265",
 			container:  "mpegts",
-			want:       "-hide_banner -loglevel warning -analyzeduration 1000000 -probesize 1000000 -i {input} -map 0:v:0 -map 0:a:0 -c:v libx265 -preset fast -c:a aac -b:a 192k -ac 2 -c:s copy -f mpegts -fflags +genpts -copyts pipe:1",
+			want:       "-hide_banner -loglevel warning -analyzeduration 5000000 -probesize 5000000 -i {input} -map 0:v:0 -map 0:a:0 -c:v libx265 -preset fast -c:a aac -b:a 192k -ac 2 -c:s copy -f mpegts -fflags +genpts -copyts pipe:1",
 		},
 		{
 			name:       "m3u software av1 matroska",
@@ -59,7 +59,7 @@ func TestComposeStreamProfileArgs(t *testing.T) {
 			hwaccel:    "none",
 			videoCodec: "av1",
 			container:  "matroska",
-			want:       "-hide_banner -loglevel warning -analyzeduration 1000000 -probesize 1000000 -i {input} -map 0:v:0 -map 0:a:0 -c:v libsvtav1 -preset 6 -crf 24 -pix_fmt yuv420p10le -c:a aac -b:a 192k -ac 2 -c:s copy -f matroska -fflags +genpts -copyts pipe:1",
+			want:       "-hide_banner -loglevel warning -analyzeduration 5000000 -probesize 5000000 -i {input} -map 0:v:0 -map 0:a:0 -c:v libsvtav1 -preset 6 -crf 24 -pix_fmt yuv420p10le -c:a aac -b:a 192k -ac 2 -c:s copy -f matroska -fflags +genpts -copyts pipe:1",
 		},
 		// QSV
 		{
@@ -68,7 +68,7 @@ func TestComposeStreamProfileArgs(t *testing.T) {
 			hwaccel:    "qsv",
 			videoCodec: "h264",
 			container:  "mpegts",
-			want:       "-hide_banner -loglevel warning -hwaccel qsv -i {input} -c:v h264_qsv -preset veryslow -global_quality 20 -c:a copy -bsf:v dump_extra -f mpegts pipe:1 -rw_timeout 5000000",
+			want:       "-hide_banner -loglevel warning -hwaccel qsv -rw_timeout 5000000 -i {input} -c:v h264_qsv -preset veryslow -global_quality 20 -c:a copy -bsf:v dump_extra -f mpegts pipe:1",
 		},
 		{
 			name:       "m3u qsv h264",
@@ -76,7 +76,7 @@ func TestComposeStreamProfileArgs(t *testing.T) {
 			hwaccel:    "qsv",
 			videoCodec: "h264",
 			container:  "mpegts",
-			want:       "-hide_banner -loglevel warning -hwaccel qsv -analyzeduration 1000000 -probesize 1000000 -i {input} -map 0:v:0 -map 0:a:0 -c:v h264_qsv -preset veryslow -global_quality 20 -c:a aac -b:a 192k -ac 2 -c:s copy -f mpegts -fflags +genpts -copyts pipe:1",
+			want:       "-hide_banner -loglevel warning -hwaccel qsv -analyzeduration 5000000 -probesize 5000000 -i {input} -map 0:v:0 -map 0:a:0 -c:v h264_qsv -preset veryslow -global_quality 20 -c:a aac -b:a 192k -ac 2 -c:s copy -f mpegts -fflags +genpts -copyts pipe:1",
 		},
 		{
 			name:       "satip qsv av1 matroska",
@@ -84,7 +84,7 @@ func TestComposeStreamProfileArgs(t *testing.T) {
 			hwaccel:    "qsv",
 			videoCodec: "av1",
 			container:  "matroska",
-			want:       "-hide_banner -loglevel warning -init_hw_device qsv=qs:hw,child_device_type=vaapi -hwaccel qsv -i {input} -c:v av1_qsv -preset veryslow -global_quality 25 -look_ahead 1 -pix_fmt p010le -c:a copy -f matroska pipe:1 -rw_timeout 5000000",
+			want:       "-hide_banner -loglevel warning -init_hw_device qsv=qs:hw,child_device_type=vaapi -hwaccel qsv -rw_timeout 5000000 -i {input} -c:v av1_qsv -preset veryslow -global_quality 25 -look_ahead 1 -pix_fmt p010le -c:a copy -f matroska pipe:1",
 		},
 		{
 			name:       "m3u qsv av1 matroska",
@@ -92,7 +92,7 @@ func TestComposeStreamProfileArgs(t *testing.T) {
 			hwaccel:    "qsv",
 			videoCodec: "av1",
 			container:  "matroska",
-			want:       "-hide_banner -loglevel warning -init_hw_device qsv=qs:hw,child_device_type=vaapi -hwaccel qsv -analyzeduration 1000000 -probesize 1000000 -i {input} -map 0:v:0 -map 0:a:0 -c:v av1_qsv -preset veryslow -global_quality 25 -look_ahead 1 -pix_fmt p010le -c:a aac -b:a 192k -ac 2 -c:s copy -f matroska -fflags +genpts -copyts pipe:1",
+			want:       "-hide_banner -loglevel warning -init_hw_device qsv=qs:hw,child_device_type=vaapi -hwaccel qsv -analyzeduration 5000000 -probesize 5000000 -i {input} -map 0:v:0 -map 0:a:0 -c:v av1_qsv -preset veryslow -global_quality 25 -look_ahead 1 -pix_fmt p010le -c:a aac -b:a 192k -ac 2 -c:s copy -f matroska -fflags +genpts -copyts pipe:1",
 		},
 		{
 			name:       "satip qsv h265",
@@ -100,7 +100,7 @@ func TestComposeStreamProfileArgs(t *testing.T) {
 			hwaccel:    "qsv",
 			videoCodec: "h265",
 			container:  "mpegts",
-			want:       "-hide_banner -loglevel warning -hwaccel qsv -i {input} -c:v hevc_qsv -preset veryslow -global_quality 22 -pix_fmt p010le -c:a copy -bsf:v dump_extra -f mpegts pipe:1 -rw_timeout 5000000",
+			want:       "-hide_banner -loglevel warning -hwaccel qsv -rw_timeout 5000000 -i {input} -c:v hevc_qsv -preset veryslow -global_quality 22 -pix_fmt p010le -c:a copy -bsf:v dump_extra -f mpegts pipe:1",
 		},
 		// NVENC
 		{
@@ -109,7 +109,7 @@ func TestComposeStreamProfileArgs(t *testing.T) {
 			hwaccel:    "nvenc",
 			videoCodec: "h264",
 			container:  "mpegts",
-			want:       "-hide_banner -loglevel warning -hwaccel cuda -hwaccel_output_format cuda -i {input} -c:v h264_nvenc -preset p4 -c:a copy -bsf:v dump_extra -f mpegts pipe:1 -rw_timeout 5000000",
+			want:       "-hide_banner -loglevel warning -hwaccel cuda -hwaccel_output_format cuda -rw_timeout 5000000 -i {input} -c:v h264_nvenc -preset p4 -c:a copy -bsf:v dump_extra -f mpegts pipe:1",
 		},
 		{
 			name:       "m3u nvenc h264",
@@ -117,7 +117,7 @@ func TestComposeStreamProfileArgs(t *testing.T) {
 			hwaccel:    "nvenc",
 			videoCodec: "h264",
 			container:  "mpegts",
-			want:       "-hide_banner -loglevel warning -hwaccel cuda -hwaccel_output_format cuda -analyzeduration 1000000 -probesize 1000000 -i {input} -map 0:v:0 -map 0:a:0 -c:v h264_nvenc -preset p4 -c:a aac -b:a 192k -ac 2 -c:s copy -f mpegts -fflags +genpts -copyts pipe:1",
+			want:       "-hide_banner -loglevel warning -hwaccel cuda -hwaccel_output_format cuda -analyzeduration 5000000 -probesize 5000000 -i {input} -map 0:v:0 -map 0:a:0 -c:v h264_nvenc -preset p4 -c:a aac -b:a 192k -ac 2 -c:s copy -f mpegts -fflags +genpts -copyts pipe:1",
 		},
 		{
 			name:       "satip nvenc av1 matroska",
@@ -125,7 +125,7 @@ func TestComposeStreamProfileArgs(t *testing.T) {
 			hwaccel:    "nvenc",
 			videoCodec: "av1",
 			container:  "matroska",
-			want:       "-hide_banner -loglevel warning -hwaccel cuda -hwaccel_output_format cuda -i {input} -c:v av1_nvenc -preset p4 -cq 24 -pix_fmt p010le -c:a copy -f matroska pipe:1 -rw_timeout 5000000",
+			want:       "-hide_banner -loglevel warning -hwaccel cuda -hwaccel_output_format cuda -rw_timeout 5000000 -i {input} -c:v av1_nvenc -preset p4 -cq 24 -pix_fmt p010le -c:a copy -f matroska pipe:1",
 		},
 		{
 			name:       "m3u nvenc av1 matroska",
@@ -133,7 +133,7 @@ func TestComposeStreamProfileArgs(t *testing.T) {
 			hwaccel:    "nvenc",
 			videoCodec: "av1",
 			container:  "matroska",
-			want:       "-hide_banner -loglevel warning -hwaccel cuda -hwaccel_output_format cuda -analyzeduration 1000000 -probesize 1000000 -i {input} -map 0:v:0 -map 0:a:0 -c:v av1_nvenc -preset p4 -cq 24 -pix_fmt p010le -c:a aac -b:a 192k -ac 2 -c:s copy -f matroska -fflags +genpts -copyts pipe:1",
+			want:       "-hide_banner -loglevel warning -hwaccel cuda -hwaccel_output_format cuda -analyzeduration 5000000 -probesize 5000000 -i {input} -map 0:v:0 -map 0:a:0 -c:v av1_nvenc -preset p4 -cq 24 -pix_fmt p010le -c:a aac -b:a 192k -ac 2 -c:s copy -f matroska -fflags +genpts -copyts pipe:1",
 		},
 		{
 			name:       "satip nvenc h265",
@@ -141,7 +141,7 @@ func TestComposeStreamProfileArgs(t *testing.T) {
 			hwaccel:    "nvenc",
 			videoCodec: "h265",
 			container:  "mpegts",
-			want:       "-hide_banner -loglevel warning -hwaccel cuda -hwaccel_output_format cuda -i {input} -c:v hevc_nvenc -preset p4 -c:a copy -bsf:v dump_extra -f mpegts pipe:1 -rw_timeout 5000000",
+			want:       "-hide_banner -loglevel warning -hwaccel cuda -hwaccel_output_format cuda -rw_timeout 5000000 -i {input} -c:v hevc_nvenc -preset p4 -c:a copy -bsf:v dump_extra -f mpegts pipe:1",
 		},
 		// VA-API (SW decode + HW encode with hwupload filter)
 		{
@@ -150,7 +150,7 @@ func TestComposeStreamProfileArgs(t *testing.T) {
 			hwaccel:    "vaapi",
 			videoCodec: "h264",
 			container:  "mpegts",
-			want:       "-hide_banner -loglevel warning -init_hw_device vaapi=va:/dev/dri/renderD128 -filter_hw_device va -i {input} -vf format=nv12,hwupload -c:v h264_vaapi -c:a copy -bsf:v dump_extra -f mpegts pipe:1 -rw_timeout 5000000",
+			want:       "-hide_banner -loglevel warning -init_hw_device vaapi=va:/dev/dri/renderD128 -filter_hw_device va -rw_timeout 5000000 -i {input} -vf format=nv12,hwupload -c:v h264_vaapi -c:a copy -bsf:v dump_extra -f mpegts pipe:1",
 		},
 		{
 			name:       "m3u vaapi h265",
@@ -158,7 +158,7 @@ func TestComposeStreamProfileArgs(t *testing.T) {
 			hwaccel:    "vaapi",
 			videoCodec: "h265",
 			container:  "mpegts",
-			want:       "-hide_banner -loglevel warning -init_hw_device vaapi=va:/dev/dri/renderD128 -filter_hw_device va -analyzeduration 1000000 -probesize 1000000 -i {input} -map 0:v:0 -map 0:a:0 -vf format=nv12,hwupload -c:v hevc_vaapi -c:a aac -b:a 192k -ac 2 -c:s copy -f mpegts -fflags +genpts -copyts pipe:1",
+			want:       "-hide_banner -loglevel warning -init_hw_device vaapi=va:/dev/dri/renderD128 -filter_hw_device va -analyzeduration 5000000 -probesize 5000000 -i {input} -map 0:v:0 -map 0:a:0 -vf format=nv12,hwupload -c:v hevc_vaapi -c:a aac -b:a 192k -ac 2 -c:s copy -f mpegts -fflags +genpts -copyts pipe:1",
 		},
 		{
 			name:       "satip vaapi av1 matroska",
@@ -166,7 +166,7 @@ func TestComposeStreamProfileArgs(t *testing.T) {
 			hwaccel:    "vaapi",
 			videoCodec: "av1",
 			container:  "matroska",
-			want:       "-hide_banner -loglevel warning -hwaccel vaapi -hwaccel_output_format vaapi -vaapi_device /dev/dri/renderD128 -i {input} -c:v av1_vaapi -rc_mode ICQ -global_quality 25 -c:a copy -f matroska pipe:1 -rw_timeout 5000000",
+			want:       "-hide_banner -loglevel warning -hwaccel vaapi -hwaccel_output_format vaapi -vaapi_device /dev/dri/renderD128 -rw_timeout 5000000 -i {input} -c:v av1_vaapi -rc_mode ICQ -global_quality 25 -c:a copy -f matroska pipe:1",
 		},
 		{
 			name:       "m3u vaapi av1 matroska",
@@ -174,7 +174,7 @@ func TestComposeStreamProfileArgs(t *testing.T) {
 			hwaccel:    "vaapi",
 			videoCodec: "av1",
 			container:  "matroska",
-			want:       "-hide_banner -loglevel warning -hwaccel vaapi -hwaccel_output_format vaapi -vaapi_device /dev/dri/renderD128 -analyzeduration 1000000 -probesize 1000000 -i {input} -map 0:v:0 -map 0:a:0 -c:v av1_vaapi -rc_mode ICQ -global_quality 25 -c:a aac -b:a 192k -ac 2 -c:s copy -f matroska -fflags +genpts -copyts pipe:1",
+			want:       "-hide_banner -loglevel warning -hwaccel vaapi -hwaccel_output_format vaapi -vaapi_device /dev/dri/renderD128 -analyzeduration 5000000 -probesize 5000000 -i {input} -map 0:v:0 -map 0:a:0 -c:v av1_vaapi -rc_mode ICQ -global_quality 25 -c:a aac -b:a 192k -ac 2 -c:s copy -f matroska -fflags +genpts -copyts pipe:1",
 		},
 		{
 			name:       "m3u vaapi copy (no hwupload needed)",
@@ -182,7 +182,7 @@ func TestComposeStreamProfileArgs(t *testing.T) {
 			hwaccel:    "vaapi",
 			videoCodec: "copy",
 			container:  "mpegts",
-			want:       "-hide_banner -loglevel warning -init_hw_device vaapi=va:/dev/dri/renderD128 -filter_hw_device va -analyzeduration 1000000 -probesize 1000000 -i {input} -map 0:v -map 0:a:0 -c:v copy -c:a aac -b:a 192k -ac 2 -c:s copy -f mpegts -fflags +genpts -copyts pipe:1",
+			want:       "-hide_banner -loglevel warning -init_hw_device vaapi=va:/dev/dri/renderD128 -filter_hw_device va -analyzeduration 5000000 -probesize 5000000 -i {input} -map 0:v -map 0:a:0 -c:v copy -c:a aac -b:a 192k -ac 2 -c:s copy -f mpegts -fflags +genpts -copyts pipe:1",
 		},
 		// VideoToolbox
 		{
@@ -191,7 +191,7 @@ func TestComposeStreamProfileArgs(t *testing.T) {
 			hwaccel:    "videotoolbox",
 			videoCodec: "h264",
 			container:  "mpegts",
-			want:       "-hide_banner -loglevel warning -hwaccel videotoolbox -hwaccel_output_format videotoolbox_vld -i {input} -c:v h264_videotoolbox -c:a copy -bsf:v dump_extra -f mpegts pipe:1 -rw_timeout 5000000",
+			want:       "-hide_banner -loglevel warning -hwaccel videotoolbox -hwaccel_output_format videotoolbox_vld -rw_timeout 5000000 -i {input} -c:v h264_videotoolbox -c:a copy -bsf:v dump_extra -f mpegts pipe:1",
 		},
 		{
 			name:       "m3u videotoolbox h265",
@@ -199,7 +199,7 @@ func TestComposeStreamProfileArgs(t *testing.T) {
 			hwaccel:    "videotoolbox",
 			videoCodec: "h265",
 			container:  "mpegts",
-			want:       "-hide_banner -loglevel warning -hwaccel videotoolbox -hwaccel_output_format videotoolbox_vld -analyzeduration 1000000 -probesize 1000000 -i {input} -map 0:v:0 -map 0:a:0 -c:v hevc_videotoolbox -c:a aac -b:a 192k -ac 2 -c:s copy -f mpegts -fflags +genpts -copyts pipe:1",
+			want:       "-hide_banner -loglevel warning -hwaccel videotoolbox -hwaccel_output_format videotoolbox_vld -analyzeduration 5000000 -probesize 5000000 -i {input} -map 0:v:0 -map 0:a:0 -c:v hevc_videotoolbox -c:a aac -b:a 192k -ac 2 -c:s copy -f mpegts -fflags +genpts -copyts pipe:1",
 		},
 		{
 			name:       "satip videotoolbox av1 falls back to software",
@@ -207,7 +207,7 @@ func TestComposeStreamProfileArgs(t *testing.T) {
 			hwaccel:    "videotoolbox",
 			videoCodec: "av1",
 			container:  "matroska",
-			want:       "-hide_banner -loglevel warning -hwaccel videotoolbox -hwaccel_output_format videotoolbox_vld -i {input} -c:v libsvtav1 -preset 6 -crf 24 -pix_fmt yuv420p10le -c:a copy -f matroska pipe:1 -rw_timeout 5000000",
+			want:       "-hide_banner -loglevel warning -hwaccel videotoolbox -hwaccel_output_format videotoolbox_vld -rw_timeout 5000000 -i {input} -vf hwdownload,format=nv12 -c:v libsvtav1 -preset 6 -crf 24 -pix_fmt yuv420p10le -c:a copy -f matroska pipe:1",
 		},
 		// Container-specific tests
 		{
@@ -216,7 +216,7 @@ func TestComposeStreamProfileArgs(t *testing.T) {
 			hwaccel:    "none",
 			videoCodec: "copy",
 			container:  "mp4",
-			want:       "-hide_banner -loglevel warning -analyzeduration 1000000 -probesize 1000000 -i {input} -map 0:v -map 0:a:0 -c:v copy -c:a aac -b:a 192k -ac 2 -c:s copy -f mp4 -movflags frag_keyframe+empty_moov+default_base_moof -fflags +genpts pipe:1",
+			want:       "-hide_banner -loglevel warning -analyzeduration 5000000 -probesize 5000000 -i {input} -map 0:v -map 0:a:0 -c:v copy -c:a aac -b:a 192k -ac 2 -c:s copy -f mp4 -movflags frag_keyframe+empty_moov+default_base_moof -fflags +genpts pipe:1",
 		},
 		{
 			name:       "m3u copy matroska",
@@ -224,7 +224,7 @@ func TestComposeStreamProfileArgs(t *testing.T) {
 			hwaccel:    "none",
 			videoCodec: "copy",
 			container:  "matroska",
-			want:       "-hide_banner -loglevel warning -analyzeduration 1000000 -probesize 1000000 -i {input} -map 0:v -map 0:a:0 -c:v copy -c:a aac -b:a 192k -ac 2 -c:s copy -f matroska -fflags +genpts -copyts pipe:1",
+			want:       "-hide_banner -loglevel warning -analyzeduration 5000000 -probesize 5000000 -i {input} -map 0:v -map 0:a:0 -c:v copy -c:a aac -b:a 192k -ac 2 -c:s copy -f matroska -fflags +genpts -copyts pipe:1",
 		},
 		{
 			name:       "m3u h264 webm uses opus",
@@ -232,7 +232,7 @@ func TestComposeStreamProfileArgs(t *testing.T) {
 			hwaccel:    "none",
 			videoCodec: "h264",
 			container:  "webm",
-			want:       "-hide_banner -loglevel warning -analyzeduration 1000000 -probesize 1000000 -i {input} -map 0:v:0 -map 0:a:0 -c:v libx264 -preset fast -c:a libopus -b:a 192k -ac 2 -c:s copy -f webm -fflags +genpts pipe:1",
+			want:       "-hide_banner -loglevel warning -analyzeduration 5000000 -probesize 5000000 -i {input} -map 0:v:0 -map 0:a:0 -c:v libx264 -preset fast -c:a libopus -b:a 192k -ac 2 -c:s copy -f webm -fflags +genpts pipe:1",
 		},
 		{
 			name:       "satip copy matroska no dump_extra",
@@ -240,7 +240,7 @@ func TestComposeStreamProfileArgs(t *testing.T) {
 			hwaccel:    "none",
 			videoCodec: "copy",
 			container:  "matroska",
-			want:       "-hide_banner -loglevel warning -i {input} -c:v copy -c:a copy -f matroska pipe:1 -rw_timeout 5000000",
+			want:       "-hide_banner -loglevel warning -rw_timeout 5000000 -i {input} -c:v copy -c:a copy -f matroska pipe:1",
 		},
 	}
 

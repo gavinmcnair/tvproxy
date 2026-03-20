@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -29,6 +30,17 @@ const (
 	SegmentFailed     SegmentStatus = "failed"
 )
 
+var (
+	ErrSessionNotFound     = errors.New("session not found")
+	ErrNotAuthorized       = errors.New("not authorized")
+	ErrNoActiveSegment     = errors.New("no active segment")
+	ErrInvalidFilename     = errors.New("invalid filename")
+	ErrFileNotFound        = errors.New("file not found")
+	ErrActiveSegmentExists = errors.New("session already has an active segment")
+	ErrStreamNotFound      = errors.New("stream not found")
+	ErrSegmentNotFound     = errors.New("segment not found")
+)
+
 type RecordingSegment struct {
 	ID          string
 	StartOffset float64
@@ -39,20 +51,27 @@ type RecordingSegment struct {
 	CreatedAt   time.Time
 	Status      SegmentStatus
 	StopAt      time.Time
+	FilePath    string
 	mu          sync.Mutex
 }
 
 type VODSession struct {
-	ID         string
-	ProcessID  string
-	StreamURL  string
-	Duration   float64
-	FilePath   string
-	TempDir    string
-	LastAccess time.Time
-	Detached   bool
-	Segments   []*RecordingSegment
-	mu         sync.Mutex
+	ID          string
+	ProcessID   string
+	StreamURL   string
+	ProfileName string
+	Duration    float64
+	Video       *ffmpeg.VideoInfo
+	AudioTracks []ffmpeg.AudioTrack
+	AudioIndex  int
+	FilePath    string
+	TempDir     string
+	LastAccess  time.Time
+	Detached    bool
+	Segments    []*RecordingSegment
+	ctx         context.Context
+	cancel      context.CancelFunc
+	mu          sync.Mutex
 }
 
 func (session *VODSession) HasActiveSegment() bool {
@@ -79,7 +98,7 @@ func (session *VODSession) ActiveSegment() *RecordingSegment {
 	return nil
 }
 
-func (session *VODSession) HasPendingWorkLocked() bool {
+func (session *VODSession) HasPendingWork() bool {
 	for _, seg := range session.Segments {
 		seg.mu.Lock()
 		pending := seg.Status == SegmentRecording || seg.Status == SegmentDefined || seg.Status == SegmentExtracting
@@ -149,23 +168,23 @@ func NewVODService(
 func (s *VODService) ProbeStream(ctx context.Context, streamID string) (*ffmpeg.ProbeResult, error) {
 	stream, err := s.streamRepo.GetByID(ctx, streamID)
 	if err != nil {
-		return nil, fmt.Errorf("stream not found: %w", err)
+		return nil, fmt.Errorf("%w: %w", ErrStreamNotFound, err)
 	}
 	return ffmpeg.Probe(ctx, stream.URL, s.config.UserAgent)
 }
 
-func (s *VODService) CreateSession(ctx context.Context, streamID string, profileName string) (*VODSession, error) {
+func (s *VODService) CreateSession(ctx context.Context, streamID string, profileName string, audioIndex int) (*VODSession, error) {
 	stream, err := s.streamRepo.GetByID(ctx, streamID)
 	if err != nil {
-		return nil, fmt.Errorf("stream not found: %w", err)
+		return nil, fmt.Errorf("%w: %w", ErrStreamNotFound, err)
 	}
 	if !stream.IsActive {
 		return nil, fmt.Errorf("stream %s is inactive", streamID)
 	}
-	return s.createSessionForURL(ctx, uuid.New().String(), stream.URL, stream.ID, profileName)
+	return s.createSessionForURL(ctx, uuid.New().String(), stream.URL, stream.ID, profileName, audioIndex)
 }
 
-func (s *VODService) CreateSessionForChannel(ctx context.Context, channelID string, profileName string) (*VODSession, error) {
+func (s *VODService) CreateSessionForChannel(ctx context.Context, channelID string, profileName string, audioIndex int) (*VODSession, error) {
 	if session := s.reattachSession(channelID); session != nil {
 		return session, nil
 	}
@@ -188,7 +207,7 @@ func (s *VODService) CreateSessionForChannel(ctx context.Context, channelID stri
 		if err != nil || !stream.IsActive {
 			continue
 		}
-		return s.createSessionForURL(ctx, channelID, stream.URL, stream.ID, profileName)
+		return s.createSessionForURL(ctx, channelID, stream.URL, stream.ID, profileName, audioIndex)
 	}
 
 	return nil, fmt.Errorf("no active streams for channel %s", channelID)
@@ -204,10 +223,11 @@ func (s *VODService) reattachSession(channelID string) *VODSession {
 	}
 
 	existing.mu.Lock()
-	hasPending := existing.HasPendingWorkLocked()
+	hasPending := existing.HasPendingWork()
+	hasSegments := len(existing.Segments) > 0
 	existing.mu.Unlock()
 
-	if !s.ffmpegMgr.IsReady(existing.ProcessID) || hasPending {
+	if hasSegments && (!s.ffmpegMgr.IsReady(existing.ProcessID) || hasPending) {
 		existing.mu.Lock()
 		existing.Detached = false
 		existing.LastAccess = time.Now()
@@ -216,19 +236,15 @@ func (s *VODService) reattachSession(channelID string) *VODSession {
 		return existing
 	}
 
+	existing.cancel()
+	s.ffmpegMgr.Stop(existing.ProcessID)
 	s.ffmpegMgr.Remove(existing.ProcessID)
 	os.RemoveAll(existing.TempDir)
 	delete(s.sessions, channelID)
 	return nil
 }
 
-func (s *VODService) createSessionForURL(ctx context.Context, id string, streamURL string, streamID string, profileName string) (*VODSession, error) {
-	var duration float64
-	probe, err := ffmpeg.Probe(ctx, streamURL, s.config.UserAgent)
-	if err == nil && probe.IsVOD {
-		duration = probe.Duration
-	}
-
+func (s *VODService) createSessionForURL(ctx context.Context, id string, streamURL string, streamID string, profileName string, audioIndex int) (*VODSession, error) {
 	var profileArgs []string
 	command := "ffmpeg"
 	if profileName != "" {
@@ -238,6 +254,9 @@ func (s *VODService) createSessionForURL(ctx context.Context, id string, streamU
 		}
 		if sp.Args != "" {
 			profileArgs = ShellSplit(sp.Args)
+			if audioIndex > 0 {
+				profileArgs = ReplaceAudioMap(profileArgs, audioIndex)
+			}
 			command = sp.Command
 		}
 	}
@@ -248,30 +267,69 @@ func (s *VODService) createSessionForURL(ctx context.Context, id string, streamU
 	}
 
 	filePath := filepath.Join(tempDir, "video.mp4")
-	os.Remove(filePath)
+	if err := os.Remove(filePath); err != nil && !os.IsNotExist(err) {
+		s.log.Warn().Err(err).Str("path", filePath).Msg("failed to remove existing VOD file")
+	}
 
 	processID := s.ffmpegMgr.Start(streamURL, filePath, tempDir, command, profileArgs)
 
+	sessionCtx, sessionCancel := context.WithCancel(context.Background())
 	session := &VODSession{
-		ID:         id,
-		ProcessID:  processID,
-		StreamURL:  streamURL,
-		Duration:   duration,
-		FilePath:   filePath,
-		TempDir:    tempDir,
-		LastAccess: time.Now(),
+		ID:          id,
+		ProcessID:   processID,
+		StreamURL:   streamURL,
+		ProfileName: profileName,
+		AudioIndex:  audioIndex,
+		FilePath:    filePath,
+		TempDir:     tempDir,
+		LastAccess:  time.Now(),
+		ctx:         sessionCtx,
+		cancel:      sessionCancel,
 	}
 
 	s.mu.Lock()
+	if existing, ok := s.sessions[id]; ok {
+		s.mu.Unlock()
+		sessionCancel()
+		s.ffmpegMgr.Stop(processID)
+		s.ffmpegMgr.Remove(processID)
+		existing.mu.Lock()
+		existing.LastAccess = time.Now()
+		existing.mu.Unlock()
+		s.log.Info().Str("session_id", id).Msg("concurrent session creation detected, reusing existing")
+		return existing, nil
+	}
 	s.sessions[id] = session
 	s.mu.Unlock()
 
-	probeDur := 0.0
-	if probe != nil {
-		probeDur = probe.Duration
-	}
-	s.log.Info().Str("session_id", id).Str("stream_id", streamID).Float64("duration", probeDur).Msg("VOD session created")
+	go s.probeAsync(session, streamURL)
+
+	s.log.Info().Str("session_id", id).Str("stream_id", streamID).Msg("VOD session created")
 	return session, nil
+}
+
+func (s *VODService) probeAsync(session *VODSession, streamURL string) {
+	ctx, cancel := context.WithTimeout(session.ctx, 15*time.Second)
+	defer cancel()
+
+	probe, err := ffmpeg.Probe(ctx, streamURL, s.config.UserAgent)
+	if err != nil {
+		return
+	}
+
+	session.mu.Lock()
+	if probe.IsVOD {
+		session.Duration = probe.Duration
+	}
+	if probe.Video != nil {
+		session.Video = probe.Video
+	}
+	if len(probe.AudioTracks) > 0 {
+		session.AudioTracks = probe.AudioTracks
+	}
+	session.mu.Unlock()
+
+	s.log.Info().Str("session_id", session.ID).Float64("duration", probe.Duration).Int("audio_tracks", len(probe.AudioTracks)).Msg("async probe complete")
 }
 
 func (s *VODService) StreamSeek(ctx context.Context, session *VODSession, offsetSecs float64) (io.ReadCloser, error) {
@@ -387,16 +445,37 @@ func (r *tailFollowReader) Close() error {
 	return r.file.Close()
 }
 
-func (s *VODService) GetSession(id string) (*VODSession, bool) {
+func (s *VODService) getSession(id string) (*VODSession, bool) {
 	s.mu.RLock()
 	session, ok := s.sessions[id]
 	s.mu.RUnlock()
+	return session, ok
+}
+
+func (s *VODService) GetSession(id string) (*VODSession, bool) {
+	session, ok := s.getSession(id)
 	if ok {
 		session.mu.Lock()
 		session.LastAccess = time.Now()
 		session.mu.Unlock()
 	}
 	return session, ok
+}
+
+func checkSegmentAuth(seg *RecordingSegment, userID string, isAdmin bool) error {
+	if !isAdmin && seg.UserID != userID {
+		return ErrNotAuthorized
+	}
+	return nil
+}
+
+func findSegmentByID(session *VODSession, segID string) (*RecordingSegment, int) {
+	for i, seg := range session.Segments {
+		if seg.ID == segID {
+			return seg, i
+		}
+	}
+	return nil, -1
 }
 
 func (s *VODService) DeleteSession(id string) {
@@ -408,7 +487,7 @@ func (s *VODService) DeleteSession(id string) {
 	}
 
 	session.mu.Lock()
-	hasPending := session.HasPendingWorkLocked()
+	hasPending := session.HasPendingWork()
 	hasRecording := session.HasActiveSegment()
 	processID := session.ProcessID
 	if hasPending {
@@ -428,6 +507,7 @@ func (s *VODService) DeleteSession(id string) {
 	delete(s.sessions, id)
 	s.mu.Unlock()
 
+	session.cancel()
 	s.ffmpegMgr.Stop(processID)
 	s.ffmpegMgr.Remove(processID)
 	os.RemoveAll(session.TempDir)
@@ -437,13 +517,13 @@ func (s *VODService) DeleteSession(id string) {
 func (s *VODService) CreateSegment(sessionID, title, channelName, userID string, startOffset, endOffset float64, stopAt time.Time) (*RecordingSegment, error) {
 	session, ok := s.GetSession(sessionID)
 	if !ok {
-		return nil, fmt.Errorf("session not found")
+		return nil, ErrSessionNotFound
 	}
 
 	session.mu.Lock()
 	if session.HasActiveSegment() {
 		session.mu.Unlock()
-		return nil, fmt.Errorf("session already has an active segment")
+		return nil, ErrActiveSegmentExists
 	}
 
 	buffered := s.ffmpegMgr.GetBufferedSecs(session.ProcessID)
@@ -461,7 +541,8 @@ func (s *VODService) CreateSegment(sessionID, title, channelName, userID string,
 	}
 
 	if !stopAt.IsZero() {
-		stopAt = stopAt.Add(5 * time.Minute)
+		stopAt = stopAt.Add(s.config.RecordStopBuffer)
+		s.log.Info().Str("session_id", sessionID).Dur("buffer", s.config.RecordStopBuffer).Time("stop_at", stopAt).Msg("applied stop buffer to recording deadline")
 	} else {
 		stopAt = time.Now().Add(s.config.RecordDefaultDuration)
 	}
@@ -487,25 +568,23 @@ func (s *VODService) CreateSegment(sessionID, title, channelName, userID string,
 }
 
 func (s *VODService) CloseSegment(sessionID, userID string, isAdmin bool) error {
-	s.mu.RLock()
-	session, ok := s.sessions[sessionID]
-	s.mu.RUnlock()
+	session, ok := s.getSession(sessionID)
 	if !ok {
-		return fmt.Errorf("session not found")
+		return ErrSessionNotFound
 	}
 
 	session.mu.Lock()
 	seg := session.ActiveSegment()
 	if seg == nil {
 		session.mu.Unlock()
-		return fmt.Errorf("no active segment")
+		return ErrNoActiveSegment
 	}
 
 	seg.mu.Lock()
-	if !isAdmin && seg.UserID != userID {
+	if err := checkSegmentAuth(seg, userID, isAdmin); err != nil {
 		seg.mu.Unlock()
 		session.mu.Unlock()
-		return fmt.Errorf("not authorized")
+		return err
 	}
 
 	buffered := s.ffmpegMgr.GetBufferedSecs(session.ProcessID)
@@ -523,43 +602,38 @@ func (s *VODService) CloseAndExtract(sessionID, userID string, isAdmin bool) err
 	if err := s.CloseSegment(sessionID, userID, isAdmin); err != nil {
 		return err
 	}
-	s.mu.RLock()
-	session, ok := s.sessions[sessionID]
-	s.mu.RUnlock()
-	if ok {
+	if session, ok := s.getSession(sessionID); ok {
 		go s.extractAllDefined(session)
 	}
 	return nil
 }
 
 func (s *VODService) CancelSegment(sessionID, userID string, isAdmin bool) error {
-	s.mu.RLock()
-	session, ok := s.sessions[sessionID]
-	s.mu.RUnlock()
+	session, ok := s.getSession(sessionID)
 	if !ok {
-		return fmt.Errorf("session not found")
+		return ErrSessionNotFound
 	}
 
 	session.mu.Lock()
 	seg := session.ActiveSegment()
 	if seg == nil {
 		session.mu.Unlock()
-		return fmt.Errorf("no active segment")
+		return ErrNoActiveSegment
 	}
 
 	seg.mu.Lock()
-	if !isAdmin && seg.UserID != userID {
+	if err := checkSegmentAuth(seg, userID, isAdmin); err != nil {
 		seg.mu.Unlock()
 		session.mu.Unlock()
-		return fmt.Errorf("not authorized")
+		return err
 	}
 	segID := seg.ID
 	seg.mu.Unlock()
 
 	filtered := make([]*RecordingSegment, 0, len(session.Segments))
-	for _, s := range session.Segments {
-		if s.ID != segID {
-			filtered = append(filtered, s)
+	for _, existing := range session.Segments {
+		if existing.ID != segID {
+			filtered = append(filtered, existing)
 		}
 	}
 	session.Segments = filtered
@@ -570,92 +644,84 @@ func (s *VODService) CancelSegment(sessionID, userID string, isAdmin bool) error
 }
 
 func (s *VODService) UpdateSegment(sessionID, segmentID, userID string, isAdmin bool, startOffset, endOffset *float64) error {
-	s.mu.RLock()
-	session, ok := s.sessions[sessionID]
-	s.mu.RUnlock()
+	session, ok := s.getSession(sessionID)
 	if !ok {
-		return fmt.Errorf("session not found")
+		return ErrSessionNotFound
 	}
 
 	session.mu.Lock()
 	defer session.mu.Unlock()
 
-	for _, seg := range session.Segments {
-		seg.mu.Lock()
-		if seg.ID == segmentID {
-			if !isAdmin && seg.UserID != userID {
-				seg.mu.Unlock()
-				return fmt.Errorf("not authorized")
-			}
-			if seg.Status != SegmentRecording && seg.Status != SegmentDefined {
-				seg.mu.Unlock()
-				return fmt.Errorf("segment is not editable")
-			}
-
-			buffered := s.ffmpegMgr.GetBufferedSecs(session.ProcessID)
-			if startOffset != nil {
-				v := *startOffset
-				if v < 0 {
-					v = 0
-				}
-				if v > buffered {
-					v = buffered
-				}
-				seg.StartOffset = v
-			}
-			if endOffset != nil {
-				v := *endOffset
-				if v < 0 {
-					seg.EndOffset = nil
-				} else {
-					if v > buffered {
-						v = buffered
-					}
-					seg.EndOffset = &v
-				}
-			}
-			seg.mu.Unlock()
-
-			s.log.Info().Str("session_id", sessionID).Str("segment_id", segmentID).Msg("segment updated")
-			return nil
-		}
-		seg.mu.Unlock()
+	seg, _ := findSegmentByID(session, segmentID)
+	if seg == nil {
+		return ErrSegmentNotFound
 	}
 
-	return fmt.Errorf("segment not found")
+	seg.mu.Lock()
+	defer seg.mu.Unlock()
+
+	if err := checkSegmentAuth(seg, userID, isAdmin); err != nil {
+		return err
+	}
+	if seg.Status != SegmentRecording && seg.Status != SegmentDefined {
+		return fmt.Errorf("segment is not editable")
+	}
+
+	buffered := s.ffmpegMgr.GetBufferedSecs(session.ProcessID)
+	if startOffset != nil {
+		v := *startOffset
+		if v < 0 {
+			v = 0
+		}
+		if v > buffered {
+			v = buffered
+		}
+		seg.StartOffset = v
+	}
+	if endOffset != nil {
+		v := *endOffset
+		if v < 0 {
+			seg.EndOffset = nil
+		} else {
+			if v > buffered {
+				v = buffered
+			}
+			seg.EndOffset = &v
+		}
+	}
+
+	s.log.Info().Str("session_id", sessionID).Str("segment_id", segmentID).Msg("segment updated")
+	return nil
 }
 
 func (s *VODService) DeleteSegment(sessionID, segmentID, userID string, isAdmin bool) error {
-	s.mu.RLock()
-	session, ok := s.sessions[sessionID]
-	s.mu.RUnlock()
+	session, ok := s.getSession(sessionID)
 	if !ok {
-		return fmt.Errorf("session not found")
+		return ErrSessionNotFound
 	}
 
 	session.mu.Lock()
 	defer session.mu.Unlock()
 
-	for i, seg := range session.Segments {
-		seg.mu.Lock()
-		if seg.ID == segmentID {
-			if !isAdmin && seg.UserID != userID {
-				seg.mu.Unlock()
-				return fmt.Errorf("not authorized")
-			}
-			if seg.Status != SegmentRecording && seg.Status != SegmentDefined {
-				seg.mu.Unlock()
-				return fmt.Errorf("segment cannot be deleted in current state")
-			}
-			seg.mu.Unlock()
-			session.Segments = append(session.Segments[:i], session.Segments[i+1:]...)
-			s.log.Info().Str("session_id", sessionID).Str("segment_id", segmentID).Msg("segment deleted")
-			return nil
-		}
-		seg.mu.Unlock()
+	seg, idx := findSegmentByID(session, segmentID)
+	if seg == nil {
+		return ErrSegmentNotFound
 	}
 
-	return fmt.Errorf("segment not found")
+	seg.mu.Lock()
+	if err := checkSegmentAuth(seg, userID, isAdmin); err != nil {
+		seg.mu.Unlock()
+		return err
+	}
+	if seg.Status != SegmentRecording && seg.Status != SegmentDefined {
+		seg.mu.Unlock()
+		return fmt.Errorf("segment cannot be deleted in current state")
+	}
+	seg.mu.Unlock()
+
+	session.Segments = append(session.Segments[:idx], session.Segments[idx+1:]...)
+	s.log.Info().Str("session_id", sessionID).Str("segment_id", segmentID).Msg("segment deleted")
+	return nil
 }
 
 func (s *VODService) extractAllDefined(session *VODSession) {
@@ -713,14 +779,11 @@ func (s *VODService) startSegmentDeadline(session *VODSession, seg *RecordingSeg
 	timer := time.NewTimer(time.Until(stopAt))
 	defer timer.Stop()
 
-	<-timer.C
-
-	seg.mu.Lock()
-	if seg.Status != SegmentRecording {
-		seg.mu.Unlock()
+	select {
+	case <-timer.C:
+	case <-session.ctx.Done():
 		return
 	}
-	seg.mu.Unlock()
 
 	s.log.Info().Str("session_id", session.ID).Str("segment_id", segID).Msg("segment deadline reached, auto-closing")
 
@@ -740,6 +803,12 @@ func (s *VODService) startSegmentDeadline(session *VODSession, seg *RecordingSeg
 }
 
 func (s *VODService) extractSegment(session *VODSession, segID string, start, end float64, title, userID string) {
+	select {
+	case <-session.ctx.Done():
+		return
+	default:
+	}
+
 	destDir := s.userRecordDir(userID)
 	if err := os.MkdirAll(destDir, 0755); err != nil {
 		s.log.Error().Err(err).Str("segment_id", segID).Msg("failed to create record directory")
@@ -748,7 +817,7 @@ func (s *VODService) extractSegment(session *VODSession, segID string, start, en
 		return
 	}
 
-	name := mgrSanitizeFilename(title, time.Now())
+	name := sanitizeFilename(title, time.Now())
 	outputPath := filepath.Join(destDir, name+".mp4")
 	for i := 1; ; i++ {
 		if _, err := os.Stat(outputPath); os.IsNotExist(err) {
@@ -763,24 +832,47 @@ func (s *VODService) extractSegment(session *VODSession, segID string, start, en
 		s.updateSegmentStatus(session, segID, SegmentFailed)
 	} else {
 		s.log.Info().Str("segment_id", segID).Str("output", outputPath).Msg("segment saved")
-		s.updateSegmentStatus(session, segID, SegmentCompleted)
+		s.updateSegmentStatusWithPath(session, segID, SegmentCompleted, outputPath)
 	}
 
 	s.maybeCleanupSession(session)
 }
 
 func (s *VODService) updateSegmentStatus(session *VODSession, segID string, status SegmentStatus) {
+	s.updateSegmentStatusWithPath(session, segID, status, "")
+}
+
+func (s *VODService) updateSegmentStatusWithPath(session *VODSession, segID string, status SegmentStatus, filePath string) {
 	session.mu.Lock()
 	defer session.mu.Unlock()
-	for _, seg := range session.Segments {
-		seg.mu.Lock()
-		if seg.ID == segID {
-			seg.Status = status
-			seg.mu.Unlock()
-			return
-		}
-		seg.mu.Unlock()
+	seg, _ := findSegmentByID(session, segID)
+	if seg == nil {
+		return
 	}
+	seg.mu.Lock()
+	seg.Status = status
+	if filePath != "" {
+		seg.FilePath = filePath
+	}
+	seg.mu.Unlock()
+}
+
+func (s *VODService) GetSegmentByID(sessionID, segmentID string) (*RecordingSegment, bool) {
+	session, ok := s.getSession(sessionID)
+	if !ok {
+		return nil, false
+	}
+	session.mu.Lock()
+	defer session.mu.Unlock()
+	seg, _ := findSegmentByID(session, segmentID)
+	if seg == nil {
+		return nil, false
+	}
+	seg.mu.Lock()
+	copy := *seg
+	seg.mu.Unlock()
+	copy.mu = sync.Mutex{}
+	return &copy, true
 }
 
 func (s *VODService) maybeCleanupSession(session *VODSession) {
@@ -789,7 +881,7 @@ func (s *VODService) maybeCleanupSession(session *VODSession) {
 
 	session.mu.Lock()
 	detached := session.Detached
-	hasPending := session.HasPendingWorkLocked()
+	hasPending := session.HasPendingWork()
 	processID := session.ProcessID
 	sessionID := session.ID
 	session.mu.Unlock()
@@ -800,6 +892,7 @@ func (s *VODService) maybeCleanupSession(session *VODSession) {
 
 	delete(s.sessions, sessionID)
 
+	session.cancel()
 	s.ffmpegMgr.Stop(processID)
 	s.ffmpegMgr.Remove(processID)
 	os.RemoveAll(session.TempDir)
@@ -809,18 +902,16 @@ func (s *VODService) maybeCleanupSession(session *VODSession) {
 func (s *VODService) CleanupExpired() {
 	s.mu.Lock()
 	var expired []string
-	var toExtract []*VODSession
+	var sessionsToExtract []*VODSession
 	for id, session := range s.sessions {
 		session.mu.Lock()
-		hasPending := session.HasPendingWorkLocked()
+		hasPending := session.HasPendingWork()
 		isDetached := session.Detached
 		lastAccess := session.LastAccess
 		processID := session.ProcessID
 		ffmpegDone := s.ffmpegMgr.IsReady(processID)
-		session.mu.Unlock()
 
 		if ffmpegDone && hasPending {
-			session.mu.Lock()
 			buffered := s.ffmpegMgr.GetBufferedSecs(processID)
 			for _, seg := range session.Segments {
 				seg.mu.Lock()
@@ -832,20 +923,19 @@ func (s *VODService) CleanupExpired() {
 			}
 			session.Detached = true
 			session.mu.Unlock()
-			toExtract = append(toExtract, session)
+			sessionsToExtract = append(sessionsToExtract, session)
 			continue
 		}
 
+		shouldExpire := false
 		if isDetached {
-			if !hasPending && ffmpegDone {
-				expired = append(expired, id)
-			}
-			continue
+			shouldExpire = !hasPending && ffmpegDone
+		} else if !hasPending && time.Since(lastAccess) > s.config.VODSessionTimeout {
+			shouldExpire = true
 		}
-		if hasPending {
-			continue
-		}
-		if time.Since(lastAccess) > s.config.VODSessionTimeout {
+		session.mu.Unlock()
+
+		if shouldExpire {
 			expired = append(expired, id)
 		}
 	}
@@ -858,6 +948,7 @@ func (s *VODService) CleanupExpired() {
 		isDetached := session.Detached
 		session.mu.Unlock()
 
+		session.cancel()
 		if !isDetached {
 			s.ffmpegMgr.Stop(processID)
 		}
@@ -867,7 +958,7 @@ func (s *VODService) CleanupExpired() {
 	}
 	s.mu.Unlock()
 
-	for _, session := range toExtract {
+	for _, session := range sessionsToExtract {
 		s.log.Info().Str("session_id", session.ID).Msg("ffmpeg terminated, extracting defined segments")
 		s.extractAllDefined(session)
 	}
@@ -878,13 +969,11 @@ func (s *VODService) userRecordDir(userID string) string {
 }
 
 func (s *VODService) CreateRecordingSession(ctx context.Context, channelID, programTitle, channelName, userID string, stopAt time.Time) (*VODSession, *RecordingSegment, error) {
-	s.mu.RLock()
-	existing, hasExisting := s.sessions[channelID]
-	s.mu.RUnlock()
+	existing, hasExisting := s.getSession(channelID)
 
 	if hasExisting {
 		seg, err := s.CreateSegment(channelID, programTitle, channelName, userID, 0, 0, stopAt)
-		if err != nil && err.Error() != "session already has an active segment" {
+		if err != nil && !errors.Is(err, ErrActiveSegmentExists) {
 			return nil, nil, err
 		}
 		return existing, seg, nil
@@ -926,6 +1015,7 @@ func (s *VODService) CreateRecordingSession(ctx context.Context, channelID, prog
 
 	processID := s.ffmpegMgr.Start(streamURL, filePath, tempDir, "ffmpeg", nil)
 
+	sessionCtx, sessionCancel := context.WithCancel(context.Background())
 	session := &VODSession{
 		ID:         channelID,
 		ProcessID:  processID,
@@ -933,6 +1023,8 @@ func (s *VODService) CreateRecordingSession(ctx context.Context, channelID, prog
 		FilePath:   filePath,
 		TempDir:    tempDir,
 		LastAccess: time.Now(),
+		ctx:        sessionCtx,
+		cancel:     sessionCancel,
 	}
 
 	s.mu.Lock()
@@ -945,10 +1037,58 @@ func (s *VODService) CreateRecordingSession(ctx context.Context, channelID, prog
 	return session, seg, nil
 }
 
+func (s *VODService) GetProfileName(sessionID string) string {
+	session, ok := s.getSession(sessionID)
+	if !ok {
+		return ""
+	}
+	session.mu.Lock()
+	defer session.mu.Unlock()
+	return session.ProfileName
+}
+
+func (s *VODService) GetVideoInfo(sessionID string) *ffmpeg.VideoInfo {
+	session, ok := s.getSession(sessionID)
+	if !ok {
+		return nil
+	}
+	session.mu.Lock()
+	defer session.mu.Unlock()
+	return session.Video
+}
+
+func (s *VODService) GetAudioTracks(sessionID string) []ffmpeg.AudioTrack {
+	session, ok := s.getSession(sessionID)
+	if !ok {
+		return nil
+	}
+	session.mu.Lock()
+	defer session.mu.Unlock()
+	return session.AudioTracks
+}
+
+func (s *VODService) GetAudioIndex(sessionID string) int {
+	session, ok := s.getSession(sessionID)
+	if !ok {
+		return 0
+	}
+	session.mu.Lock()
+	defer session.mu.Unlock()
+	return session.AudioIndex
+}
+
+func (s *VODService) GetDuration(sessionID string) float64 {
+	session, ok := s.getSession(sessionID)
+	if !ok {
+		return 0
+	}
+	session.mu.Lock()
+	defer session.mu.Unlock()
+	return session.Duration
+}
+
 func (s *VODService) GetBufferedSecs(sessionID string) float64 {
-	s.mu.RLock()
-	session, ok := s.sessions[sessionID]
-	s.mu.RUnlock()
+	session, ok := s.getSession(sessionID)
 	if !ok {
 		return 0
 	}
@@ -956,9 +1096,7 @@ func (s *VODService) GetBufferedSecs(sessionID string) float64 {
 }
 
 func (s *VODService) IsProcessReady(sessionID string) bool {
-	s.mu.RLock()
-	session, ok := s.sessions[sessionID]
-	s.mu.RUnlock()
+	session, ok := s.getSession(sessionID)
 	if !ok {
 		return true
 	}
@@ -966,9 +1104,7 @@ func (s *VODService) IsProcessReady(sessionID string) bool {
 }
 
 func (s *VODService) GetProcessError(sessionID string) error {
-	s.mu.RLock()
-	session, ok := s.sessions[sessionID]
-	s.mu.RUnlock()
+	session, ok := s.getSession(sessionID)
 	if !ok {
 		return nil
 	}
@@ -1120,7 +1256,7 @@ func (s *VODService) listAllCompletedRecordings() ([]CompletedRecording, error) 
 
 func (s *VODService) GetCompletedRecordingPath(filename, userID string) (string, error) {
 	if strings.Contains(filename, "/") || strings.Contains(filename, "\\") || filename == ".." || filename == "." {
-		return "", fmt.Errorf("invalid filename")
+		return "", ErrInvalidFilename
 	}
 	var dir string
 	if userID == "" {
@@ -1130,7 +1266,7 @@ func (s *VODService) GetCompletedRecordingPath(filename, userID string) (string,
 	}
 	fullPath := filepath.Join(dir, filename)
 	if _, err := os.Stat(fullPath); os.IsNotExist(err) {
-		return "", fmt.Errorf("file not found")
+		return "", ErrFileNotFound
 	}
 	return fullPath, nil
 }
@@ -1144,9 +1280,7 @@ func (s *VODService) DeleteCompletedRecording(filename, userID string) error {
 }
 
 func (s *VODService) IsRecording(sessionID string) bool {
-	s.mu.RLock()
-	session, ok := s.sessions[sessionID]
-	s.mu.RUnlock()
+	session, ok := s.getSession(sessionID)
 	if !ok {
 		return false
 	}
@@ -1156,9 +1290,7 @@ func (s *VODService) IsRecording(sessionID string) bool {
 }
 
 func (s *VODService) GetSegments(sessionID string) []SegmentInfo {
-	s.mu.RLock()
-	session, ok := s.sessions[sessionID]
-	s.mu.RUnlock()
+	session, ok := s.getSession(sessionID)
 	if !ok {
 		return nil
 	}
@@ -1179,4 +1311,23 @@ func (s *VODService) GetSegments(sessionID string) []SegmentInfo {
 		seg.mu.Unlock()
 	}
 	return infos
+}
+
+func (s *VODService) Shutdown() {
+	s.mu.Lock()
+	sessions := make([]*VODSession, 0, len(s.sessions))
+	for _, session := range s.sessions {
+		sessions = append(sessions, session)
+	}
+	s.sessions = make(map[string]*VODSession)
+	s.mu.Unlock()
+
+	for _, session := range sessions {
+		session.cancel()
+		s.ffmpegMgr.Stop(session.ProcessID)
+		s.ffmpegMgr.Wait(session.ProcessID)
+		s.ffmpegMgr.Remove(session.ProcessID)
+	}
+
+	s.log.Info().Int("sessions", len(sessions)).Msg("VOD service shutdown complete")
 }

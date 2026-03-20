@@ -6,14 +6,39 @@ import (
 	"math"
 	"os/exec"
 	"strconv"
+	"strings"
 	"time"
 )
 
+type VideoInfo struct {
+	Codec          string `json:"codec"`
+	Profile        string `json:"profile,omitempty"`
+	PixFmt         string `json:"pix_fmt,omitempty"`
+	ColorSpace     string `json:"color_space,omitempty"`
+	ColorTransfer  string `json:"color_transfer,omitempty"`
+	ColorPrimaries string `json:"color_primaries,omitempty"`
+	FieldOrder     string `json:"field_order,omitempty"`
+	FPS            string `json:"fps,omitempty"`
+	BitRate        string `json:"bit_rate,omitempty"`
+}
+
+type AudioTrack struct {
+	Index      int    `json:"index"`
+	Language   string `json:"language"`
+	Codec      string `json:"codec"`
+	Profile    string `json:"profile,omitempty"`
+	SampleRate string `json:"sample_rate,omitempty"`
+	Channels   int    `json:"channels,omitempty"`
+	BitRate    string `json:"bit_rate,omitempty"`
+}
+
 type ProbeResult struct {
-	Duration float64 `json:"duration"`
-	IsVOD    bool    `json:"is_vod"`
-	Width    int     `json:"width"`
-	Height   int     `json:"height"`
+	Duration    float64      `json:"duration"`
+	IsVOD       bool         `json:"is_vod"`
+	Width       int          `json:"width"`
+	Height      int          `json:"height"`
+	Video       *VideoInfo   `json:"video,omitempty"`
+	AudioTracks []AudioTrack `json:"audio_tracks,omitempty"`
 }
 
 type ffprobeOutput struct {
@@ -26,9 +51,39 @@ type ffprobeFormat struct {
 }
 
 type ffprobeStream struct {
-	CodecType string `json:"codec_type"`
-	Width     int    `json:"width"`
-	Height    int    `json:"height"`
+	CodecType      string            `json:"codec_type"`
+	CodecName      string            `json:"codec_name"`
+	Profile        string            `json:"profile"`
+	Index          int               `json:"index"`
+	Width          int               `json:"width"`
+	Height         int               `json:"height"`
+	PixFmt         string            `json:"pix_fmt"`
+	ColorSpace     string            `json:"color_space"`
+	ColorTransfer  string            `json:"color_transfer"`
+	ColorPrimaries string            `json:"color_primaries"`
+	FieldOrder     string            `json:"field_order"`
+	RFrameRate     string            `json:"r_frame_rate"`
+	SampleRate     string            `json:"sample_rate"`
+	Channels       int               `json:"channels"`
+	BitRate        string            `json:"bit_rate"`
+	Tags           map[string]string `json:"tags"`
+}
+
+func simplifyFrameRate(rate string) string {
+	parts := strings.SplitN(rate, "/", 2)
+	if len(parts) != 2 {
+		return rate
+	}
+	num, err1 := strconv.ParseFloat(parts[0], 64)
+	den, err2 := strconv.ParseFloat(parts[1], 64)
+	if err1 != nil || err2 != nil || den == 0 {
+		return rate
+	}
+	fps := num / den
+	if fps == float64(int(fps)) {
+		return strconv.Itoa(int(fps))
+	}
+	return strconv.FormatFloat(fps, 'f', 2, 64)
 }
 
 func Probe(ctx context.Context, url, userAgent string) (*ProbeResult, error) {
@@ -37,6 +92,8 @@ func Probe(ctx context.Context, url, userAgent string) (*ProbeResult, error) {
 
 	args := []string{
 		"-v", "quiet",
+		"-analyzeduration", "5000000",
+		"-probesize", "5000000",
 		"-print_format", "json",
 		"-show_format",
 		"-show_streams",
@@ -67,11 +124,38 @@ func Probe(ctx context.Context, url, userAgent string) (*ProbeResult, error) {
 		}
 	}
 
+	audioIdx := 0
 	for _, s := range probe.Streams {
-		if s.CodecType == "video" && s.Width > 0 {
+		if s.CodecType == "video" && s.Width > 0 && result.Width == 0 {
 			result.Width = s.Width
 			result.Height = s.Height
-			break
+			result.Video = &VideoInfo{
+				Codec:          s.CodecName,
+				Profile:        s.Profile,
+				PixFmt:         s.PixFmt,
+				ColorSpace:     s.ColorSpace,
+				ColorTransfer:  s.ColorTransfer,
+				ColorPrimaries: s.ColorPrimaries,
+				FieldOrder:     s.FieldOrder,
+				FPS:            simplifyFrameRate(s.RFrameRate),
+				BitRate:        s.BitRate,
+			}
+		}
+		if s.CodecType == "audio" {
+			lang := ""
+			if s.Tags != nil {
+				lang = s.Tags["language"]
+			}
+			result.AudioTracks = append(result.AudioTracks, AudioTrack{
+				Index:      audioIdx,
+				Language:   lang,
+				Codec:      s.CodecName,
+				Profile:    s.Profile,
+				SampleRate: s.SampleRate,
+				Channels:   s.Channels,
+				BitRate:    s.BitRate,
+			})
+			audioIdx++
 		}
 	}
 

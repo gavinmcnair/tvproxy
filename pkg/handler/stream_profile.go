@@ -56,7 +56,11 @@ func (h *StreamProfileHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Default stream mode to "ffmpeg" if not provided
+	if existing, _ := h.repo.GetByName(r.Context(), req.Name); existing != nil {
+		respondError(w, http.StatusConflict, "stream profile name already exists")
+		return
+	}
+
 	if req.StreamMode == "" {
 		req.StreamMode = "ffmpeg"
 	}
@@ -171,11 +175,14 @@ func (h *StreamProfileHandler) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if req.Name != "" {
+	if req.Name != "" && req.Name != profile.Name {
+		if existing, _ := h.repo.GetByName(r.Context(), req.Name); existing != nil {
+			respondError(w, http.StatusConflict, "stream profile name already exists")
+			return
+		}
 		profile.Name = req.Name
 	}
 
-	// Default stream mode to existing value if not provided
 	if req.StreamMode == "" {
 		req.StreamMode = profile.StreamMode
 	}

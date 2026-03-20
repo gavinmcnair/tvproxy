@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"encoding/xml"
+	"errors"
 	"fmt"
 	"strconv"
 
@@ -12,6 +13,8 @@ import (
 	"github.com/gavinmcnair/tvproxy/pkg/models"
 	"github.com/gavinmcnair/tvproxy/pkg/repository"
 )
+
+var ErrNoHDHRDevice = errors.New("no enabled HDHR device configured")
 
 type DiscoverData struct {
 	FriendlyName    string `json:"FriendlyName"`
@@ -207,14 +210,14 @@ func (s *HDHRService) firstEnabledDevice(ctx context.Context) (*models.HDHRDevic
 		return nil, fmt.Errorf("listing devices: %w", err)
 	}
 	if len(devices) == 0 {
-		return nil, fmt.Errorf("no hdhr devices configured")
+		return nil, ErrNoHDHRDevice
 	}
 	for i := range devices {
 		if devices[i].IsEnabled {
 			return &devices[i], nil
 		}
 	}
-	return nil, fmt.Errorf("no enabled hdhr devices")
+	return nil, ErrNoHDHRDevice
 }
 
 func (s *HDHRService) listChannels(ctx context.Context) ([]models.Channel, error) {
