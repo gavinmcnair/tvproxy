@@ -810,6 +810,7 @@
       var deltaPresets = [-24, -6, -3, -1, 1, 3, 6, 24];
       var deltaLabels = { '-24': '-1d', '-6': '-6h', '-3': '-3h', '-1': '-1h', '1': '+1h', '3': '+3h', '6': '+6h', '24': '+1d' };
       var nowBtn = h('button', { className: 'btn btn-sm btn-primary', onClick: function() { navigate(0); } }, 'Now');
+      var dayLabel = h('span', { className: 'epg-day-label' }, '');
       var navEl = h('div', { className: 'epg-nav' });
 
       function formatOffset(hrs) {
@@ -874,6 +875,9 @@
 
       function renderFull() {
         timeLabelEl.textContent = formatDate(windowStart) + ' \u2014 ' + formatDate(windowStop);
+        var ws = new Date(windowStart);
+        var days = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+        dayLabel.textContent = days[ws.getDay()] + ' ' + ws.toLocaleDateString(undefined, { day: 'numeric', month: 'short' });
 
         hourMarksHtml = '';
         for (var m = 0; m < windowMinutes; m += 60) {
@@ -914,6 +918,7 @@
 
         var toolbar = h('div', { className: 'epg-toolbar' },
           navEl,
+          dayLabel,
           timeLabelEl,
           h('span', { style: 'font-size:13px;color:var(--text-muted)' }, channels.length + ' channels'),
         );
