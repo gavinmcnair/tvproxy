@@ -347,16 +347,32 @@
     storageKey: 'streams',
   });
 
+  function getNowPlaying(guide) {
+    var now = Date.now();
+    var result = {};
+    var progs = guide.programs || {};
+    Object.keys(progs).forEach(function(chId) {
+      for (var i = 0; i < progs[chId].length; i++) {
+        var p = progs[chId][i];
+        if (new Date(p.start).getTime() <= now && new Date(p.stop).getTime() > now) {
+          result[chId] = p.title;
+          break;
+        }
+      }
+    });
+    return result;
+  }
+
   const channelsCache = new DataCache({
     label: 'Channels',
     loader: async () => {
-      const [channels, nowMap] = await Promise.all([
+      const [channels, guide] = await Promise.all([
         api.get('/api/channels'),
-        api.get('/api/epg/now').catch(() => ({})),
+        api.get('/api/epg/guide?hours=1').catch(() => ({})),
       ]);
+      var nowMap = getNowPlaying(guide);
       channels.forEach(ch => {
-        var prog = ch.tvg_id ? nowMap[ch.tvg_id] : null;
-        ch._now_playing = prog ? prog.title : '';
+        ch._now_playing = (ch.tvg_id && nowMap[ch.tvg_id]) || '';
       });
       return channels;
     },

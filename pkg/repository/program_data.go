@@ -15,6 +15,28 @@ import (
 const programDataCols = `id, epg_data_id, title, description, start, stop, category, episode_num, icon,
 	subtitle, date, language, is_new, is_previously_shown, credits, rating, rating_icon, star_rating, sub_categories, episode_num_system`
 
+var sqliteTimeFormats = []string{
+	"2006-01-02 15:04:05 -0700 -0700",
+	"2006-01-02 15:04:05 -0700",
+	"2006-01-02T15:04:05Z",
+	"2006-01-02 15:04:05Z",
+	"2006-01-02T15:04:05",
+	"2006-01-02 15:04:05",
+	"2006-01-02 15:04:05-07:00",
+	"2006-01-02T15:04:05-07:00",
+	time.RFC3339,
+	time.RFC3339Nano,
+}
+
+func parseSQLiteTime(s string) (time.Time, error) {
+	for _, f := range sqliteTimeFormats {
+		if t, err := time.Parse(f, s); err == nil {
+			return t, nil
+		}
+	}
+	return time.Time{}, fmt.Errorf("cannot parse time: %q", s)
+}
+
 type GuideProgram struct {
 	ChannelID   string    `json:"channel_id"`
 	Title       string    `json:"title"`
@@ -150,13 +172,12 @@ func (r *ProgramDataRepository) GetNowByChannelID(ctx context.Context, channelID
 	return &p, nil
 }
 
-func (r *ProgramDataRepository) ListNowPlaying(ctx context.Context, now time.Time) ([]GuideProgram, error) {
+func (r *ProgramDataRepository) ListNowPlaying(ctx context.Context, now time.Time) (map[string]string, error) {
 	rows, err := r.db.QueryContext(ctx,
-		`SELECT e.channel_id, p.title, p.description, p.start, p.stop, p.category
+		`SELECT e.channel_id, p.title
 		FROM program_data p
 		JOIN epg_data e ON e.id = p.epg_data_id
-		WHERE p.start <= ? AND p.stop > ?
-		ORDER BY e.channel_id`,
+		WHERE p.start <= ? AND p.stop > ?`,
 		now, now,
 	)
 	if err != nil {
@@ -164,15 +185,17 @@ func (r *ProgramDataRepository) ListNowPlaying(ctx context.Context, now time.Tim
 	}
 	defer rows.Close()
 
-	var programs []GuideProgram
+	result := make(map[string]string)
 	for rows.Next() {
-		var g GuideProgram
-		if err := rows.Scan(&g.ChannelID, &g.Title, &g.Description, &g.Start, &g.Stop, &g.Category); err != nil {
+		var channelID, title string
+		if err := rows.Scan(&channelID, &title); err != nil {
 			return nil, fmt.Errorf("scanning now playing: %w", err)
 		}
-		programs = append(programs, g)
+		if _, exists := result[channelID]; !exists {
+			result[channelID] = title
+		}
 	}
-	return programs, rows.Err()
+	return result, rows.Err()
 }
 
 func (r *ProgramDataRepository) ListForGuide(ctx context.Context, start, stop time.Time) ([]GuideProgram, error) {
@@ -192,8 +215,16 @@ func (r *ProgramDataRepository) ListForGuide(ctx context.Context, start, stop ti
 	var programs []GuideProgram
 	for rows.Next() {
 		var g GuideProgram
-		if err := rows.Scan(&g.ChannelID, &g.Title, &g.Description, &g.Start, &g.Stop, &g.Category); err != nil {
+		var startStr, stopStr string
+		if err := rows.Scan(&g.ChannelID, &g.Title, &g.Description, &startStr, &stopStr, &g.Category); err != nil {
 			return nil, fmt.Errorf("scanning guide program: %w", err)
+		}
+		var parseErr error
+		if g.Start, parseErr = parseSQLiteTime(startStr); parseErr != nil {
+			return nil, fmt.Errorf("parsing guide start time: %w", parseErr)
+		}
+		if g.Stop, parseErr = parseSQLiteTime(stopStr); parseErr != nil {
+			return nil, fmt.Errorf("parsing guide stop time: %w", parseErr)
 		}
 		programs = append(programs, g)
 	}

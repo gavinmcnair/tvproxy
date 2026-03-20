@@ -77,14 +77,10 @@ func (h *EPGDataHandler) NowPlaying(w http.ResponseWriter, r *http.Request) {
 	channelID := r.URL.Query().Get("channel_id")
 
 	if channelID == "" {
-		programs, err := h.programDataRepo.ListNowPlaying(r.Context(), time.Now())
+		nowMap, err := h.programDataRepo.ListNowPlaying(r.Context(), time.Now())
 		if err != nil {
 			respondError(w, http.StatusInternalServerError, "failed to list now playing")
 			return
-		}
-		nowMap := make(map[string]repository.GuideProgram, len(programs))
-		for _, p := range programs {
-			nowMap[p.ChannelID] = p
 		}
 		respondJSON(w, http.StatusOK, nowMap)
 		return
