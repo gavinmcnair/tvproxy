@@ -44,22 +44,26 @@ type HDHRDiscoverWorker struct {
 	hdhrDeviceRepo *repository.HDHRDeviceRepository
 	baseURL        string
 	log            zerolog.Logger
+	retryDelay     time.Duration
 }
 
 // NewHDHRDiscoverWorker creates a new HDHomeRun discovery worker.
-func NewHDHRDiscoverWorker(hdhrDeviceRepo *repository.HDHRDeviceRepository, baseURL string, log zerolog.Logger) *HDHRDiscoverWorker {
+func NewHDHRDiscoverWorker(hdhrDeviceRepo *repository.HDHRDeviceRepository, baseURL string, retryDelay time.Duration, log zerolog.Logger) *HDHRDiscoverWorker {
+	if retryDelay <= 0 {
+		retryDelay = 2 * time.Second
+	}
 	return &HDHRDiscoverWorker{
 		hdhrDeviceRepo: hdhrDeviceRepo,
 		baseURL:        baseURL,
 		log:            log.With().Str("worker", "hdhr_discover").Logger(),
+		retryDelay:     retryDelay,
 	}
 }
 
 // Run starts listening for HDHomeRun discovery packets.
 func (w *HDHRDiscoverWorker) Run(ctx context.Context) {
-	// Wait briefly for HTTP server to start
 	select {
-	case <-time.After(2 * time.Second):
+	case <-time.After(w.retryDelay):
 	case <-ctx.Done():
 		return
 	}

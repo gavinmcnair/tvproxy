@@ -5,6 +5,8 @@ import (
 	"os"
 	"strconv"
 	"time"
+
+	"github.com/gavinmcnair/tvproxy/pkg/defaults"
 )
 
 type Config struct {
@@ -45,6 +47,9 @@ type Config struct {
 	RecordDir             string
 	RecordDefaultDuration time.Duration
 	RecordStopBuffer      time.Duration
+
+	// Tuning settings (loaded from settings.json)
+	Settings *defaults.Settings
 }
 
 func Load() *Config {

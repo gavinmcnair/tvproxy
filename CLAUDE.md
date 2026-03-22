@@ -28,6 +28,7 @@ cmd/tvproxy/main.go     — entry point, DI wiring, router setup
 pkg/
   config/               — env-based config
   database/             — SQLite connection, sequential migrations (applied on startup)
+  defaults/             — JSON client defaults (embedded, mountable override at /data/clients.json)
   ffmpeg/               — stream profile arg composition (compose.go)
   handler/              — HTTP handlers + integration_test.go (mirrors main.go wiring)
   m3u/                  — M3U playlist parser
@@ -52,7 +53,8 @@ entrypoint.sh           — Docker entrypoint (UID/GID handling, GPU device grou
 - **Proxy**: Profile resolution chain: (1) `?profile=Name` query param, (2) client header detection, (3) default "proxy" fallback. If custom_args is empty (Direct profiles), uses HTTP passthrough. Otherwise spawns ffmpeg with the stored args.
 - **Client detection**: Generic, data-driven header matching. Users define "clients" with HTTP header match rules (any header, any pattern). Each client auto-creates a linked stream profile. Match engine checks rules in priority order (AND logic per client). Zero hardcoded header analysis — all matching driven by database rows. Code: pkg/service/client.go, pkg/repository/client.go, pkg/handler/client.go.
 - **Stream profile categories**: `is_system` (Direct, Proxy — undeletable, uneditable), `is_client` (auto-created per client — undeletable via API, editable, removed when parent client is deleted), regular (user-created, fully editable). List sorts: system first, client second, regular last (alphabetical within each).
-- **Migration seeds**: 1 VLC user agent, 2 system stream profiles (Direct, Proxy) + 5 regular (Browser, SAT>IP Copy, M3U Copy, M3U->MP4, M3U->Matroska) + 3 client-detection profiles (Plex, VLC, Browser) with 3 seeded clients. Default profile is Proxy.
+- **Client defaults**: JSON-driven (`pkg/defaults/clients.json`, embedded via `//go:embed`). On fresh install or reset, seeds 5 clients (Plex, VLC, Skybox, 4XVR, Browser) with linked stream profiles. Users can override by mounting their own `clients.json` at `/data/clients.json`. Only seeds if clients table is empty.
+- **Migration seeds**: 2 system stream profiles (Direct, Proxy) seeded in `seedData()`. Client seeding is separate via `SeedClientDefaults()`. Default profile is Proxy.
 
 ## Common Pitfalls
 

@@ -14,14 +14,16 @@ import (
 var knownExtensions = []string{".mp4", ".ts", ".mkv", ".avi", ".m3u8", ".mpg", ".mpeg", ".webm", ".flv", ".mov"}
 
 type ProxyHandler struct {
-	proxyService *service.ProxyService
-	log          zerolog.Logger
+	proxyService    *service.ProxyService
+	settingsService *service.SettingsService
+	log             zerolog.Logger
 }
 
-func NewProxyHandler(proxyService *service.ProxyService, log zerolog.Logger) *ProxyHandler {
+func NewProxyHandler(proxyService *service.ProxyService, settingsService *service.SettingsService, log zerolog.Logger) *ProxyHandler {
 	return &ProxyHandler{
-		proxyService: proxyService,
-		log:          log.With().Str("handler", "proxy").Logger(),
+		proxyService:    proxyService,
+		settingsService: settingsService,
+		log:             log.With().Str("handler", "proxy").Logger(),
 	}
 }
 
@@ -38,6 +40,11 @@ func stripExtension(id string) string {
 func (h *ProxyHandler) Stream(w http.ResponseWriter, r *http.Request) {
 	channelID := stripExtension(chi.URLParam(r, "channelID"))
 	h.log.Info().Str("channel_id", channelID).Str("user_agent", r.UserAgent()).Str("remote_addr", r.RemoteAddr).Msg("client connected")
+	if h.settingsService.IsDebug() {
+		for k, v := range r.Header {
+			h.log.Debug().Strs(k, v).Msg("request header")
+		}
+	}
 
 	if err := h.proxyService.ProxyStream(r.Context(), w, r, channelID, r.URL.Query().Get("profile")); err != nil {
 		switch {
@@ -63,6 +70,11 @@ func (h *ProxyHandler) StreamHead(w http.ResponseWriter, r *http.Request) {
 func (h *ProxyHandler) RawStream(w http.ResponseWriter, r *http.Request) {
 	streamID := stripExtension(chi.URLParam(r, "streamID"))
 	h.log.Info().Str("stream_id", streamID).Str("user_agent", r.UserAgent()).Str("remote_addr", r.RemoteAddr).Msg("client connected")
+	if h.settingsService.IsDebug() {
+		for k, v := range r.Header {
+			h.log.Debug().Strs(k, v).Msg("request header")
+		}
+	}
 
 	if err := h.proxyService.ProxyRawStream(r.Context(), w, r, streamID, r.URL.Query().Get("profile")); err != nil {
 		switch {

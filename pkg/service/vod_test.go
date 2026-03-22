@@ -15,6 +15,7 @@ import (
 
 	"github.com/gavinmcnair/tvproxy/pkg/config"
 	"github.com/gavinmcnair/tvproxy/pkg/repository"
+	"github.com/gavinmcnair/tvproxy/pkg/store"
 )
 
 func newTestVODService(t *testing.T) (*VODService, *config.Config) {
@@ -31,11 +32,11 @@ func newTestVODService(t *testing.T) (*VODService, *config.Config) {
 	}
 
 	channelRepo := repository.NewChannelRepository(db)
-	streamRepo := repository.NewStreamRepository(db)
+	streamStore := store.NewStreamStore(filepath.Join(t.TempDir(), "streams.gob"), zerolog.New(os.Stderr).Level(zerolog.Disabled))
 	streamProfileRepo := repository.NewStreamProfileRepository(db)
 	log := zerolog.New(os.Stderr).Level(zerolog.Disabled)
 	ffmpegMgr := NewFFmpegManager(cfg, log)
-	svc := NewVODService(channelRepo, streamRepo, streamProfileRepo, ffmpegMgr, cfg, log)
+	svc := NewVODService(channelRepo, streamStore, streamProfileRepo, ffmpegMgr, nil, cfg, log)
 	return svc, cfg
 }
 

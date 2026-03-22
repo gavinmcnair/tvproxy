@@ -16,12 +16,14 @@ import (
 	"github.com/gavinmcnair/tvproxy/pkg/m3u"
 	"github.com/gavinmcnair/tvproxy/pkg/models"
 	"github.com/gavinmcnair/tvproxy/pkg/repository"
+	"github.com/gavinmcnair/tvproxy/pkg/store"
 	"github.com/gavinmcnair/tvproxy/pkg/xtream"
 )
 
 type M3UService struct {
 	m3uAccountRepo *repository.M3UAccountRepository
-	streamRepo     *repository.StreamRepository
+	streamStore    store.StreamStore
+	channelRepo    *repository.ChannelRepository
 	logoService    *LogoService
 	config         *config.Config
 	log            zerolog.Logger
@@ -29,14 +31,16 @@ type M3UService struct {
 
 func NewM3UService(
 	m3uAccountRepo *repository.M3UAccountRepository,
-	streamRepo *repository.StreamRepository,
+	streamStore store.StreamStore,
+	channelRepo *repository.ChannelRepository,
 	logoService *LogoService,
 	cfg *config.Config,
 	log zerolog.Logger,
 ) *M3UService {
 	return &M3UService{
 		m3uAccountRepo: m3uAccountRepo,
-		streamRepo:     streamRepo,
+		streamStore:    streamStore,
+		channelRepo:    channelRepo,
 		logoService:    logoService,
 		config:         cfg,
 		log:            log.With().Str("service", "m3u").Logger(),
@@ -82,8 +86,11 @@ func (s *M3UService) UpdateAccount(ctx context.Context, account *models.M3UAccou
 
 // DeleteAccount deletes an M3U account and its associated streams.
 func (s *M3UService) DeleteAccount(ctx context.Context, id string) error {
-	if err := s.streamRepo.DeleteByAccountID(ctx, id); err != nil {
+	if err := s.streamStore.DeleteByAccountID(ctx, id); err != nil {
 		return fmt.Errorf("deleting streams for account: %w", err)
+	}
+	if err := s.streamStore.Save(); err != nil {
+		s.log.Error().Err(err).Msg("failed to save stream store after account delete")
 	}
 	if err := s.m3uAccountRepo.Delete(ctx, id); err != nil {
 		return fmt.Errorf("deleting m3u account: %w", err)
@@ -119,7 +126,8 @@ func (s *M3UService) refreshAccount(ctx context.Context, account *models.M3UAcco
 func (s *M3UService) refreshXtreamAccount(ctx context.Context, account *models.M3UAccount) error {
 	s.log.Info().Str("account_id", account.ID).Str("name", account.Name).Msg("refreshing xtream account")
 
-	client := xtream.NewClient(account.URL, account.Username, account.Password, s.config.UserAgent)
+	xtreamTimeout := s.config.Settings.Network.XtreamAPITimeout
+	client := xtream.NewClient(account.URL, account.Username, account.Password, s.config.UserAgent, xtreamTimeout)
 
 	if _, err := client.Authenticate(ctx); err != nil {
 		return fmt.Errorf("xtream authentication failed: %w", err)
@@ -204,15 +212,24 @@ func (s *M3UService) refreshM3UAccount(ctx context.Context, account *models.M3UA
 }
 
 func (s *M3UService) upsertAndFinalize(ctx context.Context, account *models.M3UAccount, streams []models.Stream, keepIDs []string) error {
-	if err := s.streamRepo.BulkUpsert(ctx, streams); err != nil {
+	if err := s.streamStore.BulkUpsert(ctx, streams); err != nil {
 		return fmt.Errorf("upserting streams: %w", err)
 	}
 
-	if err := s.streamRepo.DeleteStaleByAccountID(ctx, account.ID, keepIDs); err != nil {
+	deletedIDs, err := s.streamStore.DeleteStaleByAccountID(ctx, account.ID, keepIDs)
+	if err != nil {
 		return fmt.Errorf("deleting stale streams: %w", err)
 	}
 
-	s.streamRepo.Checkpoint(ctx)
+	if len(deletedIDs) > 0 && s.channelRepo != nil {
+		if err := s.channelRepo.RemoveStreamMappings(ctx, deletedIDs); err != nil {
+			s.log.Error().Err(err).Int("count", len(deletedIDs)).Msg("failed to clean up channel stream mappings")
+		}
+	}
+
+	if err := s.streamStore.Save(); err != nil {
+		s.log.Error().Err(err).Msg("failed to save stream store")
+	}
 	s.log.Info().Int("count", len(streams)).Msg("upserted streams")
 
 	now := time.Now()

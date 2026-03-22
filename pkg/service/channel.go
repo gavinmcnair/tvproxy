@@ -8,25 +8,26 @@ import (
 
 	"github.com/gavinmcnair/tvproxy/pkg/models"
 	"github.com/gavinmcnair/tvproxy/pkg/repository"
+	"github.com/gavinmcnair/tvproxy/pkg/store"
 )
 
 type ChannelService struct {
 	channelRepo      *repository.ChannelRepository
 	channelGroupRepo *repository.ChannelGroupRepository
-	streamRepo       *repository.StreamRepository
+	streamStore      store.StreamReader
 	log              zerolog.Logger
 }
 
 func NewChannelService(
 	channelRepo *repository.ChannelRepository,
 	channelGroupRepo *repository.ChannelGroupRepository,
-	streamRepo *repository.StreamRepository,
+	streamStore store.StreamReader,
 	log zerolog.Logger,
 ) *ChannelService {
 	return &ChannelService{
 		channelRepo:      channelRepo,
 		channelGroupRepo: channelGroupRepo,
-		streamRepo:       streamRepo,
+		streamStore:      streamStore,
 		log:              log.With().Str("service", "channel").Logger(),
 	}
 }
@@ -84,7 +85,7 @@ func (s *ChannelService) GetChannelStreams(ctx context.Context, channelID string
 
 	streams := make([]models.Stream, 0, len(channelStreams))
 	for _, cs := range channelStreams {
-		stream, err := s.streamRepo.GetByID(ctx, cs.StreamID)
+		stream, err := s.streamStore.GetByID(ctx, cs.StreamID)
 		if err != nil {
 			s.log.Warn().Err(err).Str("stream_id", cs.StreamID).Msg("stream not found, skipping")
 			continue
@@ -216,7 +217,7 @@ func (s *ChannelService) ResetChannelFailCount(ctx context.Context, id string) e
 
 func (s *ChannelService) assignStreams(ctx context.Context, channelID string, streamIDs []string) error {
 	for _, streamID := range streamIDs {
-		if _, err := s.streamRepo.GetByID(ctx, streamID); err != nil {
+		if _, err := s.streamStore.GetByID(ctx, streamID); err != nil {
 			return fmt.Errorf("stream %s not found: %w", streamID, err)
 		}
 	}

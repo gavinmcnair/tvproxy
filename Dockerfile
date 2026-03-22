@@ -4,7 +4,8 @@ WORKDIR /app
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-RUN CGO_ENABLED=0 go build -ldflags="-s -w" -o /tvproxy ./cmd/tvproxy/
+ARG VERSION=dev
+RUN CGO_ENABLED=0 go build -ldflags="-s -w -X main.buildVersion=$VERSION" -o /tvproxy ./cmd/tvproxy/
 
 # ffmpeg 8.x with --enable-libvpl (QSV/oneVPL), VA-API, NVENC, Vulkan,
 # and all HW encoders (av1_qsv, av1_vaapi, h264_qsv, hevc_vaapi, etc.).
@@ -17,6 +18,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /tvproxy /usr/local/bin/tvproxy
+COPY pkg/defaults/clients.json /data/clients.json
+COPY pkg/defaults/settings.json /data/settings.json
 
 # Create tvproxy user at default UID 1000.
 RUN (usermod -l tvproxy -d /home/tvproxy ubuntu 2>/dev/null && groupmod -n tvproxy ubuntu 2>/dev/null || useradd -m -u 1000 tvproxy)

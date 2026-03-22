@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/gavinmcnair/tvproxy/pkg/models"
+	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -103,6 +104,8 @@ func TestMatchRule(t *testing.T) {
 }
 
 func TestMatchesAllRules(t *testing.T) {
+	svc := NewClientService(nil, nil, NewSettingsService(nil), zerolog.Nop())
+
 	tests := []struct {
 		name    string
 		headers map[string]string
@@ -149,7 +152,8 @@ func TestMatchesAllRules(t *testing.T) {
 			for k, v := range tt.headers {
 				req.Header.Set(k, v)
 			}
-			got := matchesAllRules(req, tt.rules)
+			client := models.Client{Name: "test", MatchRules: tt.rules}
+			got := svc.matchesAllRules(req, client, false)
 			assert.Equal(t, tt.want, got)
 		})
 	}

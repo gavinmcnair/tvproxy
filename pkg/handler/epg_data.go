@@ -1,25 +1,20 @@
 package handler
 
 import (
-	"database/sql"
 	"net/http"
 	"strconv"
 	"time"
 
 	"github.com/gavinmcnair/tvproxy/pkg/models"
-	"github.com/gavinmcnair/tvproxy/pkg/repository"
+	"github.com/gavinmcnair/tvproxy/pkg/store"
 )
 
 type EPGDataHandler struct {
-	epgDataRepo     *repository.EPGDataRepository
-	programDataRepo *repository.ProgramDataRepository
+	epgStore store.EPGReader
 }
 
-func NewEPGDataHandler(epgDataRepo *repository.EPGDataRepository, programDataRepo *repository.ProgramDataRepository) *EPGDataHandler {
-	return &EPGDataHandler{
-		epgDataRepo:     epgDataRepo,
-		programDataRepo: programDataRepo,
-	}
+func NewEPGDataHandler(epgStore store.EPGReader) *EPGDataHandler {
+	return &EPGDataHandler{epgStore: epgStore}
 }
 
 type epgDataWithPrograms struct {
@@ -39,9 +34,9 @@ func (h *EPGDataHandler) List(w http.ResponseWriter, r *http.Request) {
 	var err error
 
 	if sourceIDStr != "" {
-		data, err = h.epgDataRepo.ListBySourceID(r.Context(), sourceIDStr)
+		data, err = h.epgStore.ListBySourceID(r.Context(), sourceIDStr)
 	} else {
-		data, err = h.epgDataRepo.List(r.Context())
+		data, err = h.epgStore.ListEPGData(r.Context())
 	}
 
 	if err != nil {
@@ -56,7 +51,7 @@ func (h *EPGDataHandler) List(w http.ResponseWriter, r *http.Request) {
 
 	results := make([]epgDataWithPrograms, 0, len(data))
 	for _, d := range data {
-		programs, progErr := h.programDataRepo.ListByEPGDataID(r.Context(), d.ID)
+		programs, progErr := h.epgStore.ListPrograms(r.Context(), d.ID)
 		if progErr != nil {
 			respondError(w, http.StatusInternalServerError, "failed to list program data")
 			return
@@ -77,7 +72,7 @@ func (h *EPGDataHandler) NowPlaying(w http.ResponseWriter, r *http.Request) {
 	channelID := r.URL.Query().Get("channel_id")
 
 	if channelID == "" {
-		nowMap, err := h.programDataRepo.ListNowPlaying(r.Context(), time.Now())
+		nowMap, err := h.epgStore.ListNowPlaying(r.Context(), time.Now())
 		if err != nil {
 			respondError(w, http.StatusInternalServerError, "failed to list now playing")
 			return
@@ -86,22 +81,18 @@ func (h *EPGDataHandler) NowPlaying(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	program, err := h.programDataRepo.GetNowByChannelID(r.Context(), channelID, time.Now())
+	program, err := h.epgStore.GetNowByChannelID(r.Context(), channelID, time.Now())
 	if err != nil {
-		if err == sql.ErrNoRows {
-			respondJSON(w, http.StatusOK, nil)
-			return
-		}
-		respondError(w, http.StatusInternalServerError, "failed to get current program")
+		respondJSON(w, http.StatusOK, nil)
 		return
 	}
 	respondJSON(w, http.StatusOK, program)
 }
 
 type guideResponse struct {
-	Start    time.Time                            `json:"start"`
-	Stop     time.Time                            `json:"stop"`
-	Programs map[string][]repository.GuideProgram `json:"programs"`
+	Start    time.Time                          `json:"start"`
+	Stop     time.Time                          `json:"stop"`
+	Programs map[string][]models.GuideProgram `json:"programs"`
 }
 
 func (h *EPGDataHandler) Guide(w http.ResponseWriter, r *http.Request) {
@@ -123,13 +114,13 @@ func (h *EPGDataHandler) Guide(w http.ResponseWriter, r *http.Request) {
 	}
 	stop := start.Add(time.Duration(hours) * time.Hour)
 
-	programs, err := h.programDataRepo.ListForGuide(r.Context(), start, stop)
+	programs, err := h.epgStore.ListForGuide(r.Context(), start, stop)
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, "failed to list guide programs")
 		return
 	}
 
-	grouped := make(map[string][]repository.GuideProgram)
+	grouped := make(map[string][]models.GuideProgram)
 	for _, p := range programs {
 		grouped[p.ChannelID] = append(grouped[p.ChannelID], p)
 	}

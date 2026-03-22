@@ -16,32 +16,42 @@ type DLNASettingsChecker interface {
 }
 
 type DLNAWorker struct {
-	checker    DLNASettingsChecker
-	baseURL    string
-	port       int
-	log        zerolog.Logger
-	advertiser *ssdp.Advertiser
+	checker           DLNASettingsChecker
+	baseURL           string
+	port              int
+	log               zerolog.Logger
+	advertiser        *ssdp.Advertiser
+	retryDelay        time.Duration
+	announceInterval  time.Duration
 }
 
-func NewDLNAWorker(checker DLNASettingsChecker, baseURL string, port int, log zerolog.Logger) *DLNAWorker {
+func NewDLNAWorker(checker DLNASettingsChecker, baseURL string, port int, retryDelay, announceInterval time.Duration, log zerolog.Logger) *DLNAWorker {
+	if retryDelay <= 0 {
+		retryDelay = 2 * time.Second
+	}
+	if announceInterval <= 0 {
+		announceInterval = 30 * time.Second
+	}
 	return &DLNAWorker{
-		checker: checker,
-		baseURL: baseURL,
-		port:    port,
-		log:     log.With().Str("worker", "dlna").Logger(),
+		checker:          checker,
+		baseURL:          baseURL,
+		port:             port,
+		log:              log.With().Str("worker", "dlna").Logger(),
+		retryDelay:       retryDelay,
+		announceInterval: announceInterval,
 	}
 }
 
 func (w *DLNAWorker) Run(ctx context.Context) {
 	select {
-	case <-time.After(2 * time.Second):
+	case <-time.After(w.retryDelay):
 	case <-ctx.Done():
 		return
 	}
 
 	w.sync(ctx)
 
-	ticker := time.NewTicker(30 * time.Second)
+	ticker := time.NewTicker(w.announceInterval)
 	defer ticker.Stop()
 
 	for {

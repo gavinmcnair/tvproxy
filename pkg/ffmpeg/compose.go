@@ -1,19 +1,78 @@
 package ffmpeg
 
-import "strings"
+import (
+	"strconv"
+	"strings"
 
-// ComposeStreamProfileArgs builds the ffmpeg args string from the user-facing
-// dropdown values.
-func ComposeStreamProfileArgs(sourceType, hwaccel, videoCodec, container string) string {
+	"github.com/gavinmcnair/tvproxy/pkg/defaults"
+)
+
+type ComposeOptions struct {
+	SourceType  string
+	HWAccel     string
+	VideoCodec  string
+	Container   string
+	Deinterlace bool
+	FPSMode     string
+}
+
+var defaultFFmpegSettings = &defaults.FFmpegSettings{
+	LogLevel:           "warning",
+	AnalyzeDuration:    5000000,
+	ProbeSize:          5000000,
+	SatIPRWTimeout:     5000000,
+	AudioBitrate:       "192k",
+	AudioChannels:      2,
+	WebMAudioCodec:     "libopus",
+	MP4Movflags:        "frag_keyframe+empty_moov+default_base_moof",
+	MaxMuxingQueueSize: 4096,
+	FFlags:             "+genpts+discardcorrupt",
+	Encoders: map[string]defaults.EncoderCodecSettings{
+		"h264": {
+			Software:     defaults.EncoderHWSettings{Preset: "fast"},
+			QSV:          defaults.EncoderHWSettings{Preset: "veryslow", GlobalQuality: 20},
+			NVENC:        defaults.EncoderHWSettings{Preset: "p4"},
+			VAAPI:        defaults.EncoderHWSettings{},
+			VideoToolbox: defaults.EncoderHWSettings{},
+		},
+		"h265": {
+			Software:     defaults.EncoderHWSettings{Preset: "fast"},
+			QSV:          defaults.EncoderHWSettings{Preset: "veryslow", GlobalQuality: 22, PixFmt: "p010le"},
+			NVENC:        defaults.EncoderHWSettings{Preset: "p4"},
+			VAAPI:        defaults.EncoderHWSettings{},
+			VideoToolbox: defaults.EncoderHWSettings{},
+		},
+		"av1": {
+			Software: defaults.EncoderHWSettings{Preset: "6", CRF: 24, PixFmt: "yuv420p10le"},
+			QSV:      defaults.EncoderHWSettings{Preset: "veryslow", GlobalQuality: 25, LookAhead: 1, PixFmt: "p010le"},
+			NVENC:    defaults.EncoderHWSettings{Preset: "p4", CQ: 24, PixFmt: "p010le"},
+			VAAPI:    defaults.EncoderHWSettings{RCMode: "ICQ", GlobalQuality: 25},
+		},
+	},
+}
+
+var cfgSettings *defaults.FFmpegSettings
+
+func SetSettings(s *defaults.FFmpegSettings) {
+	cfgSettings = s
+}
+
+func settings() *defaults.FFmpegSettings {
+	if cfgSettings != nil {
+		return cfgSettings
+	}
+	return defaultFFmpegSettings
+}
+
+func ComposeStreamProfileArgs(opts ComposeOptions) string {
+	s := settings()
 	var parts []string
 
-	// Base flags
-	parts = append(parts, "-hide_banner", "-loglevel", "warning")
+	parts = append(parts, "-hide_banner", "-loglevel", s.LogLevel, "-nostdin")
 
-	// HW accel flags (before -i) — some vary by codec
-	switch hwaccel {
+	switch opts.HWAccel {
 	case "qsv":
-		if videoCodec == "av1" {
+		if opts.VideoCodec == "av1" {
 			parts = append(parts, "-init_hw_device", "qsv=qs:hw,child_device_type=vaapi", "-hwaccel", "qsv")
 		} else {
 			parts = append(parts, "-hwaccel", "qsv")
@@ -21,7 +80,7 @@ func ComposeStreamProfileArgs(sourceType, hwaccel, videoCodec, container string)
 	case "nvenc":
 		parts = append(parts, "-hwaccel", "cuda", "-hwaccel_output_format", "cuda")
 	case "vaapi":
-		if videoCodec == "av1" {
+		if opts.VideoCodec == "av1" {
 			parts = append(parts, "-hwaccel", "vaapi", "-hwaccel_output_format", "vaapi", "-vaapi_device", "/dev/dri/renderD128")
 		} else {
 			parts = append(parts, "-init_hw_device", "vaapi=va:/dev/dri/renderD128", "-filter_hw_device", "va")
@@ -30,75 +89,67 @@ func ComposeStreamProfileArgs(sourceType, hwaccel, videoCodec, container string)
 		parts = append(parts, "-hwaccel", "videotoolbox", "-hwaccel_output_format", "videotoolbox_vld")
 	}
 
-	// M3U-specific probe settings (before -i)
-	if sourceType == "m3u" {
-		parts = append(parts, "-analyzeduration", "5000000", "-probesize", "5000000")
+	if opts.SourceType == "m3u" {
+		parts = append(parts, "-analyzeduration", strconv.Itoa(s.AnalyzeDuration), "-probesize", strconv.Itoa(s.ProbeSize))
 	}
 
-	// SAT>IP input timeout (before -i, applies to input protocol)
-	if sourceType == "satip" {
-		parts = append(parts, "-rw_timeout", "5000000")
+	if opts.SourceType == "satip" {
+		parts = append(parts, "-rw_timeout", strconv.Itoa(s.SatIPRWTimeout))
 	}
 
-	// Input
+	parts = append(parts, "-err_detect", "ignore_err")
+
 	parts = append(parts, "-i", "{input}")
 
-	// M3U-specific mapping
-	// copy: -map 0:v (all video streams, Plex/Threadfin compatible)
-	// transcode: -map 0:v:0 (first video only, safe for HW encoder filter chains)
-	if sourceType == "m3u" {
-		if videoCodec == "copy" {
+	if opts.SourceType == "m3u" {
+		if opts.VideoCodec == "copy" {
 			parts = append(parts, "-map", "0:v", "-map", "0:a:0")
 		} else {
 			parts = append(parts, "-map", "0:v:0", "-map", "0:a:0")
 		}
 	}
 
-	// VA-API with -init_hw_device needs frames uploaded to GPU via filter
-	// (av1 uses -hwaccel vaapi which handles upload automatically)
-	if hwaccel == "vaapi" && videoCodec != "copy" && videoCodec != "av1" {
-		parts = append(parts, "-vf", "format=nv12,hwupload")
+	parts = append(parts, "-max_muxing_queue_size", strconv.Itoa(s.MaxMuxingQueueSize))
+
+	if opts.FPSMode == "cfr" && opts.VideoCodec != "copy" {
+		parts = append(parts, "-fps_mode", "cfr")
 	}
 
-	// VideoToolbox outputs videotoolbox_vld pixel format. HW encoders
-	// (h264_videotoolbox, hevc_videotoolbox) read it directly, but software
-	// encoders need frames downloaded back to CPU first.
-	if hwaccel == "videotoolbox" && !isVideoToolboxEncoder(videoCodec) && videoCodec != "copy" {
-		parts = append(parts, "-vf", "hwdownload,format=nv12")
+	vfFilters := buildVFChain(opts)
+	if len(vfFilters) > 0 {
+		parts = append(parts, "-vf", strings.Join(vfFilters, ","))
 	}
 
-	// Video encoder
-	parts = append(parts, encoderFlags(hwaccel, videoCodec)...)
+	parts = append(parts, encoderFlags(opts.HWAccel, opts.VideoCodec, s)...)
 
-	// Audio codec: webm requires opus, everything else uses aac or copy
-	switch sourceType {
+	audioBitrate := s.AudioBitrate
+	audioChannels := strconv.Itoa(s.AudioChannels)
+
+	switch opts.SourceType {
 	case "satip":
 		parts = append(parts, "-c:a", "copy")
-		if container == "mpegts" {
+		if opts.Container == "mpegts" {
 			parts = append(parts, "-bsf:v", "dump_extra")
 		}
 	case "m3u":
-		if container == "webm" {
-			parts = append(parts, "-c:a", "libopus", "-b:a", "192k", "-ac", "2")
+		if opts.Container == "webm" {
+			parts = append(parts, "-c:a", s.WebMAudioCodec, "-b:a", audioBitrate, "-ac", audioChannels)
 		} else {
-			parts = append(parts, "-c:a", "aac", "-b:a", "192k", "-ac", "2")
+			parts = append(parts, "-c:a", "aac", "-b:a", audioBitrate, "-ac", audioChannels)
 		}
 		parts = append(parts, "-c:s", "copy")
 	}
 
-	// Container and output flags
-	switch container {
+	switch opts.Container {
 	case "mp4":
-		parts = append(parts, "-f", "mp4", "-movflags", "frag_keyframe+empty_moov+default_base_moof")
+		parts = append(parts, "-f", "mp4", "-movflags", s.MP4Movflags)
 	default:
-		parts = append(parts, "-f", container)
+		parts = append(parts, "-f", opts.Container)
 	}
 
-	if sourceType == "m3u" {
-		parts = append(parts, "-fflags", "+genpts")
-		// copyts preserves original timestamps — fine for mpegts/matroska but
-		// fragmented mp4/webm need timestamps starting near zero
-		if container == "mpegts" || container == "matroska" {
+	if opts.SourceType == "m3u" {
+		parts = append(parts, "-fflags", s.FFlags)
+		if opts.Container == "mpegts" || opts.Container == "matroska" {
 			parts = append(parts, "-copyts")
 		}
 	}
@@ -108,7 +159,33 @@ func ComposeStreamProfileArgs(sourceType, hwaccel, videoCodec, container string)
 	return strings.Join(parts, " ")
 }
 
-// DefaultContainer returns the sensible default container for a video codec.
+func buildVFChain(opts ComposeOptions) []string {
+	if opts.VideoCodec == "copy" {
+		return nil
+	}
+
+	var filters []string
+
+	needsDeinterlace := opts.Deinterlace
+	needsHWUpload := opts.HWAccel == "vaapi" && opts.VideoCodec != "av1"
+	needsHWDownload := opts.HWAccel == "videotoolbox" && !isVideoToolboxEncoder(opts.VideoCodec)
+
+	switch {
+	case needsHWDownload && needsDeinterlace:
+		filters = append(filters, "hwdownload", "format=nv12", "yadif")
+	case needsHWDownload:
+		filters = append(filters, "hwdownload", "format=nv12")
+	case needsHWUpload && needsDeinterlace:
+		filters = append(filters, "yadif", "format=nv12", "hwupload")
+	case needsHWUpload:
+		filters = append(filters, "format=nv12", "hwupload")
+	case needsDeinterlace:
+		filters = append(filters, "yadif")
+	}
+
+	return filters
+}
+
 func DefaultContainer(videoCodec string) string {
 	switch videoCodec {
 	case "av1":
@@ -122,49 +199,85 @@ func isVideoToolboxEncoder(videoCodec string) bool {
 	return videoCodec == "h264" || videoCodec == "h265"
 }
 
-// encoderFlags returns the -c:v flags for the given hwaccel + videoCodec combination.
-func encoderFlags(hwaccel, videoCodec string) []string {
+func encoderFlags(hwaccel, videoCodec string, s *defaults.FFmpegSettings) []string {
 	switch videoCodec {
 	case "copy":
 		return []string{"-c:v", "copy"}
 	case "h264":
-		switch hwaccel {
-		case "qsv":
-			return []string{"-c:v", "h264_qsv", "-preset", "veryslow", "-global_quality", "20"}
-		case "nvenc":
-			return []string{"-c:v", "h264_nvenc", "-preset", "p4"}
-		case "vaapi":
-			return []string{"-c:v", "h264_vaapi"}
-		case "videotoolbox":
-			return []string{"-c:v", "h264_videotoolbox"}
-		default:
-			return []string{"-c:v", "libx264", "-preset", "fast"}
-		}
+		return h264Flags(hwaccel, s)
 	case "h265":
-		switch hwaccel {
-		case "qsv":
-			return []string{"-c:v", "hevc_qsv", "-preset", "veryslow", "-global_quality", "22", "-pix_fmt", "p010le"}
-		case "nvenc":
-			return []string{"-c:v", "hevc_nvenc", "-preset", "p4"}
-		case "vaapi":
-			return []string{"-c:v", "hevc_vaapi"}
-		case "videotoolbox":
-			return []string{"-c:v", "hevc_videotoolbox"}
-		default:
-			return []string{"-c:v", "libx265", "-preset", "fast"}
-		}
+		return h265Flags(hwaccel, s)
 	case "av1":
-		switch hwaccel {
-		case "qsv":
-			return []string{"-c:v", "av1_qsv", "-preset", "veryslow", "-global_quality", "25", "-look_ahead", "1", "-pix_fmt", "p010le"}
-		case "nvenc":
-			return []string{"-c:v", "av1_nvenc", "-preset", "p4", "-cq", "24", "-pix_fmt", "p010le"}
-		case "vaapi":
-			return []string{"-c:v", "av1_vaapi", "-rc_mode", "ICQ", "-global_quality", "25"}
-		default:
-			return []string{"-c:v", "libsvtav1", "-preset", "6", "-crf", "24", "-pix_fmt", "yuv420p10le"}
-		}
+		return av1Flags(hwaccel, s)
 	default:
 		return []string{"-c:v", "copy"}
+	}
+}
+
+func getEncoderHW(s *defaults.FFmpegSettings, codec, hwaccel string) defaults.EncoderHWSettings {
+	codecSettings, ok := s.Encoders[codec]
+	if !ok {
+		return defaults.EncoderHWSettings{}
+	}
+	switch hwaccel {
+	case "qsv":
+		return codecSettings.QSV
+	case "nvenc":
+		return codecSettings.NVENC
+	case "vaapi":
+		return codecSettings.VAAPI
+	case "videotoolbox":
+		return codecSettings.VideoToolbox
+	default:
+		return codecSettings.Software
+	}
+}
+
+func h264Flags(hwaccel string, s *defaults.FFmpegSettings) []string {
+	hw := getEncoderHW(s, "h264", hwaccel)
+	switch hwaccel {
+	case "qsv":
+		return append([]string{"-c:v", "h264_qsv"}, hw.Flags()...)
+	case "nvenc":
+		return append([]string{"-c:v", "h264_nvenc"}, hw.Flags()...)
+	case "vaapi":
+		return append([]string{"-c:v", "h264_vaapi"}, hw.Flags()...)
+	case "videotoolbox":
+		return append([]string{"-c:v", "h264_videotoolbox"}, hw.Flags()...)
+	default:
+		sw := getEncoderHW(s, "h264", "none")
+		return append([]string{"-c:v", "libx264"}, sw.Flags()...)
+	}
+}
+
+func h265Flags(hwaccel string, s *defaults.FFmpegSettings) []string {
+	hw := getEncoderHW(s, "h265", hwaccel)
+	switch hwaccel {
+	case "qsv":
+		return append([]string{"-c:v", "hevc_qsv"}, hw.Flags()...)
+	case "nvenc":
+		return append([]string{"-c:v", "hevc_nvenc"}, hw.Flags()...)
+	case "vaapi":
+		return append([]string{"-c:v", "hevc_vaapi"}, hw.Flags()...)
+	case "videotoolbox":
+		return append([]string{"-c:v", "hevc_videotoolbox"}, hw.Flags()...)
+	default:
+		sw := getEncoderHW(s, "h265", "none")
+		return append([]string{"-c:v", "libx265"}, sw.Flags()...)
+	}
+}
+
+func av1Flags(hwaccel string, s *defaults.FFmpegSettings) []string {
+	hw := getEncoderHW(s, "av1", hwaccel)
+	switch hwaccel {
+	case "qsv":
+		return append([]string{"-c:v", "av1_qsv"}, hw.Flags()...)
+	case "nvenc":
+		return append([]string{"-c:v", "av1_nvenc"}, hw.Flags()...)
+	case "vaapi":
+		return append([]string{"-c:v", "av1_vaapi"}, hw.Flags()...)
+	default:
+		sw := getEncoderHW(s, "av1", "none")
+		return append([]string{"-c:v", "libsvtav1"}, sw.Flags()...)
 	}
 }

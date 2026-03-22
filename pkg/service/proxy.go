@@ -10,18 +10,19 @@ import (
 	"os/exec"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/rs/zerolog"
 
 	"github.com/gavinmcnair/tvproxy/pkg/config"
 	"github.com/gavinmcnair/tvproxy/pkg/models"
 	"github.com/gavinmcnair/tvproxy/pkg/repository"
+	"github.com/gavinmcnair/tvproxy/pkg/store"
 )
 
 var (
-	ErrChannelNotFound  = errors.New("channel not found")
-	ErrChannelDisabled  = errors.New("channel is disabled")
-	ErrNoStreamsForChannel = errors.New("no streams available for channel")
+	ErrChannelNotFound = errors.New("channel not found")
+	ErrChannelDisabled = errors.New("channel is disabled")
 )
 
 const (
@@ -31,9 +32,10 @@ const (
 )
 
 type streamClient struct {
-	w       http.ResponseWriter
-	flusher http.Flusher
-	done    chan struct{}
+	w        http.ResponseWriter
+	flusher  http.Flusher
+	done     chan struct{}
+	viewerID string
 }
 
 type channelConnection struct {
@@ -45,9 +47,10 @@ type channelConnection struct {
 
 type ProxyService struct {
 	channelRepo       *repository.ChannelRepository
-	streamRepo        *repository.StreamRepository
+	streamStore       store.StreamReader
 	streamProfileRepo *repository.StreamProfileRepository
 	clientService     *ClientService
+	activity          *ActivityService
 	config            *config.Config
 	log               zerolog.Logger
 
@@ -57,17 +60,19 @@ type ProxyService struct {
 
 func NewProxyService(
 	channelRepo *repository.ChannelRepository,
-	streamRepo *repository.StreamRepository,
+	streamStore store.StreamReader,
 	streamProfileRepo *repository.StreamProfileRepository,
 	clientService *ClientService,
+	activity *ActivityService,
 	cfg *config.Config,
 	log zerolog.Logger,
 ) *ProxyService {
 	return &ProxyService{
 		channelRepo:       channelRepo,
-		streamRepo:        streamRepo,
+		streamStore:       streamStore,
 		streamProfileRepo: streamProfileRepo,
 		clientService:     clientService,
+		activity:          activity,
 		config:            cfg,
 		log:               log.With().Str("service", "proxy").Logger(),
 		connections:       make(map[string]*channelConnection),
@@ -88,6 +93,13 @@ func contentTypeForProfile(mode string, profile *models.StreamProfile) string {
 	return "video/mp2t"
 }
 
+func profileDisplayName(profile *models.StreamProfile) string {
+	if profile != nil {
+		return profile.Name
+	}
+	return "Direct"
+}
+
 func writeStreamHeaders(w http.ResponseWriter, contentType string) {
 	w.Header().Set("Content-Type", contentType)
 	w.Header().Set("Connection", "close")
@@ -105,7 +117,7 @@ func (s *ProxyService) ProxyStream(ctx context.Context, w http.ResponseWriter, r
 		return fmt.Errorf("%w: %s", ErrChannelDisabled, channelID)
 	}
 
-	mode, streamProfile, dedicated := s.resolveProfile(ctx, r, channel, profileOverride)
+	mode, streamProfile, dedicated, clientName := s.resolveProfile(ctx, r, channel, profileOverride)
 	contentType := contentTypeForProfile(mode, streamProfile)
 
 	flusher, ok := w.(http.Flusher)
@@ -113,10 +125,24 @@ func (s *ProxyService) ProxyStream(ctx context.Context, w http.ResponseWriter, r
 		return fmt.Errorf("streaming not supported")
 	}
 
+	var viewerID string
+	if s.activity != nil {
+		viewerID = s.activity.Add(ViewerOpts{
+			ChannelID:   channelID,
+			ChannelName: channel.Name,
+			ProfileName: profileDisplayName(streamProfile),
+			ClientName:  clientName,
+			UserAgent:   r.UserAgent(),
+			RemoteAddr:  r.RemoteAddr,
+			Type:    "channel",
+		})
+	}
+
 	c := &streamClient{
-		w:       w,
-		flusher: flusher,
-		done:    make(chan struct{}),
+		w:        w,
+		flusher:  flusher,
+		done:     make(chan struct{}),
+		viewerID: viewerID,
 	}
 
 	writeStreamHeaders(w, contentType)
@@ -129,31 +155,34 @@ func (s *ProxyService) ProxyStream(ctx context.Context, w http.ResponseWriter, r
 	}
 
 	if err := s.startUpstream(ctx, r, channelID, c, mode, streamProfile); err != nil {
+		if s.activity != nil && viewerID != "" {
+			s.activity.Remove(viewerID)
+		}
 		s.log.Error().Err(err).Str("channel_id", channelID).Msg("all streams failed for channel")
 	}
 	return nil
 }
 
-func (s *ProxyService) resolveProfile(ctx context.Context, r *http.Request, channel *models.Channel, profileOverride string) (string, *models.StreamProfile, bool) {
+func (s *ProxyService) resolveProfile(ctx context.Context, r *http.Request, channel *models.Channel, profileOverride string) (string, *models.StreamProfile, bool, string) {
 	if profileOverride != "" {
 		sp, err := s.streamProfileRepo.GetByName(ctx, profileOverride)
 		if err == nil {
 			s.log.Info().Str("channel_id", channel.ID).Str("profile", profileOverride).Str("mode", sp.StreamMode).Msg("using profile override")
-			return sp.StreamMode, sp, true
+			return sp.StreamMode, sp, true, ""
 		}
 	}
 
 	if s.clientService != nil {
-		matched, err := s.clientService.MatchClient(ctx, r)
+		matched, clientName, err := s.clientService.MatchClient(ctx, r)
 		if err != nil {
 			s.log.Warn().Err(err).Msg("client detection error")
 		}
 		if matched != nil {
-			return matched.StreamMode, matched, true
+			return matched.StreamMode, matched, true, clientName
 		}
 	}
 
-	return "proxy", nil, false
+	return "proxy", nil, false, ""
 }
 
 func (s *ProxyService) tryJoinExisting(channelID string, c *streamClient, r *http.Request) bool {
@@ -190,7 +219,7 @@ func (s *ProxyService) startUpstream(ctx context.Context, r *http.Request, chann
 	}
 
 	for _, cs := range channelStreams {
-		stream, err := s.streamRepo.GetByID(ctx, cs.StreamID)
+		stream, err := s.streamStore.GetByID(ctx, cs.StreamID)
 		if err != nil {
 			s.log.Warn().Err(err).Str("stream_id", cs.StreamID).Msg("stream not found, trying next")
 			continue
@@ -198,6 +227,10 @@ func (s *ProxyService) startUpstream(ctx context.Context, r *http.Request, chann
 		if !stream.IsActive {
 			s.log.Warn().Str("stream_id", stream.ID).Msg("stream inactive, trying next")
 			continue
+		}
+
+		if s.activity != nil && c.viewerID != "" {
+			s.activity.SetM3UAccountID(c.viewerID, stream.M3UAccountID)
 		}
 
 		upstreamCtx, cancel := context.WithCancel(context.Background())
@@ -298,7 +331,7 @@ func ShellSplit(s string) []string {
 	return args
 }
 
-func InjectReconnect(args []string, inputURL string) []string {
+func InjectReconnect(args []string, inputURL string, delayMax, rwTimeout int) []string {
 	if !strings.HasPrefix(inputURL, "http://") && !strings.HasPrefix(inputURL, "https://") {
 		return args
 	}
@@ -307,14 +340,20 @@ func InjectReconnect(args []string, inputURL string) []string {
 			return args
 		}
 	}
+	if delayMax <= 0 {
+		delayMax = 30
+	}
+	if rwTimeout <= 0 {
+		rwTimeout = 30000000
+	}
 	for i, arg := range args {
 		if arg == "-i" {
 			reconnectArgs := []string{
 				"-reconnect", "1",
 				"-reconnect_streamed", "1",
-				"-reconnect_delay_max", "30",
+				"-reconnect_delay_max", fmt.Sprintf("%d", delayMax),
 				"-reconnect_on_network_error", "1",
-				"-rw_timeout", "30000000",
+				"-rw_timeout", fmt.Sprintf("%d", rwTimeout),
 			}
 			newArgs := make([]string, 0, len(args)+len(reconnectArgs))
 			newArgs = append(newArgs, args[:i]...)
@@ -363,7 +402,12 @@ func InjectUserAgent(args []string, userAgent string) []string {
 func (s *ProxyService) startFFmpeg(ctx context.Context, channelID string, stream *models.Stream, profile *models.StreamProfile) (io.ReadCloser, error) {
 	argsStr := strings.Replace(profile.Args, "{input}", stream.URL, 1)
 	args := InjectUserAgent(ShellSplit(argsStr), s.config.UserAgent)
-	args = InjectReconnect(args, stream.URL)
+	delayMax, rwTimeout := 30, 30000000
+	if s.config.Settings != nil {
+		delayMax = s.config.Settings.Network.ReconnectDelayMax
+		rwTimeout = s.config.Settings.Network.ReconnectRWTimeout
+	}
+	args = InjectReconnect(args, stream.URL, delayMax, rwTimeout)
 
 	s.log.Info().
 		Str("channel_id", channelID).
@@ -430,6 +474,7 @@ func (s *ProxyService) proxyLoop(channelID string, upstream io.ReadCloser, cance
 	defer s.cleanupConnection(channelID)
 
 	buf := make([]byte, tsBufferSize)
+	var lastTouch time.Time
 	for {
 		n, err := upstream.Read(buf)
 		if n > 0 {
@@ -455,6 +500,14 @@ func (s *ProxyService) proxyLoop(channelID string, upstream io.ReadCloser, cance
 				conn.mu.Unlock()
 				s.log.Info().Str("channel_id", channelID).Msg("no clients remaining, closing upstream")
 				return
+			}
+			if s.activity != nil && time.Since(lastTouch) > 2*time.Second {
+				for _, c := range alive {
+					if c.viewerID != "" {
+						s.activity.Touch(c.viewerID)
+					}
+				}
+				lastTouch = time.Now()
 			}
 			conn.mu.Unlock()
 		}
@@ -485,6 +538,10 @@ func (s *ProxyService) notifyAllClients(channelID string) {
 }
 
 func (s *ProxyService) removeClient(channelID string, c *streamClient) {
+	if s.activity != nil && c.viewerID != "" {
+		s.activity.Remove(c.viewerID)
+	}
+
 	s.mu.RLock()
 	conn, exists := s.connections[channelID]
 	s.mu.RUnlock()
@@ -517,7 +574,7 @@ func (s *ProxyService) cleanupConnection(channelID string) {
 }
 
 func (s *ProxyService) ProxyRawStream(ctx context.Context, w http.ResponseWriter, r *http.Request, streamID string, profileOverride string) error {
-	stream, err := s.streamRepo.GetByID(ctx, streamID)
+	stream, err := s.streamStore.GetByID(ctx, streamID)
 	if err != nil {
 		return fmt.Errorf("stream not found: %w", err)
 	}
@@ -534,13 +591,27 @@ func (s *ProxyService) ProxyRawStream(ctx context.Context, w http.ResponseWriter
 		profile = sp
 	}
 
-	if profile != nil && profile.Args != "" {
-		return s.proxyRawStreamFFmpeg(ctx, w, r, stream, profile)
+	var viewerID string
+	if s.activity != nil {
+		viewerID = s.activity.Add(ViewerOpts{
+			StreamID:     streamID,
+			StreamName:   stream.Name,
+			M3UAccountID: stream.M3UAccountID,
+			ProfileName:  profileDisplayName(profile),
+			UserAgent:    r.UserAgent(),
+			RemoteAddr:   r.RemoteAddr,
+			Type:     "stream",
+		})
+		defer s.activity.Remove(viewerID)
 	}
-	return s.proxyRawStreamPassthrough(ctx, w, r, stream)
+
+	if profile != nil && profile.Args != "" {
+		return s.proxyRawStreamFFmpeg(ctx, w, r, stream, profile, viewerID)
+	}
+	return s.proxyRawStreamPassthrough(ctx, w, r, stream, viewerID)
 }
 
-func (s *ProxyService) proxyRawStreamFFmpeg(ctx context.Context, w http.ResponseWriter, r *http.Request, stream *models.Stream, profile *models.StreamProfile) error {
+func (s *ProxyService) proxyRawStreamFFmpeg(ctx context.Context, w http.ResponseWriter, r *http.Request, stream *models.Stream, profile *models.StreamProfile, viewerID string) error {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		return fmt.Errorf("streaming not supported")
@@ -560,11 +631,11 @@ func (s *ProxyService) proxyRawStreamFFmpeg(ctx context.Context, w http.Response
 	writeStreamHeaders(w, contentTypeForProfile("ffmpeg", profile))
 	flusher.Flush()
 
-	s.copyToClient(reader, w, flusher, stream.ID)
+	s.copyToClient(reader, w, flusher, stream.ID, viewerID)
 	return nil
 }
 
-func (s *ProxyService) proxyRawStreamPassthrough(ctx context.Context, w http.ResponseWriter, r *http.Request, stream *models.Stream) error {
+func (s *ProxyService) proxyRawStreamPassthrough(ctx context.Context, w http.ResponseWriter, r *http.Request, stream *models.Stream, viewerID string) error {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		return fmt.Errorf("streaming not supported")
@@ -591,12 +662,13 @@ func (s *ProxyService) proxyRawStreamPassthrough(ctx context.Context, w http.Res
 	writeStreamHeaders(w, "video/mp2t")
 	flusher.Flush()
 
-	s.copyToClient(resp.Body, w, flusher, stream.ID)
+	s.copyToClient(resp.Body, w, flusher, stream.ID, viewerID)
 	return nil
 }
 
-func (s *ProxyService) copyToClient(reader io.Reader, w http.ResponseWriter, flusher http.Flusher, streamID string) {
+func (s *ProxyService) copyToClient(reader io.Reader, w http.ResponseWriter, flusher http.Flusher, streamID string, viewerID string) {
 	buf := make([]byte, tsBufferSize)
+	var lastTouch time.Time
 	for {
 		n, readErr := reader.Read(buf)
 		if n > 0 {
@@ -604,6 +676,10 @@ func (s *ProxyService) copyToClient(reader io.Reader, w http.ResponseWriter, flu
 				return
 			}
 			flusher.Flush()
+			if s.activity != nil && viewerID != "" && time.Since(lastTouch) > 2*time.Second {
+				s.activity.Touch(viewerID)
+				lastTouch = time.Now()
+			}
 		}
 		if readErr != nil {
 			if readErr != io.EOF {

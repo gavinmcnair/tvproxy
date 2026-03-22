@@ -18,9 +18,12 @@ import (
 
 	"github.com/gavinmcnair/tvproxy/pkg/config"
 	"github.com/gavinmcnair/tvproxy/pkg/database"
+	"github.com/gavinmcnair/tvproxy/pkg/defaults"
+	"github.com/gavinmcnair/tvproxy/pkg/ffmpeg"
 	"github.com/gavinmcnair/tvproxy/pkg/middleware"
 	"github.com/gavinmcnair/tvproxy/pkg/repository"
 	"github.com/gavinmcnair/tvproxy/pkg/service"
+	"github.com/gavinmcnair/tvproxy/pkg/store"
 )
 
 type fullTestEnv struct {
@@ -28,6 +31,8 @@ type fullTestEnv struct {
 	authService *service.AuthService
 	adminToken  string
 	userToken   string
+	db          *database.DB
+	clientDefs  *defaults.ClientDefaults
 }
 
 func setupFullEnv(t *testing.T) *fullTestEnv {
@@ -40,6 +45,16 @@ func setupFullEnv(t *testing.T) *fullTestEnv {
 	require.NoError(t, err)
 	t.Cleanup(func() { db.Close() })
 
+	clientDefs, err := defaults.LoadClientDefaults(filepath.Join(dir, "clients.json"))
+	require.NoError(t, err)
+	db.SetClientDefaults(clientDefs)
+	err = database.SeedClientDefaults(context.Background(), db.DB, clientDefs)
+	require.NoError(t, err)
+
+	tuningSettings, err := defaults.LoadSettings(filepath.Join(dir, "settings.json"))
+	require.NoError(t, err)
+	ffmpeg.SetSettings(&tuningSettings.FFmpeg)
+
 	cfg := &config.Config{
 		Host:               "localhost",
 		Port:               8080,
@@ -49,18 +64,19 @@ func setupFullEnv(t *testing.T) *fullTestEnv {
 		AccessTokenExpiry:  15 * time.Minute,
 		RefreshTokenExpiry: 7 * 24 * time.Hour,
 		APIKey:             "test-api-key",
+		Settings:           tuningSettings,
 	}
+
+	streamStore := store.NewStreamStore(filepath.Join(dir, "streams.gob"), log)
+	epgStore := store.NewEPGStore(filepath.Join(dir, "epg.gob"), log)
 
 	userRepo := repository.NewUserRepository(db)
 	m3uAccountRepo := repository.NewM3UAccountRepository(db)
-	streamRepo := repository.NewStreamRepository(db)
 	channelRepo := repository.NewChannelRepository(db)
 	channelGroupRepo := repository.NewChannelGroupRepository(db)
 	logoRepo := repository.NewLogoRepository(db)
 	streamProfileRepo := repository.NewStreamProfileRepository(db)
 	epgSourceRepo := repository.NewEPGSourceRepository(db)
-	epgDataRepo := repository.NewEPGDataRepository(db)
-	programDataRepo := repository.NewProgramDataRepository(db)
 	hdhrDeviceRepo := repository.NewHDHRDeviceRepository(db)
 	settingsRepo := repository.NewCoreSettingsRepository(db)
 	clientRepo := repository.NewClientRepository(db)
@@ -77,15 +93,17 @@ func setupFullEnv(t *testing.T) *fullTestEnv {
 	logoService := service.NewLogoService(logoRepo, settingsService, cfg, log)
 	logoService.EnsureDir()
 
-	m3uService := service.NewM3UService(m3uAccountRepo, streamRepo, logoService, cfg, log)
-	channelService := service.NewChannelService(channelRepo, channelGroupRepo, streamRepo, log)
-	epgService := service.NewEPGService(epgSourceRepo, epgDataRepo, programDataRepo, cfg, log)
-	clientService := service.NewClientService(clientRepo, streamProfileRepo, log)
-	proxyService := service.NewProxyService(channelRepo, streamRepo, streamProfileRepo, clientService, cfg, log)
+	m3uService := service.NewM3UService(m3uAccountRepo, streamStore, channelRepo, logoService, cfg, log)
+	channelService := service.NewChannelService(channelRepo, channelGroupRepo, streamStore, log)
+	epgService := service.NewEPGService(epgSourceRepo, epgStore, cfg, log)
+	activityService := service.NewActivityService()
+	clientService := service.NewClientService(clientRepo, streamProfileRepo, settingsService, log)
+	proxyService := service.NewProxyService(channelRepo, streamStore, streamProfileRepo, clientService, activityService, cfg, log)
 	hdhrService := service.NewHDHRService(hdhrDeviceRepo, channelRepo)
-	outputService := service.NewOutputService(channelRepo, channelGroupRepo, epgDataRepo, programDataRepo, logoService, cfg, log)
+	outputService := service.NewOutputService(channelRepo, channelGroupRepo, epgStore, logoService, cfg, log)
 	ffmpegMgr := service.NewFFmpegManager(cfg, log)
-	vodService := service.NewVODService(channelRepo, streamRepo, streamProfileRepo, ffmpegMgr, cfg, log)
+	vodService := service.NewVODService(channelRepo, streamStore, streamProfileRepo, ffmpegMgr, activityService, cfg, log)
+	vodService.RecoverRecordings(context.Background())
 	scheduledRecRepo := repository.NewScheduledRecordingRepository(db)
 	schedulerService := service.NewSchedulerService(scheduledRecRepo, channelRepo, vodService, cfg, log)
 
@@ -94,21 +112,22 @@ func setupFullEnv(t *testing.T) *fullTestEnv {
 	authHandler := NewAuthHandler(authService)
 	userHandler := NewUserHandler(authService)
 	m3uAccountHandler := NewM3UAccountHandler(m3uService)
-	streamHandler := NewStreamHandler(streamRepo, logoService)
+	streamHandler := NewStreamHandler(streamStore, logoService)
 	channelHandler := NewChannelHandler(channelService, logoService)
 	channelGroupHandler := NewChannelGroupHandler(channelService)
 	logoHandler := NewLogoHandler(logoService)
 	streamProfileHandler := NewStreamProfileHandler(streamProfileRepo)
 	epgSourceHandler := NewEPGSourceHandler(epgService)
-	epgDataHandler := NewEPGDataHandler(epgDataRepo, programDataRepo)
+	epgDataHandler := NewEPGDataHandler(epgStore)
 	hdhrHandler := NewHDHRHandler(hdhrService, hdhrDeviceRepo, proxyService, cfg)
 	outputHandler := NewOutputHandler(outputService)
 	vodHandler := NewVODHandler(vodService, log)
-	settingsHandler := NewSettingsHandler(settingsService, db, authService)
+	activityHandler := NewActivityHandler(activityService)
+	settingsHandler := NewSettingsHandler(settingsService, db, authService, streamStore, epgStore)
 	clientHandler := NewClientHandler(clientService)
 	schedulerHandler := NewSchedulerHandler(schedulerService, log)
 	dlnaService := service.NewDLNAService(channelRepo, channelGroupRepo, settingsService, logoService, cfg, log)
-	dlnaHandler := NewDLNAHandler(dlnaService, cfg)
+	dlnaHandler := NewDLNAHandler(dlnaService, settingsService, cfg, log)
 
 	r := chi.NewRouter()
 
@@ -271,11 +290,18 @@ func setupFullEnv(t *testing.T) *fullTestEnv {
 			r.Get("/schedule/{id}", schedulerHandler.Get)
 			r.Delete("/schedule/{id}", schedulerHandler.Delete)
 		})
+
+		r.Route("/api/activity", func(r chi.Router) {
+			r.Use(authMW.RequireAdmin)
+			r.Get("/", activityHandler.List)
+		})
 	})
 
 	env := &fullTestEnv{
 		router:      r,
 		authService: authService,
+		db:          db,
+		clientDefs:  clientDefs,
 	}
 
 	env.adminToken, _ = loginHelper(t, env, "admin", "adminpass")
@@ -663,7 +689,7 @@ func TestIntegration_StreamProfileCRUD(t *testing.T) {
 
 	t.Run("create duplicate name returns 409", func(t *testing.T) {
 		rec := doRequest(t, env, "POST", "/api/stream-profiles/", map[string]interface{}{
-			"name": "Browser", "source_type": "m3u", "hwaccel": "none", "video_codec": "copy",
+			"name": "Direct", "source_type": "m3u", "hwaccel": "none", "video_codec": "copy",
 		}, env.adminToken)
 		assert.Equal(t, http.StatusConflict, rec.Code)
 	})
@@ -730,7 +756,7 @@ func TestIntegration_StreamProfileCRUD(t *testing.T) {
 		decodeResponse(t, rec, &profiles)
 		var browserClientID string
 		for _, p := range profiles {
-			if p["name"] == "Browser (Client)" && p["is_client"] == true {
+			if p["name"] == "Browser" && p["is_client"] == true {
 				browserClientID = p["id"].(string)
 				break
 			}
@@ -741,7 +767,7 @@ func TestIntegration_StreamProfileCRUD(t *testing.T) {
 		assert.Equal(t, http.StatusOK, rec.Code)
 		var profile map[string]interface{}
 		decodeResponse(t, rec, &profile)
-		assert.Equal(t, "Browser (Client)", profile["name"])
+		assert.Equal(t, "Browser", profile["name"])
 		assert.Equal(t, false, profile["is_system"])
 		assert.Equal(t, true, profile["is_client"])
 	})
@@ -753,7 +779,7 @@ func TestIntegration_StreamProfileCRUD(t *testing.T) {
 		decodeResponse(t, rec, &profiles)
 		var plexClientProfileID string
 		for _, p := range profiles {
-			if p["name"] == "Plex (Client)" && p["is_client"] == true {
+			if p["name"] == "Plex" && p["is_client"] == true {
 				plexClientProfileID = p["id"].(string)
 				break
 			}
@@ -773,14 +799,14 @@ func TestIntegration_StreamProfileCRUD(t *testing.T) {
 		assert.Equal(t, http.StatusForbidden, rec.Code)
 	})
 
-	t.Run("update client profile is allowed", func(t *testing.T) {
+	t.Run("rename client profile is forbidden", func(t *testing.T) {
 		rec := doRequest(t, env, "GET", "/api/stream-profiles/", nil, env.adminToken)
 		require.Equal(t, http.StatusOK, rec.Code)
 		var profiles []map[string]interface{}
 		decodeResponse(t, rec, &profiles)
 		var plexClientProfileID string
 		for _, p := range profiles {
-			if p["name"] == "Plex (Client)" && p["is_client"] == true {
+			if p["name"] == "Plex" && p["is_client"] == true {
 				plexClientProfileID = p["id"].(string)
 				break
 			}
@@ -790,10 +816,20 @@ func TestIntegration_StreamProfileCRUD(t *testing.T) {
 		rec = doRequest(t, env, "PUT", "/api/stream-profiles/"+plexClientProfileID, map[string]interface{}{
 			"name": "Plex Custom", "source_type": "m3u", "hwaccel": "qsv", "video_codec": "h264",
 		}, env.adminToken)
+		assert.Equal(t, http.StatusForbidden, rec.Code)
+	})
+
+	t.Run("update client profile settings is allowed", func(t *testing.T) {
+		plexProfile := findByName(t, env, "/api/stream-profiles/", "Plex", env.adminToken)
+		plexClientProfileID := plexProfile["id"].(string)
+
+		rec := doRequest(t, env, "PUT", "/api/stream-profiles/"+plexClientProfileID, map[string]interface{}{
+			"name": "Plex", "source_type": "m3u", "hwaccel": "qsv", "video_codec": "h264",
+		}, env.adminToken)
 		assert.Equal(t, http.StatusOK, rec.Code)
 		var profile map[string]interface{}
 		decodeResponse(t, rec, &profile)
-		assert.Equal(t, "Plex Custom", profile["name"])
+		assert.Equal(t, "Plex", profile["name"])
 		assert.Equal(t, "qsv", profile["hwaccel"])
 		assert.Equal(t, true, profile["is_client"])
 	})
@@ -805,8 +841,9 @@ func TestIntegration_StreamProfileCRUD(t *testing.T) {
 		decodeResponse(t, rec, &profiles)
 		assert.Equal(t, true, profiles[0]["is_system"])
 		assert.Equal(t, true, profiles[1]["is_system"])
+		assert.Equal(t, true, profiles[2]["is_system"])
 		foundClient := false
-		for i := 2; i < len(profiles); i++ {
+		for i := 3; i < len(profiles); i++ {
 			if profiles[i]["is_client"] == true {
 				foundClient = true
 			}
@@ -2094,11 +2131,15 @@ func TestIntegration_ClientCRUD(t *testing.T) {
 		assert.Equal(t, http.StatusOK, rec.Code)
 		var clients []map[string]interface{}
 		decodeResponse(t, rec, &clients)
-		assert.Len(t, clients, 4)
+		assert.Len(t, clients, 8)
 		assert.Equal(t, "Plex", clients[0]["name"])
 		assert.Equal(t, "VLC", clients[1]["name"])
-		assert.Equal(t, "Quest", clients[2]["name"])
-		assert.Equal(t, "Browser", clients[3]["name"])
+		assert.Equal(t, "Skybox", clients[2]["name"])
+		assert.Equal(t, "4XVR", clients[3]["name"])
+		assert.Equal(t, "LG TV", clients[4]["name"])
+		assert.Equal(t, "Samsung TV", clients[5]["name"])
+		assert.Equal(t, "Panasonic TV", clients[6]["name"])
+		assert.Equal(t, "Browser", clients[7]["name"])
 	})
 
 	t.Run("get seeded client with rules", func(t *testing.T) {
@@ -2213,7 +2254,7 @@ func TestIntegration_ClientCRUD(t *testing.T) {
 		assert.Equal(t, http.StatusOK, rec.Code)
 		var clients []map[string]interface{}
 		decodeResponse(t, rec, &clients)
-		assert.Len(t, clients, 4)
+		assert.Len(t, clients, 8)
 	})
 }
 
@@ -2333,7 +2374,7 @@ func TestIntegration_SoftReset(t *testing.T) {
 		rec = doRequest(t, env, "GET", "/api/stream-profiles/", nil, env.adminToken)
 		assert.Equal(t, http.StatusOK, rec.Code)
 		decodeResponse(t, rec, &profiles)
-		assert.Equal(t, 10, len(profiles))
+		assert.Equal(t, 11, len(profiles))
 
 		rec = doRequest(t, env, "GET", "/api/channels/", nil, env.adminToken)
 		assert.Equal(t, http.StatusOK, rec.Code)
@@ -2373,7 +2414,7 @@ func TestIntegration_HardReset(t *testing.T) {
 		assert.Equal(t, http.StatusOK, rec.Code)
 		var clients []map[string]interface{}
 		decodeResponse(t, rec, &clients)
-		assert.Equal(t, 4, len(clients))
+		assert.Equal(t, 8, len(clients))
 
 		rec = doRequest(t, env, "GET", "/api/users/", nil, newToken)
 		assert.Equal(t, http.StatusOK, rec.Code)
@@ -2892,5 +2933,58 @@ func TestIntegration_ScheduleRecording_UserIsolation(t *testing.T) {
 	t.Run("user cannot cancel admin schedule", func(t *testing.T) {
 		rec := doRequest(t, env, "DELETE", "/api/recordings/schedule/"+scheduleID, nil, env.userToken)
 		assert.Equal(t, http.StatusForbidden, rec.Code)
+	})
+}
+
+func TestIntegration_ClientSyncSurvival(t *testing.T) {
+	env := setupFullEnv(t)
+
+	t.Run("user profiles survive client sync", func(t *testing.T) {
+		rec := doRequest(t, env, "POST", "/api/stream-profiles/", map[string]interface{}{
+			"name": "My Custom Profile", "source_type": "m3u", "hwaccel": "none", "video_codec": "copy",
+		}, env.adminToken)
+		require.Equal(t, http.StatusCreated, rec.Code)
+
+		err := database.SeedClientDefaults(context.Background(), env.db.DB, env.clientDefs)
+		require.NoError(t, err)
+
+		rec = doRequest(t, env, "GET", "/api/stream-profiles/", nil, env.adminToken)
+		require.Equal(t, http.StatusOK, rec.Code)
+		var profiles []map[string]interface{}
+		decodeResponse(t, rec, &profiles)
+		assert.Equal(t, 12, len(profiles))
+
+		var foundCustom bool
+		for _, p := range profiles {
+			if p["name"] == "My Custom Profile" {
+				foundCustom = true
+			}
+		}
+		assert.True(t, foundCustom, "user-created profile should survive client sync")
+
+		rec = doRequest(t, env, "GET", "/api/clients/", nil, env.adminToken)
+		require.Equal(t, http.StatusOK, rec.Code)
+		var clients []map[string]interface{}
+		decodeResponse(t, rec, &clients)
+		assert.Equal(t, 8, len(clients))
+		assert.Equal(t, "Plex", clients[0]["name"])
+		assert.Equal(t, "Browser", clients[7]["name"])
+	})
+}
+
+func TestIntegration_Activity(t *testing.T) {
+	env := setupFullEnv(t)
+
+	t.Run("non-admin denied", func(t *testing.T) {
+		rec := doRequest(t, env, "GET", "/api/activity/", nil, env.userToken)
+		assert.Equal(t, http.StatusForbidden, rec.Code)
+	})
+
+	t.Run("admin gets empty list", func(t *testing.T) {
+		rec := doRequest(t, env, "GET", "/api/activity/", nil, env.adminToken)
+		assert.Equal(t, http.StatusOK, rec.Code)
+		var viewers []map[string]interface{}
+		decodeResponse(t, rec, &viewers)
+		assert.Len(t, viewers, 0)
 	})
 }

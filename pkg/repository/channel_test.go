@@ -147,73 +147,38 @@ func TestChannelWithGroup(t *testing.T) {
 func TestChannelAssignStreams(t *testing.T) {
 	db := setupTestDB(t)
 	channelRepo := NewChannelRepository(db)
-	m3uRepo := NewM3UAccountRepository(db)
-	streamRepo := NewStreamRepository(db)
 	ctx := context.Background()
 	userID := createTestUser(t, db)
 
-	// Create an M3U account (needed as FK for streams)
-	account := &models.M3UAccount{
-		Name:       "Test Account",
-		URL:        "http://example.com/playlist.m3u",
-		Type:       "m3u",
-		MaxStreams: 1,
-		IsEnabled:  true,
-	}
-	err := m3uRepo.Create(ctx, account)
-	require.NoError(t, err)
+	streamID1 := "stream-id-1"
+	streamID2 := "stream-id-2"
 
-	// Create some streams
-	stream1 := &models.Stream{
-		M3UAccountID: account.ID,
-		Name:         "Stream One",
-		URL:          "http://example.com/stream1.ts",
-		Group:        "Sports",
-		IsActive:     true,
-	}
-	err = streamRepo.Create(ctx, stream1)
-	require.NoError(t, err)
-
-	stream2 := &models.Stream{
-		M3UAccountID: account.ID,
-		Name:         "Stream Two",
-		URL:          "http://example.com/stream2.ts",
-		Group:        "Sports",
-		IsActive:     true,
-	}
-	err = streamRepo.Create(ctx, stream2)
-	require.NoError(t, err)
-
-	// Create a channel
 	channel := &models.Channel{
 		UserID:    userID,
 		Name:      "Sports Channel",
 		IsEnabled: true,
 	}
-	err = channelRepo.Create(ctx, channel)
+	err := channelRepo.Create(ctx, channel)
 	require.NoError(t, err)
 
-	// Assign streams with priorities
-	err = channelRepo.AssignStreams(ctx, channel.ID, []string{stream1.ID, stream2.ID}, []int{1, 2})
+	err = channelRepo.AssignStreams(ctx, channel.ID, []string{streamID1, streamID2}, []int{1, 2})
 	require.NoError(t, err)
 
-	// Verify stream assignments
 	channelStreams, err := channelRepo.GetStreams(ctx, channel.ID)
 	require.NoError(t, err)
 	assert.Len(t, channelStreams, 2)
-	assert.Equal(t, stream1.ID, channelStreams[0].StreamID)
+	assert.Equal(t, streamID1, channelStreams[0].StreamID)
 	assert.Equal(t, 1, channelStreams[0].Priority)
-	assert.Equal(t, stream2.ID, channelStreams[1].StreamID)
+	assert.Equal(t, streamID2, channelStreams[1].StreamID)
 	assert.Equal(t, 2, channelStreams[1].Priority)
 
-	// Re-assign with different streams/priorities (should replace)
-	err = channelRepo.AssignStreams(ctx, channel.ID, []string{stream2.ID}, []int{1})
+	err = channelRepo.AssignStreams(ctx, channel.ID, []string{streamID2}, []int{1})
 	require.NoError(t, err)
 
 	channelStreams, err = channelRepo.GetStreams(ctx, channel.ID)
 	require.NoError(t, err)
 	assert.Len(t, channelStreams, 1)
-	assert.Equal(t, stream2.ID, channelStreams[0].StreamID)
+	assert.Equal(t, streamID2, channelStreams[0].StreamID)
 	assert.Equal(t, 1, channelStreams[0].Priority)
 }
 
@@ -230,44 +195,20 @@ func TestChannelAssignStreamsMismatchedLengths(t *testing.T) {
 func TestChannelAssignStreamsEmpty(t *testing.T) {
 	db := setupTestDB(t)
 	channelRepo := NewChannelRepository(db)
-	m3uRepo := NewM3UAccountRepository(db)
-	streamRepo := NewStreamRepository(db)
 	ctx := context.Background()
 	userID := createTestUser(t, db)
-
-	// Create prerequisites
-	account := &models.M3UAccount{
-		Name:       "Test Account",
-		URL:        "http://example.com/playlist.m3u",
-		Type:       "m3u",
-		MaxStreams: 1,
-		IsEnabled:  true,
-	}
-	err := m3uRepo.Create(ctx, account)
-	require.NoError(t, err)
-
-	stream1 := &models.Stream{
-		M3UAccountID: account.ID,
-		Name:         "Stream One",
-		URL:          "http://example.com/stream1.ts",
-		IsActive:     true,
-	}
-	err = streamRepo.Create(ctx, stream1)
-	require.NoError(t, err)
 
 	channel := &models.Channel{
 		UserID:    userID,
 		Name:      "Test Channel",
 		IsEnabled: true,
 	}
-	err = channelRepo.Create(ctx, channel)
+	err := channelRepo.Create(ctx, channel)
 	require.NoError(t, err)
 
-	// Assign a stream first
-	err = channelRepo.AssignStreams(ctx, channel.ID, []string{stream1.ID}, []int{1})
+	err = channelRepo.AssignStreams(ctx, channel.ID, []string{"stream-id-1"}, []int{1})
 	require.NoError(t, err)
 
-	// Now assign empty to clear all assignments
 	err = channelRepo.AssignStreams(ctx, channel.ID, []string{}, []int{})
 	require.NoError(t, err)
 

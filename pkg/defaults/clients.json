@@ -1,0 +1,95 @@
+{
+  "clients": [
+    {
+      "name": "Plex",
+      "priority": 10,
+      "source_type": "m3u",
+      "hwaccel": "none",
+      "video_codec": "copy",
+      "container": "mpegts",
+      "match_rules": [
+        {"header_name": "User-Agent", "match_type": "contains", "match_value": "Lavf/"},
+        {"header_name": "Icy-Metadata", "match_type": "exists", "match_value": ""}
+      ]
+    },
+    {
+      "name": "VLC",
+      "priority": 20,
+      "source_type": "m3u",
+      "hwaccel": "none",
+      "video_codec": "copy",
+      "container": "matroska",
+      "match_rules": [
+        {"header_name": "User-Agent", "match_type": "contains", "match_value": "VLC/"}
+      ]
+    },
+    {
+      "name": "Skybox",
+      "priority": 25,
+      "source_type": "m3u",
+      "hwaccel": "none",
+      "video_codec": "copy",
+      "container": "mpegts",
+      "match_rules": [
+        {"header_name": "User-Agent", "match_type": "contains", "match_value": "libmpv"},
+        {"header_name": "Icy-Metadata", "match_type": "exists", "match_value": ""}
+      ]
+    },
+    {
+      "name": "4XVR",
+      "priority": 30,
+      "source_type": "m3u",
+      "hwaccel": "videotoolbox",
+      "video_codec": "h265",
+      "container": "matroska",
+      "match_rules": [
+        {"header_name": "User-Agent", "match_type": "contains", "match_value": "Dalvik/2.1.0"},
+        {"header_name": "User-Agent", "match_type": "contains", "match_value": "Quest 3"}
+      ]
+    },
+    {
+      "name": "LG TV",
+      "priority": 40,
+      "source_type": "m3u",
+      "hwaccel": "none",
+      "video_codec": "copy",
+      "container": "mpegts",
+      "match_rules": [
+        {"header_name": "User-Agent", "match_type": "contains", "match_value": "Web0S"}
+      ]
+    },
+    {
+      "name": "Samsung TV",
+      "priority": 45,
+      "source_type": "m3u",
+      "hwaccel": "none",
+      "video_codec": "copy",
+      "container": "mpegts",
+      "match_rules": [
+        {"header_name": "User-Agent", "match_type": "contains", "match_value": "SMART-TV"}
+      ]
+    },
+    {
+      "name": "Panasonic TV",
+      "priority": 46,
+      "source_type": "m3u",
+      "hwaccel": "none",
+      "video_codec": "copy",
+      "container": "mpegts",
+      "match_rules": [
+        {"header_name": "User-Agent", "match_type": "contains", "match_value": "Viera"}
+      ]
+    },
+    {
+      "name": "Browser",
+      "priority": 100,
+      "source_type": "m3u",
+      "hwaccel": "none",
+      "video_codec": "copy",
+      "container": "mp4",
+      "match_rules": [
+        {"header_name": "User-Agent", "match_type": "contains", "match_value": "Mozilla/"}
+      ]
+    }
+  ]
+}

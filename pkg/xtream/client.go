@@ -54,13 +54,16 @@ type AuthResponse struct {
 	ServerInfo ServerInfo `json:"server_info"`
 }
 
-func NewClient(baseURL, username, password, userAgent string) *Client {
+func NewClient(baseURL, username, password, userAgent string, timeout time.Duration) *Client {
+	if timeout <= 0 {
+		timeout = 30 * time.Second
+	}
 	return &Client{
 		baseURL:    baseURL,
 		username:   username,
 		password:   password,
 		userAgent:  userAgent,
-		httpClient: &http.Client{Timeout: 30 * time.Second},
+		httpClient: &http.Client{Timeout: timeout},
 	}
 }
 

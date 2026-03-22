@@ -13,39 +13,33 @@ import (
 	"github.com/gavinmcnair/tvproxy/pkg/httputil"
 	"github.com/gavinmcnair/tvproxy/pkg/models"
 	"github.com/gavinmcnair/tvproxy/pkg/repository"
+	"github.com/gavinmcnair/tvproxy/pkg/store"
 	"github.com/gavinmcnair/tvproxy/pkg/xmltv"
 )
 
-// EPGService handles EPG source management and data synchronization.
 type EPGService struct {
-	epgSourceRepo   *repository.EPGSourceRepository
-	epgDataRepo     *repository.EPGDataRepository
-	programDataRepo *repository.ProgramDataRepository
-	config          *config.Config
-	log             zerolog.Logger
+	epgSourceRepo *repository.EPGSourceRepository
+	epgStore      store.EPGStore
+	config        *config.Config
+	log           zerolog.Logger
 }
 
-// NewEPGService creates a new EPGService.
 func NewEPGService(
 	epgSourceRepo *repository.EPGSourceRepository,
-	epgDataRepo *repository.EPGDataRepository,
-	programDataRepo *repository.ProgramDataRepository,
+	epgStore store.EPGStore,
 	cfg *config.Config,
 	log zerolog.Logger,
 ) *EPGService {
 	return &EPGService{
-		epgSourceRepo:   epgSourceRepo,
-		epgDataRepo:     epgDataRepo,
-		programDataRepo: programDataRepo,
-		config:          cfg,
-		log:             log.With().Str("service", "epg").Logger(),
+		epgSourceRepo: epgSourceRepo,
+		epgStore:      epgStore,
+		config:        cfg,
+		log:           log.With().Str("service", "epg").Logger(),
 	}
 }
 
-// Log returns the service logger for use by handlers.
 func (s *EPGService) Log() *zerolog.Logger { return &s.log }
 
-// CreateSource creates a new EPG source.
 func (s *EPGService) CreateSource(ctx context.Context, source *models.EPGSource) error {
 	if err := s.epgSourceRepo.Create(ctx, source); err != nil {
 		return fmt.Errorf("creating epg source: %w", err)
@@ -53,7 +47,6 @@ func (s *EPGService) CreateSource(ctx context.Context, source *models.EPGSource)
 	return nil
 }
 
-// GetSource returns an EPG source by ID.
 func (s *EPGService) GetSource(ctx context.Context, id string) (*models.EPGSource, error) {
 	source, err := s.epgSourceRepo.GetByID(ctx, id)
 	if err != nil {
@@ -62,7 +55,6 @@ func (s *EPGService) GetSource(ctx context.Context, id string) (*models.EPGSourc
 	return source, nil
 }
 
-// ListSources returns all EPG sources.
 func (s *EPGService) ListSources(ctx context.Context) ([]models.EPGSource, error) {
 	sources, err := s.epgSourceRepo.List(ctx)
 	if err != nil {
@@ -71,7 +63,6 @@ func (s *EPGService) ListSources(ctx context.Context) ([]models.EPGSource, error
 	return sources, nil
 }
 
-// UpdateSource updates an existing EPG source.
 func (s *EPGService) UpdateSource(ctx context.Context, source *models.EPGSource) error {
 	if err := s.epgSourceRepo.Update(ctx, source); err != nil {
 		return fmt.Errorf("updating epg source: %w", err)
@@ -79,20 +70,21 @@ func (s *EPGService) UpdateSource(ctx context.Context, source *models.EPGSource)
 	return nil
 }
 
-// DeleteSource deletes an EPG source by ID and its associated data.
 func (s *EPGService) DeleteSource(ctx context.Context, id string) error {
-	// Delete associated EPG data and programs first
-	epgDataList, err := s.epgDataRepo.ListBySourceID(ctx, id)
+	epgDataList, err := s.epgStore.ListBySourceID(ctx, id)
 	if err != nil {
 		return fmt.Errorf("listing epg data for source: %w", err)
 	}
 	for _, epgData := range epgDataList {
-		if err := s.programDataRepo.DeleteByEPGDataID(ctx, epgData.ID); err != nil {
+		if err := s.epgStore.DeleteProgramsByEPGDataID(ctx, epgData.ID); err != nil {
 			s.log.Error().Err(err).Str("epg_data_id", epgData.ID).Msg("failed to delete program data")
 		}
 	}
-	if err := s.epgDataRepo.DeleteBySourceID(ctx, id); err != nil {
+	if err := s.epgStore.DeleteBySourceID(ctx, id); err != nil {
 		return fmt.Errorf("deleting epg data for source: %w", err)
+	}
+	if err := s.epgStore.Save(); err != nil {
+		s.log.Error().Err(err).Msg("failed to save epg store after source delete")
 	}
 
 	if err := s.epgSourceRepo.Delete(ctx, id); err != nil {
@@ -101,8 +93,6 @@ func (s *EPGService) DeleteSource(ctx context.Context, id string) error {
 	return nil
 }
 
-// RefreshSource fetches the XMLTV URL for the given source, parses it,
-// and stores the EPG channel and program data.
 func (s *EPGService) RefreshSource(ctx context.Context, sourceID string) error {
 	source, err := s.epgSourceRepo.GetByID(ctx, sourceID)
 	if err != nil {
@@ -137,16 +127,16 @@ func (s *EPGService) refreshSource(ctx context.Context, source *models.EPGSource
 		Int("programmes", len(tv.Programmes)).
 		Msg("parsed xmltv data")
 
-	existingData, err := s.epgDataRepo.ListBySourceID(ctx, source.ID)
+	existingData, err := s.epgStore.ListBySourceID(ctx, source.ID)
 	if err != nil {
 		return fmt.Errorf("listing existing epg data: %w", err)
 	}
 	for _, ed := range existingData {
-		if err := s.programDataRepo.DeleteByEPGDataID(ctx, ed.ID); err != nil {
+		if err := s.epgStore.DeleteProgramsByEPGDataID(ctx, ed.ID); err != nil {
 			s.log.Error().Err(err).Str("epg_data_id", ed.ID).Msg("failed to delete existing program data")
 		}
 	}
-	if err := s.epgDataRepo.DeleteBySourceID(ctx, source.ID); err != nil {
+	if err := s.epgStore.DeleteBySourceID(ctx, source.ID); err != nil {
 		return fmt.Errorf("deleting existing epg data: %w", err)
 	}
 
@@ -159,7 +149,7 @@ func (s *EPGService) refreshSource(ctx context.Context, source *models.EPGSource
 			Icon:        ch.Icon,
 		})
 	}
-	if err := s.epgDataRepo.BulkCreate(ctx, epgDataItems); err != nil {
+	if err := s.epgStore.BulkCreateEPGData(ctx, epgDataItems); err != nil {
 		return fmt.Errorf("bulk creating epg data: %w", err)
 	}
 
@@ -185,7 +175,7 @@ func (s *EPGService) refreshSource(ctx context.Context, source *models.EPGSource
 			Icon:              prog.Icon,
 			Subtitle:          prog.Subtitle,
 			Date:              prog.Date,
-			Language:           prog.Language,
+			Language:          prog.Language,
 			IsNew:             prog.IsNew,
 			IsPreviouslyShown: prog.IsPreviouslyShown,
 			Credits:           prog.Credits,
@@ -197,7 +187,10 @@ func (s *EPGService) refreshSource(ctx context.Context, source *models.EPGSource
 		})
 	}
 
-	const batchSize = 5000
+	batchSize := 5000
+	if s.config.Settings != nil && s.config.Settings.EPG.BatchSize > 0 {
+		batchSize = s.config.Settings.EPG.BatchSize
+	}
 	programCount := 0
 	for i := 0; i < len(programs); i += batchSize {
 		end := i + batchSize
@@ -205,14 +198,16 @@ func (s *EPGService) refreshSource(ctx context.Context, source *models.EPGSource
 			end = len(programs)
 		}
 		batch := programs[i:end]
-		if err := s.programDataRepo.BulkCreate(ctx, batch); err != nil {
+		if err := s.epgStore.BulkCreatePrograms(ctx, batch); err != nil {
 			return fmt.Errorf("bulk creating program data (batch %d-%d): %w", i, end, err)
 		}
 		programCount += len(batch)
 		s.log.Debug().Int("inserted", programCount).Int("total", len(programs)).Msg("program data bulk insert progress")
 	}
 
-	s.programDataRepo.Checkpoint(ctx)
+	if err := s.epgStore.Save(); err != nil {
+		s.log.Error().Err(err).Msg("failed to save epg store")
+	}
 
 	now := time.Now()
 	source.LastRefreshed = &now
@@ -231,7 +226,6 @@ func (s *EPGService) refreshSource(ctx context.Context, source *models.EPGSource
 	return nil
 }
 
-// RefreshAllSources refreshes all enabled EPG sources.
 func (s *EPGService) RefreshAllSources(ctx context.Context) error {
 	sources, err := s.epgSourceRepo.List(ctx)
 	if err != nil {
@@ -255,7 +249,6 @@ func (s *EPGService) RefreshAllSources(ctx context.Context) error {
 	return nil
 }
 
-// fetchURL retrieves the content from the given URL using the default user agent.
 func (s *EPGService) fetchURL(ctx context.Context, url string) (io.ReadCloser, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {

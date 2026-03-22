@@ -11,13 +11,13 @@ import (
 	"github.com/gavinmcnair/tvproxy/pkg/config"
 	"github.com/gavinmcnair/tvproxy/pkg/models"
 	"github.com/gavinmcnair/tvproxy/pkg/repository"
+	"github.com/gavinmcnair/tvproxy/pkg/store"
 )
 
 type OutputService struct {
 	channelRepo      *repository.ChannelRepository
 	channelGroupRepo *repository.ChannelGroupRepository
-	epgDataRepo      *repository.EPGDataRepository
-	programDataRepo  *repository.ProgramDataRepository
+	epgStore         store.EPGReader
 	logoService      *LogoService
 	config           *config.Config
 	log              zerolog.Logger
@@ -26,8 +26,7 @@ type OutputService struct {
 func NewOutputService(
 	channelRepo *repository.ChannelRepository,
 	channelGroupRepo *repository.ChannelGroupRepository,
-	epgDataRepo *repository.EPGDataRepository,
-	programDataRepo *repository.ProgramDataRepository,
+	epgStore store.EPGReader,
 	logoService *LogoService,
 	cfg *config.Config,
 	log zerolog.Logger,
@@ -35,8 +34,7 @@ func NewOutputService(
 	return &OutputService{
 		channelRepo:      channelRepo,
 		channelGroupRepo: channelGroupRepo,
-		epgDataRepo:      epgDataRepo,
-		programDataRepo:  programDataRepo,
+		epgStore:         epgStore,
 		logoService:      logoService,
 		config:           cfg,
 		log:              log.With().Str("service", "output").Logger(),
@@ -173,7 +171,7 @@ func (s *OutputService) generateEPG(ctx context.Context, groupFilter map[string]
 		}
 	}
 
-	epgDataList, err := s.epgDataRepo.List(ctx)
+	epgDataList, err := s.epgStore.ListEPGData(ctx)
 	if err != nil {
 		return "", fmt.Errorf("listing epg data: %w", err)
 	}
@@ -199,7 +197,7 @@ func (s *OutputService) generateEPG(ctx context.Context, groupFilter map[string]
 		if !enabledTvgIDs[epg.ChannelID] {
 			continue
 		}
-		programs, err := s.programDataRepo.ListByEPGDataID(ctx, epg.ID)
+		programs, err := s.epgStore.ListPrograms(ctx, epg.ID)
 		if err != nil {
 			s.log.Error().Err(err).Str("epg_data_id", epg.ID).Msg("failed to list programs")
 			continue

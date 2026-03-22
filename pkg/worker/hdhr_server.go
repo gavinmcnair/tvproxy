@@ -29,14 +29,19 @@ type deviceServer struct {
 
 // HDHRServerWorker manages per-device HTTP listeners on unique ports.
 type HDHRServerWorker struct {
-	hdhrDeviceRepo *repository.HDHRDeviceRepository
-	hdhrService    *service.HDHRService
-	proxyService   *service.ProxyService
-	outputService  *service.OutputService
-	cfg            *config.Config
-	log            zerolog.Logger
-	mu             sync.Mutex
-	servers        map[string]*deviceServer
+	hdhrDeviceRepo  *repository.HDHRDeviceRepository
+	hdhrService     *service.HDHRService
+	proxyService    *service.ProxyService
+	settingsService *service.SettingsService
+	outputService   *service.OutputService
+	cfg             *config.Config
+	log             zerolog.Logger
+	mu              sync.Mutex
+	servers         map[string]*deviceServer
+	retryDelay      time.Duration
+	syncInterval    time.Duration
+	readTimeout     time.Duration
+	idleTimeout     time.Duration
 }
 
 // NewHDHRServerWorker creates a new per-device HDHR HTTP server worker.
@@ -44,33 +49,48 @@ func NewHDHRServerWorker(
 	hdhrDeviceRepo *repository.HDHRDeviceRepository,
 	hdhrService *service.HDHRService,
 	proxyService *service.ProxyService,
+	settingsService *service.SettingsService,
 	outputService *service.OutputService,
 	cfg *config.Config,
 	log zerolog.Logger,
 ) *HDHRServerWorker {
+	retryDelay := 2 * time.Second
+	syncInterval := 10 * time.Second
+	readTimeout := 15 * time.Second
+	idleTimeout := 60 * time.Second
+	if cfg.Settings != nil {
+		retryDelay = cfg.Settings.Workers.RetryDelay
+		syncInterval = cfg.Settings.Workers.HDHRDiscoverInterval
+		readTimeout = cfg.Settings.Server.HDHRReadTimeout
+		idleTimeout = cfg.Settings.Server.HDHRIdleTimeout
+	}
 	return &HDHRServerWorker{
-		hdhrDeviceRepo: hdhrDeviceRepo,
-		hdhrService:    hdhrService,
-		proxyService:   proxyService,
-		outputService:  outputService,
-		cfg:            cfg,
-		log:            log.With().Str("worker", "hdhr_servers").Logger(),
-		servers:        make(map[string]*deviceServer),
+		hdhrDeviceRepo:  hdhrDeviceRepo,
+		hdhrService:     hdhrService,
+		proxyService:    proxyService,
+		settingsService: settingsService,
+		outputService:   outputService,
+		cfg:             cfg,
+		log:             log.With().Str("worker", "hdhr_servers").Logger(),
+		servers:         make(map[string]*deviceServer),
+		retryDelay:      retryDelay,
+		syncInterval:    syncInterval,
+		readTimeout:     readTimeout,
+		idleTimeout:     idleTimeout,
 	}
 }
 
 // Run implements the Worker interface. Syncs device servers every 10 seconds.
 func (w *HDHRServerWorker) Run(ctx context.Context) {
-	// Wait for HTTP server to start
 	select {
-	case <-time.After(2 * time.Second):
+	case <-time.After(w.retryDelay):
 	case <-ctx.Done():
 		return
 	}
 
 	w.sync(ctx)
 
-	ticker := time.NewTicker(10 * time.Second)
+	ticker := time.NewTicker(w.syncInterval)
 	defer ticker.Stop()
 
 	for {
@@ -135,9 +155,9 @@ func (w *HDHRServerWorker) startServer(parentCtx context.Context, device models.
 	srv := &http.Server{
 		Addr:         fmt.Sprintf(":%d", device.Port),
 		Handler:      r,
-		ReadTimeout:  15 * time.Second,
+		ReadTimeout:  w.readTimeout,
 		WriteTimeout: 0,
-		IdleTimeout:  60 * time.Second,
+		IdleTimeout:  w.idleTimeout,
 		BaseContext:  func(_ net.Listener) context.Context { return srvCtx },
 	}
 
@@ -221,7 +241,7 @@ func (w *HDHRServerWorker) buildRouter(device models.HDHRDevice, baseURL string)
 	})
 
 	// Shared channel proxy route
-	proxyHandler := handler.NewProxyHandler(w.proxyService, w.log)
+	proxyHandler := handler.NewProxyHandler(w.proxyService, w.settingsService, w.log)
 	r.Get("/channel/{channelID}", proxyHandler.Stream)
 
 	// Device-specific filtered M3U/EPG output

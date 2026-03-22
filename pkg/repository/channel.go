@@ -213,6 +213,25 @@ func (r *ChannelRepository) ResetFailCount(ctx context.Context, id string) error
 	return nil
 }
 
+func (r *ChannelRepository) RemoveStreamMappings(ctx context.Context, streamIDs []string) error {
+	if len(streamIDs) == 0 {
+		return nil
+	}
+	return r.db.InTx(ctx, func(tx *sql.Tx) error {
+		stmt, err := tx.PrepareContext(ctx, `DELETE FROM channel_streams WHERE stream_id = ?`)
+		if err != nil {
+			return fmt.Errorf("preparing statement: %w", err)
+		}
+		defer stmt.Close()
+		for _, id := range streamIDs {
+			if _, err := stmt.ExecContext(ctx, id); err != nil {
+				return fmt.Errorf("deleting channel_stream mapping for stream %s: %w", id, err)
+			}
+		}
+		return nil
+	})
+}
+
 func (r *ChannelRepository) scanRows(rows *sql.Rows) ([]models.Channel, error) {
 	var channels []models.Channel
 	for rows.Next() {

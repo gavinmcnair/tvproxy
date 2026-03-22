@@ -7,7 +7,6 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
-	"time"
 )
 
 type VideoInfo struct {
@@ -87,13 +86,14 @@ func simplifyFrameRate(rate string) string {
 }
 
 func Probe(ctx context.Context, url, userAgent string) (*ProbeResult, error) {
-	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	s := settings()
+	ctx, cancel := context.WithTimeout(ctx, s.ProbeTimeout)
 	defer cancel()
 
 	args := []string{
 		"-v", "quiet",
-		"-analyzeduration", "5000000",
-		"-probesize", "5000000",
+		"-analyzeduration", strconv.Itoa(s.AnalyzeDuration),
+		"-probesize", strconv.Itoa(s.ProbeSize),
 		"-print_format", "json",
 		"-show_format",
 		"-show_streams",

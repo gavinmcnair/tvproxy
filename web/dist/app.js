@@ -420,6 +420,21 @@
     return el;
   }
 
+  function fmtLocalDateTime(iso) {
+    if (!iso) return '-';
+    return new Date(iso).toLocaleString(undefined, { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', timeZoneName: 'short' });
+  }
+
+  function fmtLocalTime(iso) {
+    if (!iso) return '-';
+    return new Date(iso).toLocaleString(undefined, { hour: '2-digit', minute: '2-digit', timeZoneName: 'short' });
+  }
+
+  function fmtUTC(iso) {
+    if (!iso) return '';
+    return new Date(iso).toLocaleString('en-GB', { timeZone: 'UTC', day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }) + ' UTC';
+  }
+
   function showModal(title, bodyEl, onSave, saveLabel) {
     const overlay = h('div', { className: 'modal-overlay' });
     const modal = h('div', { className: 'modal' },
@@ -619,6 +634,7 @@
     { section: 'Streams' },
     { id: 'recordings', label: 'Recordings', icon: '\u23FA', tip: 'View active and completed recordings' },
     { section: 'System', adminOnly: true },
+    { id: 'now-playing', label: 'Now Playing', icon: '\u25B6', tip: 'Active streams and viewers', adminOnly: true },
     { id: 'users', label: 'Users', icon: '\ud83d\udc65', tip: 'Manage admin and user accounts', adminOnly: true },
     { id: 'settings', label: 'Settings', icon: '\u2699', tip: 'Core application settings', adminOnly: true },
   ];
@@ -1922,7 +1938,7 @@
             const cb = h('input', { type: 'checkbox', id: 'field-' + field.key });
             cb.checked = checked;
             inputs[field.key] = cb;
-            formEl.appendChild(h('div', { className: 'form-check' }, cb, h('label', { for: 'field-' + field.key }, field.label)));
+            formEl.appendChild(h('div', { className: 'form-check', style: 'display:flex;align-items:center;gap:6px' }, cb, h('label', { for: 'field-' + field.key, style: 'cursor:pointer;margin:0' }, field.label)));
           } else if (field.type === 'select') {
             const sel = h('select', { id: 'field-' + field.key },
               ...field.options.map(o => {
@@ -3748,6 +3764,11 @@
           { value: 'mp4', label: 'MP4 (Browser/Plex)' },
           { value: 'webm', label: 'WebM (Browser, requires Opus audio)' },
         ], showWhen: form => (form.stream_mode || 'ffmpeg') === 'ffmpeg' },
+        { key: 'deinterlace', label: 'Deinterlace', type: 'checkbox', default: false, help: 'Apply yadif deinterlace filter (only when transcoding, not copy).', showWhen: form => (form.stream_mode || 'ffmpeg') === 'ffmpeg' && (form.video_codec || 'copy') !== 'copy' },
+        { key: 'fps_mode', label: 'FPS Mode', type: 'select', options: [
+          { value: 'auto', label: 'Auto (variable)' },
+          { value: 'cfr', label: 'CFR (constant frame rate)' },
+        ], default: 'auto', showWhen: form => (form.stream_mode || 'ffmpeg') === 'ffmpeg' && (form.video_codec || 'copy') !== 'copy' },
         { key: 'use_custom_args', label: 'Use Custom Args', type: 'checkbox', default: false, help: 'When checked, the FFmpeg Args field below is used as the complete command (dropdowns are ignored).', showWhen: form => (form.stream_mode || 'ffmpeg') === 'ffmpeg' },
         { key: 'custom_args', label: 'FFmpeg Args', type: 'textarea', placeholder: '-b:v 4M -maxrate 5M', help: 'Extra flags appended to the composed command. When "Use Custom Args" is checked, this is the full command.', showWhen: form => (form.stream_mode || 'ffmpeg') === 'ffmpeg' },
       ],
@@ -3983,7 +4004,7 @@
             h('small', { style: 'color: var(--text-muted); display: block' }, 'Auto-created on client creation. Edit the profile via Stream Profiles to change encoding settings.')));
         }
 
-        formContent.appendChild(h('div', { className: 'form-check' }, enabledChk, h('label', null, 'Enabled')));
+        formContent.appendChild(h('div', { className: 'form-check', style: 'display:flex;align-items:center;gap:6px' }, enabledChk, h('label', { style: 'cursor:pointer;margin:0' }, 'Enabled')));
         formContent.appendChild(h('div', { style: 'display: flex; gap: 8px; margin-top: 16px' }, saveBtn, cancelBtn));
 
         container.appendChild(h('div', { className: 'table-container' },
@@ -4074,7 +4095,7 @@
           table.innerHTML = '<thead><tr><th>Channel</th><th>Program</th><th>Buffered</th><th>Segments</th><th>Stop At</th><th>Actions</th></tr></thead>';
           var tbody = h('tbody');
           recordings.forEach(function(rec) {
-            var stopStr = rec.stop_at ? new Date(rec.stop_at).toLocaleTimeString() : '-';
+            var stopStr = fmtLocalTime(rec.stop_at);
             var segCount = rec.segments ? rec.segments.length : 0;
             var activeSeg = rec.segments ? rec.segments.find(function(s) { return s.status === 'recording'; }) : null;
             var segLabel = segCount + (activeSeg ? ' (recording)' : '');
@@ -4100,7 +4121,7 @@
               h('td', null, rec.program_title),
               h('td', null, fmtDur(rec.buffered_secs)),
               h('td', null, segLabel),
-              h('td', null, stopStr),
+              h('td', { title: fmtUTC(rec.stop_at) }, stopStr),
               actions
             );
             tbody.appendChild(tr);
@@ -4125,7 +4146,7 @@
           table.innerHTML = '<thead><tr><th>Filename</th><th>Size</th><th>Date</th><th>Actions</th></tr></thead>';
           var tbody = h('tbody');
           recordings.forEach(function(rec) {
-            var dateStr = new Date(rec.mod_time).toLocaleString();
+            var dateStr = fmtLocalDateTime(rec.mod_time);
             var actions = h('td', { style: 'display:flex;gap:4px;' });
             var playBtn = h('button', { className: 'btn btn-primary btn-sm', onClick: function() {
               var fileUrl = '/api/recordings/completed/' + encodeURIComponent(rec.filename) + '/stream?profile=Browser&user_id=' + encodeURIComponent(rec.user_id || '') + '&token=' + encodeURIComponent(state.accessToken || '');
@@ -4141,7 +4162,7 @@
             var tr = h('tr', null,
               h('td', null, rec.filename),
               h('td', null, fmtSize(rec.size)),
-              h('td', null, dateStr),
+              h('td', { title: fmtUTC(rec.mod_time) }, dateStr),
               actions
             );
             tbody.appendChild(tr);
@@ -4167,8 +4188,8 @@
           table.innerHTML = '<thead><tr><th>Channel</th><th>Program</th><th>Start</th><th>Stop</th><th>Actions</th></tr></thead>';
           var tbody = h('tbody');
           recordings.forEach(function(rec) {
-            var startStr = new Date(rec.start_at).toLocaleString();
-            var stopStr = new Date(rec.stop_at).toLocaleString();
+            var startStr = fmtLocalDateTime(rec.start_at);
+            var stopStr = fmtLocalDateTime(rec.stop_at);
             var actions = h('td', { style: 'display:flex;gap:4px;' });
             var deleteBtn = h('button', { className: 'btn btn-danger btn-sm', onClick: async function() {
               if (!confirm('Delete scheduled recording "' + (rec.program_title || '') + '"?')) return;
@@ -4179,8 +4200,8 @@
             var tr = h('tr', null,
               h('td', null, rec.channel_name),
               h('td', null, rec.program_title),
-              h('td', null, startStr),
-              h('td', null, stopStr),
+              h('td', { title: fmtUTC(rec.start_at) }, startStr),
+              h('td', { title: fmtUTC(rec.stop_at) }, stopStr),
               actions
             );
             tbody.appendChild(tr);
@@ -4321,6 +4342,33 @@
           ),
         ));
 
+        const debugEnabled = (Array.isArray(settings) ? settings : []).some(s => s.key === 'debug_enabled' && s.value === 'true');
+        const debugToggle = h('input', { type: 'checkbox', id: 'setting-debug-enabled' });
+        debugToggle.checked = debugEnabled;
+        debugToggle.onchange = async function() {
+          debugToggle.disabled = true;
+          try {
+            await api.put('/api/settings', { debug_enabled: debugToggle.checked ? 'true' : 'false' });
+            toast.success('Setting saved');
+          } catch (err) {
+            toast.error(err.message);
+            debugToggle.checked = !debugToggle.checked;
+          }
+          debugToggle.disabled = false;
+        };
+
+        container.appendChild(h('div', { className: 'table-container', style: 'margin-top: 24px' },
+          h('div', { className: 'table-header' }, h('h3', null, 'Debug Mode')),
+          h('div', { style: 'padding: 16px; font-size: 15px' },
+            h('div', { style: 'display:flex;align-items:center;gap:10px' },
+              debugToggle,
+              h('label', { for: 'setting-debug-enabled', style: 'cursor:pointer;margin:0' }, 'Enable debug logging'),
+            ),
+            h('p', { style: 'color: var(--text-muted); margin-top: 8px; font-size: 13px' },
+              'When enabled, all HTTP requests are logged (including static files, VOD status polls, and DLNA pings). DLNA SOAP actions, proxy request headers, and client detection rule evaluation are also logged. When disabled, noisy requests are suppressed for cleaner logs.'),
+          ),
+        ));
+
         const softResetBtn = h('button', { className: 'btn btn-danger', onClick: async () => {
           if (!confirm('Soft Reset will delete all channels, streams, EPG data, stream profiles, clients, and HDHR devices. M3U accounts, EPG sources, users, and settings will be preserved.\n\nAre you sure?')) return;
           softResetBtn.disabled = true;
@@ -4359,6 +4407,153 @@
         container.innerHTML = '';
         container.appendChild(h('p', { style: 'color: var(--danger)' }, 'Failed to load settings: ' + err.message));
       }
+    },
+
+    'now-playing': async function(container) {
+      container.innerHTML = '';
+      container.appendChild(h('div', { className: 'loading-page' }, h('div', { className: 'spinner' }), 'Loading activity...'));
+
+      var pollTimer = null;
+
+      function fmtDuration(startedAt) {
+        var secs = Math.floor((Date.now() - new Date(startedAt).getTime()) / 1000);
+        if (secs < 0) secs = 0;
+        var hrs = Math.floor(secs / 3600);
+        var mins = Math.floor((secs % 3600) / 60);
+        var s = secs % 60;
+        return hrs > 0 ? hrs + ':' + String(mins).padStart(2, '0') + ':' + String(s).padStart(2, '0')
+                       : mins + ':' + String(s).padStart(2, '0');
+      }
+
+      function statusLabel(idleSecs) {
+        return idleSecs < 5 ? 'Playing' : 'Idle ' + Math.floor(idleSecs) + 's';
+      }
+
+      function statusColor(idleSecs) {
+        return idleSecs < 5 ? 'var(--success)' : 'var(--warning)';
+      }
+
+      function typeBadgeColor(type) {
+        if (type === 'channel') return 'badge-primary';
+        if (type === 'stream') return 'badge-info';
+        if (type === 'recording') return 'badge-danger';
+        return 'badge-warning';
+      }
+
+      function fmtRemaining(stopAt) {
+        if (!stopAt) return null;
+        var secs = Math.floor((new Date(stopAt).getTime() - Date.now()) / 1000);
+        if (secs <= 0) return 'Ending...';
+        var hrs = Math.floor(secs / 3600);
+        var mins = Math.floor((secs % 3600) / 60);
+        var s = secs % 60;
+        return hrs > 0 ? hrs + ':' + String(mins).padStart(2, '0') + ':' + String(s).padStart(2, '0')
+                       : mins + ':' + String(s).padStart(2, '0');
+      }
+
+      function renderViewers(viewers, recordings) {
+        container.innerHTML = '';
+
+        var recStopMap = {};
+        if (recordings) {
+          recordings.forEach(function(rec) { if (rec.stop_at) recStopMap[rec.session_id] = rec.stop_at; });
+        }
+
+        var header = h('div', { style: 'display:flex;align-items:center;justify-content:space-between;margin-bottom:16px' });
+        var count = viewers ? viewers.length : 0;
+        header.appendChild(h('h2', { style: 'margin:0' }, 'Now Playing'));
+        header.appendChild(h('span', { style: 'color:var(--text-muted);font-size:0.95em' }, count + ' active stream' + (count !== 1 ? 's' : '')));
+        container.appendChild(header);
+
+        if (!viewers || viewers.length === 0) {
+          container.appendChild(h('div', { style: 'text-align:center;padding:48px 16px;color:var(--text-muted)' },
+            h('div', { style: 'font-size:3em;margin-bottom:12px;opacity:0.4' }, '\u25B6'),
+            h('p', { style: 'font-size:1.1em;margin:0' }, 'No active streams')
+          ));
+          return;
+        }
+
+        var grid = h('div', { style: 'display:grid;grid-template-columns:repeat(auto-fill,minmax(380px,1fr));gap:16px' });
+        viewers.forEach(function(v) {
+          var isRecording = v.type === 'recording';
+          var cardBorder = isRecording ? 'border-left:3px solid var(--danger);' : '';
+          var card = h('div', { style: 'background:var(--bg-card);border:1px solid var(--border);border-radius:8px;padding:16px;display:flex;flex-direction:column;gap:8px;' + cardBorder });
+
+          var nameRow = h('div', { style: 'display:flex;align-items:center;justify-content:space-between;gap:8px' });
+          var displayName = v.channel_name || v.stream_name || 'Unknown';
+          nameRow.appendChild(h('span', { style: 'font-size:1.15em;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap' }, displayName));
+
+          var statusDot = h('span', { style: 'display:inline-flex;align-items:center;gap:4px;font-size:0.85em;white-space:nowrap' });
+          if (isRecording) {
+            statusDot.appendChild(h('span', { style: 'width:8px;height:8px;border-radius:50%;background:var(--danger);animation:pulse 1.5s ease-in-out infinite' }));
+            statusDot.appendChild(document.createTextNode('Recording'));
+          } else {
+            statusDot.appendChild(h('span', { style: 'width:8px;height:8px;border-radius:50%;background:' + statusColor(v.idle_secs) }));
+            statusDot.appendChild(document.createTextNode(statusLabel(v.idle_secs)));
+          }
+          nameRow.appendChild(statusDot);
+          card.appendChild(nameRow);
+
+          var badgeRow = h('div', { style: 'display:flex;flex-wrap:wrap;gap:4px' });
+          var typeLabel = isRecording ? '\u23FA Recording' : v.type.charAt(0).toUpperCase() + v.type.slice(1);
+          badgeRow.appendChild(h('span', { className: 'badge ' + typeBadgeColor(v.type) }, typeLabel));
+          if (v.profile_name) badgeRow.appendChild(h('span', { className: 'badge badge-secondary' }, v.profile_name));
+          if (v.client_name) badgeRow.appendChild(h('span', { className: 'badge badge-success' }, v.client_name));
+          card.appendChild(badgeRow);
+
+          var detailsGrid = h('div', { style: 'display:grid;grid-template-columns:auto 1fr;gap:2px 12px;font-size:0.88em;color:var(--text-muted)' });
+
+          if (isRecording) {
+            var stopAt = recStopMap[v.id];
+            var remaining = fmtRemaining(stopAt);
+            detailsGrid.appendChild(h('span', { style: 'font-weight:500' }, 'Remaining'));
+            detailsGrid.appendChild(h('span', { title: stopAt ? fmtLocalDateTime(stopAt) : '' }, remaining || 'Unknown'));
+          } else {
+            detailsGrid.appendChild(h('span', { style: 'font-weight:500' }, 'IP'));
+            detailsGrid.appendChild(h('span', null, v.remote_addr || '-'));
+          }
+
+          detailsGrid.appendChild(h('span', { style: 'font-weight:500' }, 'Duration'));
+          detailsGrid.appendChild(h('span', null, fmtDuration(v.started_at)));
+
+          if (v.user_agent) {
+            var ua = v.user_agent.length > 60 ? v.user_agent.substring(0, 60) + '...' : v.user_agent;
+            detailsGrid.appendChild(h('span', { style: 'font-weight:500' }, 'User Agent'));
+            detailsGrid.appendChild(h('span', { style: 'overflow:hidden;text-overflow:ellipsis;white-space:nowrap', title: v.user_agent }, ua));
+          }
+
+          card.appendChild(detailsGrid);
+          grid.appendChild(card);
+        });
+        container.appendChild(grid);
+      }
+
+      async function fetchAndRender() {
+        var viewers = await api.get('/api/activity');
+        var recordings = [];
+        try { recordings = await api.get('/api/recordings') || []; } catch (e) {}
+        renderViewers(viewers, recordings);
+      }
+
+      try {
+        await fetchAndRender();
+      } catch (err) {
+        container.innerHTML = '';
+        container.appendChild(h('p', { style: 'color: var(--danger)' }, 'Failed to load activity: ' + err.message));
+        return;
+      }
+
+      pollTimer = setInterval(async function() {
+        try { await fetchAndRender(); } catch (e) {}
+      }, 5000);
+
+      var observer = new MutationObserver(function() {
+        if (!document.body.contains(container)) {
+          if (pollTimer) clearInterval(pollTimer);
+          observer.disconnect();
+        }
+      });
+      observer.observe(document.body, { childList: true, subtree: true });
     },
   };
 

@@ -59,7 +59,11 @@ func (s *SchedulerService) Schedule(ctx context.Context, rec *models.ScheduledRe
 		return fmt.Errorf("channel %s is disabled", rec.ChannelID)
 	}
 
-	if rec.StartAt.Before(time.Now().Add(-5 * time.Minute)) {
+	startCutoff := 5 * time.Minute
+	if s.config.Settings != nil {
+		startCutoff = s.config.Settings.Recording.StartCutoff
+	}
+	if rec.StartAt.Before(time.Now().Add(-startCutoff)) {
 		return fmt.Errorf("start time is too far in the past")
 	}
 	if !rec.StopAt.After(rec.StartAt) {
@@ -78,7 +82,11 @@ func (s *SchedulerService) Schedule(ctx context.Context, rec *models.ScheduledRe
 		return err
 	}
 
-	if rec.StartAt.Before(time.Now().Add(30 * time.Second)) {
+	leadTime := 30 * time.Second
+	if s.config.Settings != nil {
+		leadTime = s.config.Settings.Recording.LeadTime
+	}
+	if rec.StartAt.Before(time.Now().Add(leadTime)) {
 		s.startRecording(ctx, rec)
 	}
 

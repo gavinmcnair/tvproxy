@@ -18,14 +18,19 @@ import (
 
 	"github.com/gavinmcnair/tvproxy/pkg/config"
 	"github.com/gavinmcnair/tvproxy/pkg/database"
+	"github.com/gavinmcnair/tvproxy/pkg/defaults"
+	"github.com/gavinmcnair/tvproxy/pkg/ffmpeg"
 	"github.com/gavinmcnair/tvproxy/pkg/handler"
 	"github.com/gavinmcnair/tvproxy/pkg/middleware"
 	"github.com/gavinmcnair/tvproxy/pkg/openapi"
 	"github.com/gavinmcnair/tvproxy/pkg/repository"
 	"github.com/gavinmcnair/tvproxy/pkg/service"
+	"github.com/gavinmcnair/tvproxy/pkg/store"
 	"github.com/gavinmcnair/tvproxy/pkg/worker"
 	"github.com/gavinmcnair/tvproxy/web"
 )
+
+var buildVersion = "dev"
 
 func main() {
 	cfg := config.Load()
@@ -41,28 +46,54 @@ func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
+	dataDir := filepath.Dir(cfg.DatabasePath)
+
 	db, err := database.New(ctx, cfg.DatabasePath, log)
 	if err != nil {
 		log.Fatal().Err(err).Msg("failed to initialize database")
 	}
 	defer db.Close()
 
+	tuningSettings, err := defaults.LoadSettings(filepath.Join(dataDir, "settings.json"))
+	if err != nil {
+		log.Fatal().Err(err).Msg("failed to load settings")
+	}
+	cfg.Settings = tuningSettings
+	ffmpeg.SetSettings(&tuningSettings.FFmpeg)
+
+	clientDefs, err := defaults.LoadClientDefaults(filepath.Join(dataDir, "clients.json"))
+	if err != nil {
+		log.Fatal().Err(err).Msg("failed to load client defaults")
+	}
+	db.SetClientDefaults(clientDefs)
+	if err := database.SeedClientDefaults(ctx, db.DB, clientDefs); err != nil {
+		log.Fatal().Err(err).Msg("failed to seed client defaults")
+	}
+
+	streamStore := store.NewStreamStore(filepath.Join(dataDir, "streams.gob"), log)
+	if err := streamStore.Load(); err != nil {
+		log.Fatal().Err(err).Msg("failed to load stream store")
+	}
+
+	epgStore := store.NewEPGStore(filepath.Join(dataDir, "epg.gob"), log)
+	if err := epgStore.Load(); err != nil {
+		log.Fatal().Err(err).Msg("failed to load epg store")
+	}
+
 	userRepo := repository.NewUserRepository(db)
 	m3uAccountRepo := repository.NewM3UAccountRepository(db)
-	streamRepo := repository.NewStreamRepository(db)
 	channelRepo := repository.NewChannelRepository(db)
 	channelGroupRepo := repository.NewChannelGroupRepository(db)
 	logoRepo := repository.NewLogoRepository(db)
 	streamProfileRepo := repository.NewStreamProfileRepository(db)
 	epgSourceRepo := repository.NewEPGSourceRepository(db)
-	epgDataRepo := repository.NewEPGDataRepository(db)
-	programDataRepo := repository.NewProgramDataRepository(db)
 	hdhrDeviceRepo := repository.NewHDHRDeviceRepository(db)
 	settingsRepo := repository.NewCoreSettingsRepository(db)
 	clientRepo := repository.NewClientRepository(db)
 	scheduledRecRepo := repository.NewScheduledRecordingRepository(db)
 
 	authService := service.NewAuthService(userRepo, cfg.JWTSecret, cfg.AccessTokenExpiry, cfg.RefreshTokenExpiry)
+	authService.SetInviteExpiry(cfg.Settings.Auth.InviteTokenExpiry)
 
 	users, err := userRepo.List(ctx)
 	if err != nil {
@@ -81,19 +112,22 @@ func main() {
 		adminUserID = adminUser.ID
 	}
 	settingsService := service.NewSettingsService(settingsRepo)
+	settingsService.LoadDebugFlag(ctx)
 	logoService := service.NewLogoService(logoRepo, settingsService, cfg, log)
 	logoService.EnsureDir()
 	go logoService.CacheAll(context.Background())
 
-	m3uService := service.NewM3UService(m3uAccountRepo, streamRepo, logoService, cfg, log)
-	channelService := service.NewChannelService(channelRepo, channelGroupRepo, streamRepo, log)
-	epgService := service.NewEPGService(epgSourceRepo, epgDataRepo, programDataRepo, cfg, log)
-	clientService := service.NewClientService(clientRepo, streamProfileRepo, log)
-	proxyService := service.NewProxyService(channelRepo, streamRepo, streamProfileRepo, clientService, cfg, log)
+	m3uService := service.NewM3UService(m3uAccountRepo, streamStore, channelRepo, logoService, cfg, log)
+	channelService := service.NewChannelService(channelRepo, channelGroupRepo, streamStore, log)
+	epgService := service.NewEPGService(epgSourceRepo, epgStore, cfg, log)
+	activityService := service.NewActivityService()
+	clientService := service.NewClientService(clientRepo, streamProfileRepo, settingsService, log)
+	proxyService := service.NewProxyService(channelRepo, streamStore, streamProfileRepo, clientService, activityService, cfg, log)
 	hdhrService := service.NewHDHRService(hdhrDeviceRepo, channelRepo)
-	outputService := service.NewOutputService(channelRepo, channelGroupRepo, epgDataRepo, programDataRepo, logoService, cfg, log)
+	outputService := service.NewOutputService(channelRepo, channelGroupRepo, epgStore, logoService, cfg, log)
 	ffmpegMgr := service.NewFFmpegManager(cfg, log)
-	vodService := service.NewVODService(channelRepo, streamRepo, streamProfileRepo, ffmpegMgr, cfg, log)
+	vodService := service.NewVODService(channelRepo, streamStore, streamProfileRepo, ffmpegMgr, activityService, cfg, log)
+	vodService.RecoverRecordings(ctx)
 	schedulerService := service.NewSchedulerService(scheduledRecRepo, channelRepo, vodService, cfg, log)
 	dlnaService := service.NewDLNAService(channelRepo, channelGroupRepo, settingsService, logoService, cfg, log)
 
@@ -102,26 +136,27 @@ func main() {
 	authHandler := handler.NewAuthHandler(authService)
 	userHandler := handler.NewUserHandler(authService)
 	m3uAccountHandler := handler.NewM3UAccountHandler(m3uService)
-	streamHandler := handler.NewStreamHandler(streamRepo, logoService)
+	streamHandler := handler.NewStreamHandler(streamStore, logoService)
 	channelHandler := handler.NewChannelHandler(channelService, logoService)
 	channelGroupHandler := handler.NewChannelGroupHandler(channelService)
 	logoHandler := handler.NewLogoHandler(logoService)
 	streamProfileHandler := handler.NewStreamProfileHandler(streamProfileRepo)
 	epgSourceHandler := handler.NewEPGSourceHandler(epgService)
-	epgDataHandler := handler.NewEPGDataHandler(epgDataRepo, programDataRepo)
+	epgDataHandler := handler.NewEPGDataHandler(epgStore)
 	hdhrHandler := handler.NewHDHRHandler(hdhrService, hdhrDeviceRepo, proxyService, cfg)
 	outputHandler := handler.NewOutputHandler(outputService)
-	proxyHandler := handler.NewProxyHandler(proxyService, log)
+	proxyHandler := handler.NewProxyHandler(proxyService, settingsService, log)
 	vodHandler := handler.NewVODHandler(vodService, log)
-	settingsHandler := handler.NewSettingsHandler(settingsService, db, authService)
+	activityHandler := handler.NewActivityHandler(activityService)
+	settingsHandler := handler.NewSettingsHandler(settingsService, db, authService, streamStore, epgStore)
 	clientHandler := handler.NewClientHandler(clientService)
 	schedulerHandler := handler.NewSchedulerHandler(schedulerService, log)
-	dlnaHandler := handler.NewDLNAHandler(dlnaService, cfg)
+	dlnaHandler := handler.NewDLNAHandler(dlnaService, settingsService, cfg, log)
 
 	r := chi.NewRouter()
 	r.Use(chimw.RequestID)
 	r.Use(chimw.RealIP)
-	r.Use(middleware.RequestLogger(log))
+	r.Use(middleware.RequestLogger(log, settingsService.IsDebug))
 	r.Use(middleware.Recovery(log))
 	r.Use(cors.Handler(cors.Options{
 		AllowedOrigins:   []string{"*"},
@@ -131,10 +166,14 @@ func main() {
 		AllowCredentials: true,
 		MaxAge:           300,
 	}))
+	bodyLimit := cfg.Settings.Server.RequestBodyLimitBytes
+	if bodyLimit <= 0 {
+		bodyLimit = 1 << 20
+	}
 	r.Use(func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.Body != nil {
-				r.Body = http.MaxBytesReader(w, r.Body, 1<<20) // 1MB
+				r.Body = http.MaxBytesReader(w, r.Body, bodyLimit)
 			}
 			next.ServeHTTP(w, r)
 		})
@@ -308,6 +347,11 @@ func main() {
 			r.Get("/schedule/{id}", schedulerHandler.Get)
 			r.Delete("/schedule/{id}", schedulerHandler.Delete)
 		})
+
+		r.Route("/api/activity", func(r chi.Router) {
+			r.Use(authMW.RequireAdmin)
+			r.Get("/", activityHandler.List)
+		})
 	})
 
 	staticRoot := filepath.Join(filepath.Dir(cfg.DatabasePath), "static")
@@ -317,6 +361,14 @@ func main() {
 	if err != nil {
 		log.Fatal().Err(err).Msg("failed to load embedded web assets")
 	}
+	indexHTML, err := fs.ReadFile(distFS, "index.html")
+	if err != nil {
+		log.Fatal().Err(err).Msg("failed to read embedded index.html")
+	}
+	versionedIndex := strings.ReplaceAll(string(indexHTML), `app.css"`, `app.css?v=`+buildVersion+`"`)
+	versionedIndex = strings.ReplaceAll(versionedIndex, `app.js"`, `app.js?v=`+buildVersion+`"`)
+	versionedIndexBytes := []byte(versionedIndex)
+
 	fileServer := http.FileServer(http.FS(distFS))
 	r.Get("/*", func(w http.ResponseWriter, req *http.Request) {
 		path := strings.TrimPrefix(req.URL.Path, "/")
@@ -325,18 +377,18 @@ func main() {
 			fileServer.ServeHTTP(w, req)
 			return
 		}
-		req.URL.Path = "/"
-		fileServer.ServeHTTP(w, req)
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.Write(versionedIndexBytes)
 	})
 
 	wm := worker.NewManager(log)
 	wm.Add("m3u_refresh", worker.NewM3URefreshWorker(m3uService, cfg.M3URefreshInterval, log))
 	wm.Add("epg_refresh", worker.NewEPGRefreshWorker(epgService, cfg.EPGRefreshInterval, log))
 
-	wm.Add("ssdp", worker.NewSSDPWorker(hdhrDeviceRepo, cfg.BaseURL, log))
-	wm.Add("hdhr_discover", worker.NewHDHRDiscoverWorker(hdhrDeviceRepo, cfg.BaseURL, log))
-	wm.Add("hdhr_servers", worker.NewHDHRServerWorker(hdhrDeviceRepo, hdhrService, proxyService, outputService, cfg, log))
-	wm.Add("dlna", worker.NewDLNAWorker(dlnaService, cfg.BaseURL, cfg.Port, log))
+	wm.Add("ssdp", worker.NewSSDPWorker(hdhrDeviceRepo, cfg.BaseURL, cfg.Settings.Workers.RetryDelay, cfg.Settings.Workers.SSDPAnnounceInterval, log))
+	wm.Add("hdhr_discover", worker.NewHDHRDiscoverWorker(hdhrDeviceRepo, cfg.BaseURL, cfg.Settings.Workers.RetryDelay, log))
+	wm.Add("hdhr_servers", worker.NewHDHRServerWorker(hdhrDeviceRepo, hdhrService, proxyService, settingsService, outputService, cfg, log))
+	wm.Add("dlna", worker.NewDLNAWorker(dlnaService, cfg.BaseURL, cfg.Port, cfg.Settings.Workers.RetryDelay, cfg.Settings.Workers.DLNAAnnounceInterval, log))
 	wm.Add("vod_cleanup", worker.NewVODCleanupWorker(vodService, 60*time.Second, log))
 	wm.Add("recording_scheduler", worker.NewSchedulerWorker(schedulerService, 30*time.Second, log))
 	wm.Add("wal_checkpoint", worker.NewWALCheckpointWorker(db, 5*time.Minute, log))
@@ -346,9 +398,9 @@ func main() {
 	srv := &http.Server{
 		Addr:         cfg.ListenAddr(),
 		Handler:      r,
-		ReadTimeout:  15 * time.Second,
+		ReadTimeout:  cfg.Settings.Server.HTTPReadTimeout,
 		WriteTimeout: 0, // Disabled for streaming
-		IdleTimeout:  60 * time.Second,
+		IdleTimeout:  cfg.Settings.Server.HTTPIdleTimeout,
 	}
 
 	go func() {

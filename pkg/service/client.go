@@ -16,43 +16,47 @@ import (
 type ClientService struct {
 	clientRepo        *repository.ClientRepository
 	streamProfileRepo *repository.StreamProfileRepository
+	settingsService   *SettingsService
 	log               zerolog.Logger
 }
 
 func NewClientService(
 	clientRepo *repository.ClientRepository,
 	streamProfileRepo *repository.StreamProfileRepository,
+	settingsService *SettingsService,
 	log zerolog.Logger,
 ) *ClientService {
 	return &ClientService{
 		clientRepo:        clientRepo,
 		streamProfileRepo: streamProfileRepo,
+		settingsService:   settingsService,
 		log:               log.With().Str("service", "client").Logger(),
 	}
 }
 
-func (s *ClientService) MatchClient(ctx context.Context, r *http.Request) (*models.StreamProfile, error) {
+func (s *ClientService) MatchClient(ctx context.Context, r *http.Request) (*models.StreamProfile, string, error) {
 	clients, err := s.clientRepo.ListEnabledWithRules(ctx)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 
+	debug := s.settingsService.IsDebug()
 	for _, client := range clients {
 		if len(client.MatchRules) == 0 {
 			continue
 		}
-		if matchesAllRules(r, client.MatchRules) {
+		if s.matchesAllRules(r, client, debug) {
 			profile, err := s.streamProfileRepo.GetByID(ctx, client.StreamProfileID)
 			if err != nil {
 				s.log.Warn().Err(err).Str("client_id", client.ID).Str("client", client.Name).Msg("matched but profile not found")
 				continue
 			}
 			s.log.Info().Str("client", client.Name).Str("profile", profile.Name).Msg("client detected")
-			return profile, nil
+			return profile, client.Name, nil
 		}
 	}
 
-	return nil, nil
+	return nil, "", nil
 }
 
 func (s *ClientService) ListClients(ctx context.Context) ([]models.Client, error) {
@@ -64,14 +68,15 @@ func (s *ClientService) GetClient(ctx context.Context, id string) (*models.Clien
 }
 
 func (s *ClientService) CreateClient(ctx context.Context, client *models.Client, rules []models.ClientMatchRule) error {
-	args := ffmpeg.ComposeStreamProfileArgs("m3u", "none", "copy", "mpegts")
+	args := ffmpeg.ComposeStreamProfileArgs(ffmpeg.ComposeOptions{SourceType: "m3u", HWAccel: "none", VideoCodec: "copy", Container: "mpegts"})
 	profile := &models.StreamProfile{
-		Name:       client.Name + " (Client)",
+		Name:       client.Name,
 		StreamMode: "ffmpeg",
 		SourceType: "m3u",
 		HWAccel:    "none",
 		VideoCodec: "copy",
 		Container:  "mpegts",
+		FPSMode:    "auto",
 		Command:    "ffmpeg",
 		Args:       args,
 		IsClient:   true,
@@ -131,9 +136,13 @@ func (s *ClientService) DeleteClient(ctx context.Context, id string) error {
 	return nil
 }
 
-func matchesAllRules(r *http.Request, rules []models.ClientMatchRule) bool {
-	for _, rule := range rules {
-		if !matchRule(r, rule) {
+func (s *ClientService) matchesAllRules(r *http.Request, client models.Client, debug bool) bool {
+	for _, rule := range client.MatchRules {
+		matched := matchRule(r, rule)
+		if debug {
+			s.log.Debug().Str("client", client.Name).Str("header", rule.HeaderName).Str("pattern", rule.MatchValue).Str("type", rule.MatchType).Bool("matched", matched).Msg("rule check")
+		}
+		if !matched {
 			return false
 		}
 	}

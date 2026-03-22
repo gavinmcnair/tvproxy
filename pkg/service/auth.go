@@ -25,6 +25,7 @@ type AuthService struct {
 	jwtSecret     []byte
 	accessExpiry  time.Duration
 	refreshExpiry time.Duration
+	inviteExpiry  time.Duration
 }
 
 func NewAuthService(
@@ -175,9 +176,17 @@ func (s *AuthService) FindFirstAdmin(ctx context.Context) (*models.User, error) 
 	return s.userRepo.GetFirstAdmin(ctx)
 }
 
+func (s *AuthService) SetInviteExpiry(d time.Duration) {
+	s.inviteExpiry = d
+}
+
 func (s *AuthService) CreateInvite(ctx context.Context, username string) (*models.User, error) {
 	token := uuid.New().String()
-	expires := time.Now().Add(7 * 24 * time.Hour)
+	expiry := 7 * 24 * time.Hour
+	if s.inviteExpiry > 0 {
+		expiry = s.inviteExpiry
+	}
+	expires := time.Now().Add(expiry)
 	user := &models.User{
 		Username:        username,
 		PasswordHash:    "",

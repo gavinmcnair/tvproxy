@@ -3,12 +3,13 @@ IMAGE     := gavinmcnair/tvproxy
 TAG       := latest
 BUILDER   := mybuilder
 PLATFORMS := linux/amd64,linux/arm64
+VERSION   := $(shell git rev-parse --short HEAD)
 
 .PHONY: build test docker-build docker-push clean
 
 ## Local build
 build:
-	go build -ldflags="-s -w" -o $(BINARY) ./cmd/tvproxy/
+	go build -ldflags="-s -w -X main.buildVersion=$(VERSION)" -o $(BINARY) ./cmd/tvproxy/
 
 ## Run all tests
 test:
@@ -17,6 +18,7 @@ test:
 ## Build multi-arch Docker image and push to Docker Hub
 docker-build:
 	docker buildx build --builder $(BUILDER) --platform $(PLATFORMS) \
+		--build-arg VERSION=$(VERSION) \
 		-t $(IMAGE):$(TAG) --push .
 
 ## Build local Docker image only (current arch, no push)

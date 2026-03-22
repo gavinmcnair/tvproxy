@@ -81,10 +81,12 @@ func TestTablesExist(t *testing.T) {
 	defer db.Close()
 
 	tables := []string{
-		"users", "m3u_accounts", "streams", "channel_groups",
+		"users", "m3u_accounts", "channel_groups",
 		"channels", "channel_streams", "logos",
-		"stream_profiles", "epg_sources", "epg_data", "program_data",
-		"hdhr_devices", "core_settings",
+		"stream_profiles", "epg_sources",
+		"hdhr_devices", "hdhr_device_channel_groups",
+		"clients", "client_match_rules",
+		"core_settings", "scheduled_recordings",
 	}
 
 	for _, table := range tables {

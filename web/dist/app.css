@@ -500,6 +500,11 @@ tbody tr:last-child td { border-bottom: none; }
   to { transform: translateX(0); opacity: 1; }
 }
 
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+
 /* Loading spinner */
 .spinner {
   display: inline-block;

@@ -105,7 +105,7 @@ func (h *VODHandler) CreateSession(w http.ResponseWriter, r *http.Request) {
 	profileName := r.URL.Query().Get("profile")
 	audioIndex := parseAudioIndex(r)
 
-	session, err := h.vodService.CreateSession(r.Context(), streamID, profileName, audioIndex)
+	session, err := h.vodService.CreateSession(r.Context(), streamID, profileName, audioIndex, r.UserAgent(), r.RemoteAddr)
 	if err != nil {
 		h.log.Error().Err(err).Str("stream_id", streamID).Msg("create VOD session failed")
 		if errors.Is(err, service.ErrStreamNotFound) {
@@ -128,7 +128,7 @@ func (h *VODHandler) CreateChannelSession(w http.ResponseWriter, r *http.Request
 	profileName := r.URL.Query().Get("profile")
 	audioIndex := parseAudioIndex(r)
 
-	session, err := h.vodService.CreateSessionForChannel(r.Context(), channelID, profileName, audioIndex)
+	session, err := h.vodService.CreateSessionForChannel(r.Context(), channelID, profileName, audioIndex, r.UserAgent(), r.RemoteAddr)
 	if err != nil {
 		h.log.Error().Err(err).Str("channel_id", channelID).Msg("create channel VOD session failed")
 		if errors.Is(err, service.ErrStreamNotFound) {

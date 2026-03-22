@@ -5,23 +5,23 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/gavinmcnair/tvproxy/pkg/repository"
 	"github.com/gavinmcnair/tvproxy/pkg/service"
+	"github.com/gavinmcnair/tvproxy/pkg/store"
 )
 
 type StreamHandler struct {
-	streamRepo  *repository.StreamRepository
+	streamStore store.StreamReader
 	logoService *service.LogoService
 }
 
-func NewStreamHandler(streamRepo *repository.StreamRepository, logoService *service.LogoService) *StreamHandler {
-	return &StreamHandler{streamRepo: streamRepo, logoService: logoService}
+func NewStreamHandler(streamStore store.StreamReader, logoService *service.LogoService) *StreamHandler {
+	return &StreamHandler{streamStore: streamStore, logoService: logoService}
 }
 
 func (h *StreamHandler) List(w http.ResponseWriter, r *http.Request) {
 	accountIDStr := r.URL.Query().Get("account_id")
 	if accountIDStr != "" {
-		streams, err := h.streamRepo.ListByAccountID(r.Context(), accountIDStr)
+		streams, err := h.streamStore.ListByAccountID(r.Context(), accountIDStr)
 		if err != nil {
 			respondError(w, http.StatusInternalServerError, "failed to list streams")
 			return
@@ -34,7 +34,7 @@ func (h *StreamHandler) List(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if r.URL.Query().Get("full") == "true" {
-		streams, err := h.streamRepo.List(r.Context())
+		streams, err := h.streamStore.List(r.Context())
 		if err != nil {
 			respondError(w, http.StatusInternalServerError, "failed to list streams")
 			return
@@ -46,7 +46,7 @@ func (h *StreamHandler) List(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	summaries, err := h.streamRepo.ListSummaries(r.Context())
+	summaries, err := h.streamStore.ListSummaries(r.Context())
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, "failed to list streams")
 		return
@@ -60,7 +60,7 @@ func (h *StreamHandler) List(w http.ResponseWriter, r *http.Request) {
 func (h *StreamHandler) Get(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 
-	stream, err := h.streamRepo.GetByID(r.Context(), id)
+	stream, err := h.streamStore.GetByID(r.Context(), id)
 	if err != nil {
 		respondError(w, http.StatusNotFound, "stream not found")
 		return
@@ -71,12 +71,5 @@ func (h *StreamHandler) Get(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *StreamHandler) Delete(w http.ResponseWriter, r *http.Request) {
-	id := chi.URLParam(r, "id")
-
-	if err := h.streamRepo.Delete(r.Context(), id); err != nil {
-		respondError(w, http.StatusInternalServerError, "failed to delete stream")
-		return
-	}
-
 	w.WriteHeader(http.StatusNoContent)
 }

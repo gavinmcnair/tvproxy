@@ -16,10 +16,12 @@ import (
 // SSDPWorker advertises HDHR devices via SSDP so Plex/Emby/Jellyfin
 // can auto-discover them on the local network.
 type SSDPWorker struct {
-	hdhrDeviceRepo *repository.HDHRDeviceRepository
-	baseURL        string
-	log            zerolog.Logger
-	advertisers    map[string]*ssdpAdvertiser
+	hdhrDeviceRepo   *repository.HDHRDeviceRepository
+	baseURL          string
+	log              zerolog.Logger
+	advertisers      map[string]*ssdpAdvertiser
+	retryDelay       time.Duration
+	announceInterval time.Duration
 }
 
 type ssdpAdvertiser struct {
@@ -29,27 +31,34 @@ type ssdpAdvertiser struct {
 }
 
 // NewSSDPWorker creates a new SSDP discovery worker.
-func NewSSDPWorker(hdhrDeviceRepo *repository.HDHRDeviceRepository, baseURL string, log zerolog.Logger) *SSDPWorker {
+func NewSSDPWorker(hdhrDeviceRepo *repository.HDHRDeviceRepository, baseURL string, retryDelay, announceInterval time.Duration, log zerolog.Logger) *SSDPWorker {
+	if retryDelay <= 0 {
+		retryDelay = 2 * time.Second
+	}
+	if announceInterval <= 0 {
+		announceInterval = 30 * time.Second
+	}
 	return &SSDPWorker{
-		hdhrDeviceRepo: hdhrDeviceRepo,
-		baseURL:        baseURL,
-		log:            log.With().Str("worker", "ssdp").Logger(),
-		advertisers:    make(map[string]*ssdpAdvertiser),
+		hdhrDeviceRepo:   hdhrDeviceRepo,
+		baseURL:          baseURL,
+		log:              log.With().Str("worker", "ssdp").Logger(),
+		advertisers:      make(map[string]*ssdpAdvertiser),
+		retryDelay:       retryDelay,
+		announceInterval: announceInterval,
 	}
 }
 
 // Run starts SSDP advertisers for all enabled HDHR devices.
 func (w *SSDPWorker) Run(ctx context.Context) {
-	// Wait briefly for the HTTP server to start
 	select {
-	case <-time.After(2 * time.Second):
+	case <-time.After(w.retryDelay):
 	case <-ctx.Done():
 		return
 	}
 
 	w.syncAdvertisers(ctx)
 
-	ticker := time.NewTicker(30 * time.Second)
+	ticker := time.NewTicker(w.announceInterval)
 	defer ticker.Stop()
 
 	for {

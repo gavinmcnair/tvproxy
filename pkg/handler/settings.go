@@ -7,14 +7,32 @@ import (
 	"github.com/gavinmcnair/tvproxy/pkg/service"
 )
 
+type storeClearer interface {
+	Clear() error
+}
+
 type SettingsHandler struct {
 	settingsService *service.SettingsService
 	db              *database.DB
 	authService     *service.AuthService
+	streamClearer   storeClearer
+	epgClearer      storeClearer
 }
 
-func NewSettingsHandler(settingsService *service.SettingsService, db *database.DB, authService *service.AuthService) *SettingsHandler {
-	return &SettingsHandler{settingsService: settingsService, db: db, authService: authService}
+func NewSettingsHandler(
+	settingsService *service.SettingsService,
+	db *database.DB,
+	authService *service.AuthService,
+	streamClearer storeClearer,
+	epgClearer storeClearer,
+) *SettingsHandler {
+	return &SettingsHandler{
+		settingsService: settingsService,
+		db:              db,
+		authService:     authService,
+		streamClearer:   streamClearer,
+		epgClearer:      epgClearer,
+	}
 }
 
 func (h *SettingsHandler) List(w http.ResponseWriter, r *http.Request) {
@@ -49,6 +67,8 @@ func (h *SettingsHandler) SoftReset(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusInternalServerError, "soft reset failed: "+err.Error())
 		return
 	}
+	h.streamClearer.Clear()
+	h.epgClearer.Clear()
 	respondJSON(w, http.StatusOK, map[string]string{"message": "soft reset complete"})
 }
 
@@ -57,6 +77,8 @@ func (h *SettingsHandler) HardReset(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusInternalServerError, "hard reset failed: "+err.Error())
 		return
 	}
+	h.streamClearer.Clear()
+	h.epgClearer.Clear()
 	if _, err := h.authService.CreateUser(r.Context(), "admin", "admin", true); err != nil {
 		respondError(w, http.StatusInternalServerError, "failed to create default admin user: "+err.Error())
 		return

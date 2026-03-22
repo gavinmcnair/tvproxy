@@ -78,7 +78,12 @@ func (m *FFmpegManager) Start(inputURL, outputPath, tempDir, command string, arg
 
 	args = append([]string{"-y"}, args...)
 	args = InjectUserAgent(args, m.config.UserAgent)
-	args = InjectReconnect(args, inputURL)
+	delayMax, rwTimeout := 30, 30000000
+	if m.config.Settings != nil {
+		delayMax = m.config.Settings.Network.ReconnectDelayMax
+		rwTimeout = m.config.Settings.Network.ReconnectRWTimeout
+	}
+	args = InjectReconnect(args, inputURL, delayMax, rwTimeout)
 	args = append(args, "-progress", "pipe:2")
 
 	go m.run(ctx, proc, command, args)
@@ -158,7 +163,11 @@ func (m *FFmpegManager) run(ctx context.Context, proc *ManagedProcess, command s
 	cmd.Cancel = func() error {
 		return cmd.Process.Signal(syscall.SIGTERM)
 	}
-	cmd.WaitDelay = 5 * time.Second
+	waitDelay := 5 * time.Second
+	if m.config.Settings != nil {
+		waitDelay = m.config.Settings.FFmpeg.WaitDelay
+	}
+	cmd.WaitDelay = waitDelay
 
 	stderr, err := cmd.StderrPipe()
 	if err != nil {
@@ -179,12 +188,16 @@ func (m *FFmpegManager) run(ctx context.Context, proc *ManagedProcess, command s
 
 	go m.parseProgress(proc, stderr)
 
-	startupTimeout := time.AfterFunc(30*time.Second, func() {
+	startupDur := 30 * time.Second
+	if m.config.Settings != nil {
+		startupDur = m.config.Settings.FFmpeg.StartupTimeout
+	}
+	startupTimeout := time.AfterFunc(startupDur, func() {
 		proc.mu.Lock()
 		buffered := proc.BufferedSecs
 		proc.mu.Unlock()
 		if buffered == 0 {
-			m.log.Warn().Str("process_id", proc.ID).Msg("ffmpeg startup timeout, no data received in 30s")
+			m.log.Warn().Str("process_id", proc.ID).Dur("timeout", startupDur).Msg("ffmpeg startup timeout, no data received")
 			proc.cancel()
 		}
 	})

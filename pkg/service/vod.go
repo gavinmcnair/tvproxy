@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -18,6 +19,7 @@ import (
 	"github.com/gavinmcnair/tvproxy/pkg/config"
 	"github.com/gavinmcnair/tvproxy/pkg/ffmpeg"
 	"github.com/gavinmcnair/tvproxy/pkg/repository"
+	"github.com/gavinmcnair/tvproxy/pkg/store"
 )
 
 type SegmentStatus string
@@ -59,6 +61,8 @@ type VODSession struct {
 	ID          string
 	ProcessID   string
 	StreamURL   string
+	StreamName  string
+	ChannelName string
 	ProfileName string
 	Duration    float64
 	Video       *ffmpeg.VideoInfo
@@ -138,53 +142,146 @@ type CompletedRecording struct {
 type VODService struct {
 	config            *config.Config
 	channelRepo       *repository.ChannelRepository
-	streamRepo        *repository.StreamRepository
+	streamStore       store.StreamReader
 	streamProfileRepo *repository.StreamProfileRepository
 	ffmpegMgr         *FFmpegManager
+	activity          *ActivityService
 	log               zerolog.Logger
 	mu                sync.RWMutex
 	sessions          map[string]*VODSession
 }
 
+type recordingIntent struct {
+	ChannelID    string    `json:"channel_id"`
+	ChannelName  string    `json:"channel_name"`
+	ProgramTitle string    `json:"program_title"`
+	UserID       string    `json:"user_id"`
+	StopAt       time.Time `json:"stop_at"`
+}
+
+const recordingIntentFile = "recording.json"
+
 func NewVODService(
 	channelRepo *repository.ChannelRepository,
-	streamRepo *repository.StreamRepository,
+	streamStore store.StreamReader,
 	streamProfileRepo *repository.StreamProfileRepository,
 	ffmpegMgr *FFmpegManager,
+	activity *ActivityService,
 	cfg *config.Config,
 	log zerolog.Logger,
 ) *VODService {
 	return &VODService{
 		config:            cfg,
 		channelRepo:       channelRepo,
-		streamRepo:        streamRepo,
+		streamStore:       streamStore,
 		streamProfileRepo: streamProfileRepo,
 		ffmpegMgr:         ffmpegMgr,
+		activity:          activity,
 		log:               log.With().Str("service", "vod").Logger(),
 		sessions:          make(map[string]*VODSession),
 	}
 }
 
+func (s *VODService) writeRecordingIntent(tempDir string, intent recordingIntent) {
+	data, err := json.Marshal(intent)
+	if err != nil {
+		s.log.Error().Err(err).Msg("failed to marshal recording intent")
+		return
+	}
+	path := filepath.Join(tempDir, recordingIntentFile)
+	if err := os.WriteFile(path, data, 0644); err != nil {
+		s.log.Error().Err(err).Str("path", path).Msg("failed to write recording intent")
+	}
+}
+
+func (s *VODService) removeRecordingIntent(tempDir string) {
+	os.Remove(filepath.Join(tempDir, recordingIntentFile))
+}
+
+func (s *VODService) RecoverRecordings(ctx context.Context) {
+	vodDir := s.config.VODTempDir
+	if vodDir == "" {
+		return
+	}
+
+	entries, err := os.ReadDir(vodDir)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			s.log.Error().Err(err).Msg("failed to read VOD temp dir for recovery")
+		}
+		return
+	}
+
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+
+		intentPath := filepath.Join(vodDir, entry.Name(), recordingIntentFile)
+		data, err := os.ReadFile(intentPath)
+		if err != nil {
+			continue
+		}
+
+		var intent recordingIntent
+		if err := json.Unmarshal(data, &intent); err != nil {
+			s.log.Warn().Str("path", intentPath).Err(err).Msg("invalid recording intent, removing")
+			os.RemoveAll(filepath.Join(vodDir, entry.Name()))
+			continue
+		}
+
+		if intent.StopAt.Before(time.Now()) {
+			s.log.Info().Str("channel", intent.ChannelName).Str("program", intent.ProgramTitle).Msg("recording intent expired, cleaning up")
+			os.RemoveAll(filepath.Join(vodDir, entry.Name()))
+			continue
+		}
+
+		s.log.Info().Str("channel", intent.ChannelName).Str("program", intent.ProgramTitle).Time("stop_at", intent.StopAt).Msg("recovering recording")
+		_, _, err = s.CreateRecordingSession(ctx, intent.ChannelID, intent.ProgramTitle, intent.ChannelName, intent.UserID, intent.StopAt)
+		if err != nil {
+			s.log.Error().Err(err).Str("channel", intent.ChannelName).Msg("failed to recover recording")
+			os.RemoveAll(filepath.Join(vodDir, entry.Name()))
+		}
+	}
+}
+
 func (s *VODService) ProbeStream(ctx context.Context, streamID string) (*ffmpeg.ProbeResult, error) {
-	stream, err := s.streamRepo.GetByID(ctx, streamID)
+	stream, err := s.streamStore.GetByID(ctx, streamID)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrStreamNotFound, err)
 	}
 	return ffmpeg.Probe(ctx, stream.URL, s.config.UserAgent)
 }
 
-func (s *VODService) CreateSession(ctx context.Context, streamID string, profileName string, audioIndex int) (*VODSession, error) {
-	stream, err := s.streamRepo.GetByID(ctx, streamID)
+func (s *VODService) CreateSession(ctx context.Context, streamID string, profileName string, audioIndex int, userAgent string, remoteAddr string) (*VODSession, error) {
+	stream, err := s.streamStore.GetByID(ctx, streamID)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrStreamNotFound, err)
 	}
 	if !stream.IsActive {
 		return nil, fmt.Errorf("stream %s is inactive", streamID)
 	}
-	return s.createSessionForURL(ctx, uuid.New().String(), stream.URL, stream.ID, profileName, audioIndex)
+	session, err := s.createSessionForURL(ctx, uuid.New().String(), stream.URL, stream.ID, profileName, audioIndex)
+	if err != nil {
+		return nil, err
+	}
+	session.StreamName = stream.Name
+	if s.activity != nil {
+		s.activity.Add(ViewerOpts{
+			ID:           session.ID,
+			StreamID:     streamID,
+			StreamName:   stream.Name,
+			M3UAccountID: stream.M3UAccountID,
+			ProfileName:  profileName,
+			UserAgent:    userAgent,
+			RemoteAddr:   remoteAddr,
+			Type:     "vod",
+		})
+	}
+	return session, nil
 }
 
-func (s *VODService) CreateSessionForChannel(ctx context.Context, channelID string, profileName string, audioIndex int) (*VODSession, error) {
+func (s *VODService) CreateSessionForChannel(ctx context.Context, channelID string, profileName string, audioIndex int, userAgent string, remoteAddr string) (*VODSession, error) {
 	if session := s.reattachSession(channelID); session != nil {
 		return session, nil
 	}
@@ -203,11 +300,28 @@ func (s *VODService) CreateSessionForChannel(ctx context.Context, channelID stri
 	}
 
 	for _, cs := range channelStreams {
-		stream, err := s.streamRepo.GetByID(ctx, cs.StreamID)
+		stream, err := s.streamStore.GetByID(ctx, cs.StreamID)
 		if err != nil || !stream.IsActive {
 			continue
 		}
-		return s.createSessionForURL(ctx, channelID, stream.URL, stream.ID, profileName, audioIndex)
+		session, err := s.createSessionForURL(ctx, channelID, stream.URL, stream.ID, profileName, audioIndex)
+		if err != nil {
+			return nil, err
+		}
+		session.ChannelName = channel.Name
+		if s.activity != nil {
+			s.activity.Add(ViewerOpts{
+				ID:           session.ID,
+				ChannelID:    channelID,
+				ChannelName:  channel.Name,
+				M3UAccountID: stream.M3UAccountID,
+				ProfileName:  profileName,
+				UserAgent:    userAgent,
+				RemoteAddr:   remoteAddr,
+				Type:     "vod",
+			})
+		}
+		return session, nil
 	}
 
 	return nil, fmt.Errorf("no active streams for channel %s", channelID)
@@ -309,7 +423,11 @@ func (s *VODService) createSessionForURL(ctx context.Context, id string, streamU
 }
 
 func (s *VODService) probeAsync(session *VODSession, streamURL string) {
-	ctx, cancel := context.WithTimeout(session.ctx, 15*time.Second)
+	probeDur := 15 * time.Second
+	if s.config.Settings != nil {
+		probeDur = s.config.Settings.VOD.ProbeTimeout
+	}
+	ctx, cancel := context.WithTimeout(session.ctx, probeDur)
 	defer cancel()
 
 	probe, err := ffmpeg.Probe(ctx, streamURL, s.config.UserAgent)
@@ -377,8 +495,14 @@ func (s *seekReadCloser) Close() error {
 }
 
 func (s *VODService) StreamFile(ctx context.Context, session *VODSession) (io.ReadCloser, error) {
+	retryCount := 50
+	retryDelay := 200 * time.Millisecond
+	if s.config.Settings != nil {
+		retryCount = s.config.Settings.VOD.FileRetryCount
+		retryDelay = s.config.Settings.VOD.FileRetryDelay
+	}
 	var f *os.File
-	for i := 0; i < 50; i++ {
+	for i := 0; i < retryCount; i++ {
 		var err error
 		f, err = os.Open(session.FilePath)
 		if err == nil {
@@ -393,7 +517,7 @@ func (s *VODService) StreamFile(ctx context.Context, session *VODSession) (io.Re
 		select {
 		case <-ctx.Done():
 			return nil, ctx.Err()
-		case <-time.After(200 * time.Millisecond):
+		case <-time.After(retryDelay):
 		}
 	}
 	if f == nil {
@@ -458,6 +582,9 @@ func (s *VODService) GetSession(id string) (*VODSession, bool) {
 		session.mu.Lock()
 		session.LastAccess = time.Now()
 		session.mu.Unlock()
+		if s.activity != nil {
+			s.activity.Touch(id)
+		}
 	}
 	return session, ok
 }
@@ -479,6 +606,10 @@ func findSegmentByID(session *VODSession, segID string) (*RecordingSegment, int)
 }
 
 func (s *VODService) DeleteSession(id string) {
+	if s.activity != nil {
+		s.activity.Remove(id)
+	}
+
 	s.mu.Lock()
 	session, ok := s.sessions[id]
 	if !ok {
@@ -892,6 +1023,10 @@ func (s *VODService) maybeCleanupSession(session *VODSession) {
 
 	delete(s.sessions, sessionID)
 
+	if s.activity != nil {
+		s.activity.Remove(sessionID)
+	}
+
 	session.cancel()
 	s.ffmpegMgr.Stop(processID)
 	s.ffmpegMgr.Remove(processID)
@@ -942,6 +1077,9 @@ func (s *VODService) CleanupExpired() {
 	for _, id := range expired {
 		session := s.sessions[id]
 		delete(s.sessions, id)
+		if s.activity != nil {
+			s.activity.Remove(id)
+		}
 
 		session.mu.Lock()
 		processID := session.ProcessID
@@ -994,7 +1132,7 @@ func (s *VODService) CreateRecordingSession(ctx context.Context, channelID, prog
 
 	var streamURL, streamID string
 	for _, cs := range channelStreams {
-		stream, err := s.streamRepo.GetByID(ctx, cs.StreamID)
+		stream, err := s.streamStore.GetByID(ctx, cs.StreamID)
 		if err != nil || !stream.IsActive {
 			continue
 		}
@@ -1013,7 +1151,15 @@ func (s *VODService) CreateRecordingSession(ctx context.Context, channelID, prog
 
 	filePath := filepath.Join(tempDir, "video.mp4")
 
-	processID := s.ffmpegMgr.Start(streamURL, filePath, tempDir, "ffmpeg", nil)
+	var profileArgs []string
+	command := "ffmpeg"
+	sp, err := s.streamProfileRepo.GetByName(ctx, "Recording")
+	if err == nil && sp.Args != "" {
+		profileArgs = ShellSplit(sp.Args)
+		command = sp.Command
+	}
+
+	processID := s.ffmpegMgr.Start(streamURL, filePath, tempDir, command, profileArgs)
 
 	sessionCtx, sessionCancel := context.WithCancel(context.Background())
 	session := &VODSession{
@@ -1030,6 +1176,24 @@ func (s *VODService) CreateRecordingSession(ctx context.Context, channelID, prog
 	s.mu.Lock()
 	s.sessions[channelID] = session
 	s.mu.Unlock()
+
+	if s.activity != nil {
+		s.activity.Add(ViewerOpts{
+			ID:          channelID,
+			ChannelID:   channelID,
+			ChannelName: channelName,
+			ProfileName: programTitle,
+			Type:        "recording",
+		})
+	}
+
+	s.writeRecordingIntent(tempDir, recordingIntent{
+		ChannelID:    channelID,
+		ChannelName:  channelName,
+		ProgramTitle: programTitle,
+		UserID:       userID,
+		StopAt:       stopAt,
+	})
 
 	seg, _ := s.CreateSegment(channelID, programTitle, channelName, userID, 0, 0, stopAt)
 

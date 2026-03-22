@@ -7,15 +7,27 @@ import (
 
 	"github.com/rs/zerolog"
 	_ "modernc.org/sqlite"
+
+	"github.com/gavinmcnair/tvproxy/pkg/defaults"
 )
 
 type DB struct {
 	*sql.DB
-	log zerolog.Logger
+	log            zerolog.Logger
+	clientDefaults *defaults.ClientDefaults
+}
+
+func (db *DB) SetClientDefaults(defs *defaults.ClientDefaults) {
+	db.clientDefaults = defs
 }
 
 func New(ctx context.Context, dbPath string, log zerolog.Logger) (*DB, error) {
-	dsn := fmt.Sprintf("file:%s?_journal_mode=WAL&_busy_timeout=30000&_foreign_keys=on", dbPath)
+	dsn := fmt.Sprintf("file:%s?_journal_mode=WAL&_busy_timeout=30000&_foreign_keys=on"+
+		"&_pragma=synchronous(NORMAL)"+
+		"&_pragma=cache_size(-64000)"+
+		"&_pragma=temp_store(MEMORY)"+
+		"&_pragma=mmap_size(268435456)"+
+		"&_pragma=wal_autocheckpoint(0)", dbPath)
 	sqlDB, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("opening database: %w", err)
@@ -27,13 +39,6 @@ func New(ctx context.Context, dbPath string, log zerolog.Logger) (*DB, error) {
 	if err := sqlDB.PingContext(ctx); err != nil {
 		sqlDB.Close()
 		return nil, fmt.Errorf("pinging database: %w", err)
-	}
-
-	// Disable auto-checkpoint — we run PASSIVE checkpoints manually
-	// so they never block reads or writes.
-	if _, err := sqlDB.ExecContext(ctx, "PRAGMA wal_autocheckpoint = 0"); err != nil {
-		sqlDB.Close()
-		return nil, fmt.Errorf("setting wal autocheckpoint: %w", err)
 	}
 
 	db := &DB{DB: sqlDB, log: log}
@@ -68,7 +73,7 @@ func (db *DB) SoftReset(ctx context.Context) error {
 
 	if err := db.InTx(ctx, func(tx *sql.Tx) error {
 		tables := []string{
-			"channel_streams", "channels", "streams", "program_data", "epg_data",
+			"channel_streams", "channels",
 			"client_match_rules", "clients", "hdhr_device_channel_groups", "hdhr_devices",
 			"channel_groups", "logos", "stream_profiles",
 		}
@@ -88,7 +93,10 @@ func (db *DB) SoftReset(ctx context.Context) error {
 		return err
 	}
 
-	return seedData(ctx, db.DB)
+	if err := seedData(ctx, db.DB); err != nil {
+		return err
+	}
+	return SeedClientDefaults(ctx, db.DB, db.clientDefaults)
 }
 
 func (db *DB) HardReset(ctx context.Context) error {
@@ -118,7 +126,10 @@ func (db *DB) HardReset(ctx context.Context) error {
 		}
 	}
 
-	return db.migrate(ctx)
+	if err := db.migrate(ctx); err != nil {
+		return err
+	}
+	return SeedClientDefaults(ctx, db.DB, db.clientDefaults)
 }
 
 func (db *DB) Checkpoint(ctx context.Context) {

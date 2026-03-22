@@ -23,6 +23,25 @@ var validSourceTypes = map[string]bool{"satip": true, "m3u": true}
 var validHWAccels = map[string]bool{"none": true, "qsv": true, "nvenc": true, "vaapi": true, "videotoolbox": true}
 var validVideoCodecs = map[string]bool{"copy": true, "h264": true, "h265": true, "av1": true}
 var validContainers = map[string]bool{"mpegts": true, "matroska": true, "mp4": true, "webm": true}
+var validFPSModes = map[string]bool{"auto": true, "cfr": true}
+
+func composeArgs(sourceType, hwaccel, videoCodec, container, fpsMode, customArgs string, deinterlace, useCustom bool) string {
+	if useCustom {
+		return customArgs
+	}
+	composed := ffmpeg.ComposeStreamProfileArgs(ffmpeg.ComposeOptions{
+		SourceType:  sourceType,
+		HWAccel:     hwaccel,
+		VideoCodec:  videoCodec,
+		Container:   container,
+		Deinterlace: deinterlace,
+		FPSMode:     fpsMode,
+	})
+	if customArgs != "" && composed != "" {
+		return composed + " " + customArgs
+	}
+	return composed
+}
 
 func (h *StreamProfileHandler) List(w http.ResponseWriter, r *http.Request) {
 	profiles, err := h.repo.List(r.Context())
@@ -42,6 +61,8 @@ func (h *StreamProfileHandler) Create(w http.ResponseWriter, r *http.Request) {
 		HWAccel       string `json:"hwaccel"`
 		VideoCodec    string `json:"video_codec"`
 		Container     string `json:"container"`
+		Deinterlace   bool   `json:"deinterlace"`
+		FPSMode       string `json:"fps_mode"`
 		UseCustomArgs bool   `json:"use_custom_args"`
 		CustomArgs    string `json:"custom_args"`
 		IsDefault     bool   `json:"is_default"`
@@ -69,7 +90,6 @@ func (h *StreamProfileHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Default dropdown values if not provided
 	if req.SourceType == "" {
 		req.SourceType = "m3u"
 	}
@@ -81,6 +101,9 @@ func (h *StreamProfileHandler) Create(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.Container == "" {
 		req.Container = ffmpeg.DefaultContainer(req.VideoCodec)
+	}
+	if req.FPSMode == "" {
+		req.FPSMode = "auto"
 	}
 
 	if !validSourceTypes[req.SourceType] {
@@ -99,17 +122,12 @@ func (h *StreamProfileHandler) Create(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusBadRequest, "invalid container")
 		return
 	}
-
-	var fullArgs string
-	if req.UseCustomArgs {
-		fullArgs = req.CustomArgs
-	} else {
-		composed := ffmpeg.ComposeStreamProfileArgs(req.SourceType, req.HWAccel, req.VideoCodec, req.Container)
-		fullArgs = composed
-		if req.CustomArgs != "" && composed != "" {
-			fullArgs = composed + " " + req.CustomArgs
-		}
+	if !validFPSModes[req.FPSMode] {
+		respondError(w, http.StatusBadRequest, "invalid fps_mode")
+		return
 	}
+
+	fullArgs := composeArgs(req.SourceType, req.HWAccel, req.VideoCodec, req.Container, req.FPSMode, req.CustomArgs, req.Deinterlace, req.UseCustomArgs)
 
 	profile := &models.StreamProfile{
 		Name:          req.Name,
@@ -118,6 +136,8 @@ func (h *StreamProfileHandler) Create(w http.ResponseWriter, r *http.Request) {
 		HWAccel:       req.HWAccel,
 		VideoCodec:    req.VideoCodec,
 		Container:     req.Container,
+		Deinterlace:   req.Deinterlace,
+		FPSMode:       req.FPSMode,
 		UseCustomArgs: req.UseCustomArgs,
 		CustomArgs:    req.CustomArgs,
 		Command:       "ffmpeg",
@@ -166,6 +186,8 @@ func (h *StreamProfileHandler) Update(w http.ResponseWriter, r *http.Request) {
 		HWAccel       string `json:"hwaccel"`
 		VideoCodec    string `json:"video_codec"`
 		Container     string `json:"container"`
+		Deinterlace   bool   `json:"deinterlace"`
+		FPSMode       string `json:"fps_mode"`
 		UseCustomArgs bool   `json:"use_custom_args"`
 		CustomArgs    string `json:"custom_args"`
 		IsDefault     bool   `json:"is_default"`
@@ -176,6 +198,10 @@ func (h *StreamProfileHandler) Update(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if req.Name != "" && req.Name != profile.Name {
+		if profile.IsClient {
+			respondError(w, http.StatusForbidden, "cannot rename client profile")
+			return
+		}
 		if existing, _ := h.repo.GetByName(r.Context(), req.Name); existing != nil {
 			respondError(w, http.StatusConflict, "stream profile name already exists")
 			return
@@ -191,7 +217,6 @@ func (h *StreamProfileHandler) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Default dropdown values if not provided
 	if req.SourceType == "" {
 		req.SourceType = profile.SourceType
 	}
@@ -203,6 +228,9 @@ func (h *StreamProfileHandler) Update(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.Container == "" {
 		req.Container = profile.Container
+	}
+	if req.FPSMode == "" {
+		req.FPSMode = profile.FPSMode
 	}
 
 	if !validSourceTypes[req.SourceType] {
@@ -221,24 +249,21 @@ func (h *StreamProfileHandler) Update(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusBadRequest, "invalid container")
 		return
 	}
+	if !validFPSModes[req.FPSMode] {
+		respondError(w, http.StatusBadRequest, "invalid fps_mode")
+		return
+	}
 
 	profile.StreamMode = req.StreamMode
 	profile.SourceType = req.SourceType
 	profile.HWAccel = req.HWAccel
 	profile.VideoCodec = req.VideoCodec
 	profile.Container = req.Container
+	profile.Deinterlace = req.Deinterlace
+	profile.FPSMode = req.FPSMode
 	profile.IsDefault = req.IsDefault
 
-	var fullArgs string
-	if req.UseCustomArgs {
-		fullArgs = req.CustomArgs
-	} else {
-		composed := ffmpeg.ComposeStreamProfileArgs(req.SourceType, req.HWAccel, req.VideoCodec, req.Container)
-		fullArgs = composed
-		if req.CustomArgs != "" && composed != "" {
-			fullArgs = composed + " " + req.CustomArgs
-		}
-	}
+	fullArgs := composeArgs(req.SourceType, req.HWAccel, req.VideoCodec, req.Container, req.FPSMode, req.CustomArgs, req.Deinterlace, req.UseCustomArgs)
 
 	profile.UseCustomArgs = req.UseCustomArgs
 	profile.CustomArgs = req.CustomArgs

@@ -352,9 +352,8 @@ func (s *DLNAService) browseGroup(ctx context.Context, baseURL, objectID, browse
 		b.WriteString(fmt.Sprintf(`<dc:title>%s</dc:title>`, xmlEscape(ch.name)))
 		b.WriteString(`<upnp:class>object.item.videoItem.videoBroadcast</upnp:class>`)
 		if ch.logo != "" && strings.HasPrefix(ch.logo, "http") {
-			profile, mime := dlnaLogoMeta(ch.logo)
+			profile, _ := dlnaLogoMeta(ch.logo)
 			b.WriteString(fmt.Sprintf(`<upnp:albumArtURI dlna:profileID="%s">%s</upnp:albumArtURI>`, profile, xmlEscape(ch.logo)))
-			b.WriteString(fmt.Sprintf(`<res protocolInfo="http-get:*:%s:DLNA.ORG_PN=%s;DLNA.ORG_FLAGS=00f00000000000000000000000000000">%s</res>`, mime, profile, xmlEscape(ch.logo)))
 		}
 		b.WriteString(fmt.Sprintf(`<res protocolInfo="http-get:*:video/mp2t:DLNA.ORG_PN=MPEG_TS_SD_EU;DLNA.ORG_OP=00;DLNA.ORG_CI=0;DLNA.ORG_FLAGS=89000000000000000000000000000000">%s/channel/%s.mp4</res>`,
 			xmlEscape(baseURL), xmlEscape(ch.id)))
@@ -389,9 +388,8 @@ func (s *DLNAService) browseChannelItem(ctx context.Context, baseURL, objectID, 
 	b.WriteString(fmt.Sprintf(`<dc:title>%s</dc:title>`, xmlEscape(ch.Name)))
 	b.WriteString(`<upnp:class>object.item.videoItem.videoBroadcast</upnp:class>`)
 	if strings.HasPrefix(logo, "http") {
-		profile, mime := dlnaLogoMeta(logo)
+		profile, _ := dlnaLogoMeta(logo)
 		b.WriteString(fmt.Sprintf(`<upnp:albumArtURI dlna:profileID="%s">%s</upnp:albumArtURI>`, profile, xmlEscape(logo)))
-		b.WriteString(fmt.Sprintf(`<res protocolInfo="http-get:*:%s:DLNA.ORG_PN=%s;DLNA.ORG_FLAGS=00f00000000000000000000000000000">%s</res>`, mime, profile, xmlEscape(logo)))
 	}
 	b.WriteString(fmt.Sprintf(`<res protocolInfo="http-get:*:video/mp2t:DLNA.ORG_PN=MPEG_TS_SD_EU;DLNA.ORG_OP=00;DLNA.ORG_CI=0;DLNA.ORG_FLAGS=89000000000000000000000000000000">%s/channel/%s.mp4</res>`,
 		xmlEscape(baseURL), xmlEscape(ch.ID)))

@@ -1,0 +1,74 @@
+{
+  "ffmpeg": {
+    "log_level": "warning",
+    "analyzeduration": 5000000,
+    "probesize": 5000000,
+    "satip_rw_timeout": 5000000,
+    "audio_bitrate": "192k",
+    "audio_channels": 2,
+    "webm_audio_codec": "libopus",
+    "mp4_movflags": "frag_keyframe+empty_moov+default_base_moof",
+    "max_muxing_queue_size": 4096,
+    "fflags": "+genpts+discardcorrupt",
+    "probe_timeout": "10s",
+    "wait_delay": "5s",
+    "startup_timeout": "30s",
+    "encoders": {
+      "h264": {
+        "software": { "preset": "fast" },
+        "qsv": { "preset": "veryslow", "global_quality": 20 },
+        "nvenc": { "preset": "p4" },
+        "vaapi": {},
+        "videotoolbox": {}
+      },
+      "h265": {
+        "software": { "preset": "fast" },
+        "qsv": { "preset": "veryslow", "global_quality": 22, "pix_fmt": "p010le" },
+        "nvenc": { "preset": "p4" },
+        "vaapi": {},
+        "videotoolbox": {}
+      },
+      "av1": {
+        "software": { "preset": "6", "crf": 24, "pix_fmt": "yuv420p10le" },
+        "qsv": { "preset": "veryslow", "global_quality": 25, "look_ahead": 1, "pix_fmt": "p010le" },
+        "nvenc": { "preset": "p4", "cq": 24, "pix_fmt": "p010le" },
+        "vaapi": { "rc_mode": "ICQ", "global_quality": 25 }
+      }
+    }
+  },
+  "network": {
+    "reconnect_delay_max": 30,
+    "reconnect_rw_timeout": 30000000,
+    "logo_download_timeout": "10s",
+    "xtream_api_timeout": "30s"
+  },
+  "vod": {
+    "probe_timeout": "15s",
+    "file_retry_count": 50,
+    "file_retry_delay": "200ms"
+  },
+  "workers": {
+    "ssdp_announce_interval": "30s",
+    "dlna_announce_interval": "30s",
+    "hdhr_discover_interval": "10s",
+    "hdhr_broadcast_interval": "10s",
+    "retry_delay": "2s"
+  },
+  "server": {
+    "http_read_timeout": "15s",
+    "http_idle_timeout": "60s",
+    "request_body_limit_bytes": 1048576,
+    "hdhr_read_timeout": "15s",
+    "hdhr_idle_timeout": "60s"
+  },
+  "epg": {
+    "batch_size": 5000
+  },
+  "recording": {
+    "start_cutoff": "5m",
+    "lead_time": "30s"
+  },
+  "auth": {
+    "invite_token_expiry": "168h"
+  }
+}

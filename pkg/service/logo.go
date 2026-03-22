@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/rs/zerolog"
@@ -26,6 +27,9 @@ type LogoService struct {
 	logosDir        string
 	streamLogosDir  string
 	log             zerolog.Logger
+
+	streamLogoMu    sync.RWMutex
+	streamLogoCache map[string]string
 }
 
 func NewLogoService(
@@ -42,12 +46,32 @@ func NewLogoService(
 		logosDir:        filepath.Join(staticRoot, "logos"),
 		streamLogosDir:  filepath.Join(staticRoot, "streams", "logoscache"),
 		log:             log.With().Str("service", "logo").Logger(),
+		streamLogoCache: make(map[string]string),
 	}
 }
 
 func (s *LogoService) EnsureDir() {
 	os.MkdirAll(s.logosDir, 0755)
 	os.MkdirAll(s.streamLogosDir, 0755)
+	s.buildStreamLogoCache()
+}
+
+func (s *LogoService) buildStreamLogoCache() {
+	entries, err := os.ReadDir(s.streamLogosDir)
+	if err != nil {
+		return
+	}
+	s.streamLogoMu.Lock()
+	defer s.streamLogoMu.Unlock()
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		name := e.Name()
+		hash := strings.TrimSuffix(name, filepath.Ext(name))
+		s.streamLogoCache[hash] = name
+	}
+	s.log.Info().Int("count", len(s.streamLogoCache)).Msg("loaded stream logo cache")
 }
 
 func (s *LogoService) IsEnabled(ctx context.Context) bool {
@@ -126,7 +150,19 @@ func (s *LogoService) CacheAll(ctx context.Context) {
 	}
 }
 
-var logoHTTPClient = &http.Client{Timeout: 10 * time.Second}
+var logoHTTPClient *http.Client
+
+func (s *LogoService) httpClient() *http.Client {
+	if logoHTTPClient != nil {
+		return logoHTTPClient
+	}
+	timeout := 10 * time.Second
+	if s.config.Settings != nil {
+		timeout = s.config.Settings.Network.LogoDownloadTimeout
+	}
+	logoHTTPClient = &http.Client{Timeout: timeout}
+	return logoHTTPClient
+}
 
 func (s *LogoService) downloadLogo(ctx context.Context, id, url string) {
 	if url == "" {
@@ -140,7 +176,7 @@ func (s *LogoService) downloadLogo(ctx context.Context, id, url string) {
 	}
 	req.Header.Set("User-Agent", s.config.UserAgent)
 
-	resp, err := logoHTTPClient.Do(req)
+	resp, err := s.httpClient().Do(req)
 	if err != nil {
 		s.log.Debug().Err(err).Str("url", url).Msg("failed to download logo")
 		return
@@ -214,8 +250,10 @@ func (s *LogoService) CacheStreamLogos(ctx context.Context, streams []models.Str
 			continue
 		}
 		hash := fmt.Sprintf("%x", sha256.Sum256([]byte(stream.Logo)))[:16]
-		matches, _ := filepath.Glob(filepath.Join(s.streamLogosDir, hash+".*"))
-		if len(matches) > 0 {
+		s.streamLogoMu.RLock()
+		_, exists := s.streamLogoCache[hash]
+		s.streamLogoMu.RUnlock()
+		if exists {
 			continue
 		}
 		s.downloadStreamLogo(ctx, stream.Logo, hash)
@@ -227,9 +265,11 @@ func (s *LogoService) StreamLogoFilename(url string) string {
 		return ""
 	}
 	hash := fmt.Sprintf("%x", sha256.Sum256([]byte(url)))[:16]
-	matches, _ := filepath.Glob(filepath.Join(s.streamLogosDir, hash+".*"))
-	if len(matches) > 0 {
-		return "streams/logoscache/" + filepath.Base(matches[0])
+	s.streamLogoMu.RLock()
+	filename, ok := s.streamLogoCache[hash]
+	s.streamLogoMu.RUnlock()
+	if ok {
+		return "streams/logoscache/" + filename
 	}
 	return ""
 }
@@ -241,7 +281,7 @@ func (s *LogoService) downloadStreamLogo(ctx context.Context, url, hash string) 
 	}
 	req.Header.Set("User-Agent", s.config.UserAgent)
 
-	resp, err := logoHTTPClient.Do(req)
+	resp, err := s.httpClient().Do(req)
 	if err != nil {
 		return
 	}
@@ -265,6 +305,10 @@ func (s *LogoService) downloadStreamLogo(ctx context.Context, url, hash string) 
 		return
 	}
 	f.Close()
+
+	s.streamLogoMu.Lock()
+	s.streamLogoCache[hash] = filename
+	s.streamLogoMu.Unlock()
 }
 
 func detectExtension(contentType, url string) string {

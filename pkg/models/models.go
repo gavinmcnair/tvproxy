@@ -93,6 +93,8 @@ type StreamProfile struct {
 	HWAccel       string    `json:"hwaccel"`
 	VideoCodec    string    `json:"video_codec"`
 	Container     string    `json:"container"`
+	Deinterlace   bool      `json:"deinterlace"`
+	FPSMode       string    `json:"fps_mode"`
 	UseCustomArgs bool      `json:"use_custom_args"`
 	CustomArgs    string    `json:"custom_args,omitempty"`
 	Command       string    `json:"command,omitempty"`
@@ -184,6 +186,40 @@ type ClientMatchRule struct {
 	HeaderName string `json:"header_name"`
 	MatchType  string `json:"match_type"`
 	MatchValue string `json:"match_value"`
+}
+
+type ActiveViewer struct {
+	ID           string  `json:"id"`
+	ChannelID    string  `json:"channel_id,omitempty"`
+	ChannelName  string  `json:"channel_name,omitempty"`
+	StreamID     string  `json:"stream_id,omitempty"`
+	StreamName   string  `json:"stream_name,omitempty"`
+	M3UAccountID string  `json:"m3u_account_id,omitempty"`
+	ProfileName  string  `json:"profile_name"`
+	UserAgent    string  `json:"user_agent"`
+	ClientName   string  `json:"client_name,omitempty"`
+	RemoteAddr   string  `json:"remote_addr"`
+	StartedAt    string  `json:"started_at"`
+	LastActive   string  `json:"last_active"`
+	IdleSecs     float64 `json:"idle_secs"`
+	Type         string  `json:"type"`
+}
+
+type StreamSummary struct {
+	ID           string `json:"id"`
+	M3UAccountID string `json:"m3u_account_id"`
+	Name         string `json:"name"`
+	Group        string `json:"group"`
+	Logo         string `json:"logo,omitempty"`
+}
+
+type GuideProgram struct {
+	ChannelID   string    `json:"channel_id"`
+	Title       string    `json:"title"`
+	Description string    `json:"description,omitempty"`
+	Start       time.Time `json:"start"`
+	Stop        time.Time `json:"stop"`
+	Category    string    `json:"category,omitempty"`
 }
 
 type ScheduledRecording struct {
