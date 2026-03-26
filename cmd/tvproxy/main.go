@@ -101,7 +101,10 @@ func main() {
 	logoRepo := repository.NewLogoRepository(db)
 	epgSourceRepo := repository.NewEPGSourceRepository(db)
 	hdhrDeviceRepo := repository.NewHDHRDeviceRepository(db)
-	settingsRepo := repository.NewCoreSettingsRepository(db)
+	settingsStore := store.NewSettingsStore(filepath.Join(dataDir, "core_settings.json"))
+	if err := settingsStore.Load(); err != nil {
+		log.Fatal().Err(err).Msg("failed to load settings store")
+	}
 	clientRepo := repository.NewClientRepository(db)
 	scheduledRecRepo := repository.NewScheduledRecordingRepository(db)
 
@@ -124,7 +127,7 @@ func main() {
 	if err == nil && adminUser != nil {
 		adminUserID = adminUser.ID
 	}
-	settingsService := service.NewSettingsService(settingsRepo, profileStore, log)
+	settingsService := service.NewSettingsService(settingsStore, profileStore, log)
 	settingsService.LoadDebugFlag(ctx)
 	settingsService.RecomposeDefaultProfiles(ctx)
 

@@ -9,21 +9,20 @@ import (
 
 	"github.com/gavinmcnair/tvproxy/pkg/ffmpeg"
 	"github.com/gavinmcnair/tvproxy/pkg/models"
-	"github.com/gavinmcnair/tvproxy/pkg/repository"
 	"github.com/gavinmcnair/tvproxy/pkg/store"
 )
 
 type SettingsService struct {
-	settingsRepo      *repository.CoreSettingsRepository
+	settingsStore     store.SettingsStore
 	streamProfileRepo store.ProfileStore
 	debug             atomic.Bool
 	normalLogLevel    zerolog.Level
 	log               zerolog.Logger
 }
 
-func NewSettingsService(settingsRepo *repository.CoreSettingsRepository, streamProfileRepo store.ProfileStore, log zerolog.Logger) *SettingsService {
+func NewSettingsService(settingsStore store.SettingsStore, streamProfileRepo store.ProfileStore, log zerolog.Logger) *SettingsService {
 	return &SettingsService{
-		settingsRepo:      settingsRepo,
+		settingsStore:     settingsStore,
 		streamProfileRepo: streamProfileRepo,
 		normalLogLevel:    zerolog.GlobalLevel(),
 		log:               log.With().Str("service", "settings").Logger(),
@@ -31,7 +30,7 @@ func NewSettingsService(settingsRepo *repository.CoreSettingsRepository, streamP
 }
 
 func (s *SettingsService) Get(ctx context.Context, key string) (string, error) {
-	setting, err := s.settingsRepo.Get(ctx, key)
+	setting, err := s.settingsStore.Get(ctx, key)
 	if err != nil {
 		return "", fmt.Errorf("getting setting %q: %w", key, err)
 	}
@@ -57,7 +56,7 @@ func (s *SettingsService) setDebug(on bool) {
 }
 
 func (s *SettingsService) Set(ctx context.Context, key, value string) error {
-	if err := s.settingsRepo.Set(ctx, key, value); err != nil {
+	if err := s.settingsStore.Set(ctx, key, value); err != nil {
 		return fmt.Errorf("setting %q: %w", key, err)
 	}
 	switch key {
@@ -133,7 +132,7 @@ func IsAPISettable(key string) bool {
 }
 
 func (s *SettingsService) List(ctx context.Context) ([]models.CoreSetting, error) {
-	settings, err := s.settingsRepo.List(ctx)
+	settings, err := s.settingsStore.List(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("listing settings: %w", err)
 	}
@@ -147,7 +146,7 @@ func (s *SettingsService) List(ctx context.Context) ([]models.CoreSetting, error
 }
 
 func (s *SettingsService) Delete(ctx context.Context, key string) error {
-	if err := s.settingsRepo.Delete(ctx, key); err != nil {
+	if err := s.settingsStore.Delete(ctx, key); err != nil {
 		return fmt.Errorf("deleting setting %q: %w", key, err)
 	}
 	return nil

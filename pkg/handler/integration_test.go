@@ -83,7 +83,7 @@ func setupFullEnv(t *testing.T) *fullTestEnv {
 	logoRepo := repository.NewLogoRepository(db)
 	epgSourceRepo := repository.NewEPGSourceRepository(db)
 	hdhrDeviceRepo := repository.NewHDHRDeviceRepository(db)
-	settingsRepo := repository.NewCoreSettingsRepository(db)
+	settingsStore := store.NewSettingsStore(filepath.Join(dir, "core_settings.json"))
 	clientRepo := repository.NewClientRepository(db)
 
 	authService := service.NewAuthService(userRepo, cfg.JWTSecret, cfg.AccessTokenExpiry, cfg.RefreshTokenExpiry)
@@ -94,7 +94,7 @@ func setupFullEnv(t *testing.T) *fullTestEnv {
 	require.NoError(t, err)
 	adminUserID := adminUser.ID
 
-	settingsService := service.NewSettingsService(settingsRepo, profileStore, log)
+	settingsService := service.NewSettingsService(settingsStore, profileStore, log)
 	logoService := service.NewLogoService(logoRepo, cfg, log)
 	logoService.EnsureDir()
 
@@ -1045,7 +1045,7 @@ func TestIntegration_Settings(t *testing.T) {
 		assert.Equal(t, http.StatusOK, rec.Code)
 		var settings []map[string]any
 		decodeResponse(t, rec, &settings)
-		assert.Len(t, settings, 2)
+		assert.Len(t, settings, 0)
 	})
 
 	t.Run("update settings", func(t *testing.T) {
@@ -1061,7 +1061,7 @@ func TestIntegration_Settings(t *testing.T) {
 		assert.Equal(t, http.StatusOK, rec.Code)
 		var settings []map[string]any
 		decodeResponse(t, rec, &settings)
-		assert.Len(t, settings, 4)
+		assert.Len(t, settings, 2)
 
 		settingsMap := make(map[string]string)
 		for _, s := range settings {
@@ -1872,7 +1872,7 @@ func TestIntegration_FullUserWorkflow(t *testing.T) {
 	require.Equal(t, http.StatusOK, rec.Code)
 	var settings []map[string]any
 	decodeResponse(t, rec, &settings)
-	assert.Len(t, settings, 3)
+	assert.Len(t, settings, 1)
 
 	rec = doRequest(t, env, "GET", "/api/users/", nil, operatorToken)
 	assert.Equal(t, http.StatusForbidden, rec.Code)
