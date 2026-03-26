@@ -7,8 +7,6 @@ COPY . .
 ARG VERSION=dev
 RUN CGO_ENABLED=0 go build -ldflags="-s -w -X main.buildVersion=$VERSION" -o /tvproxy ./cmd/tvproxy/
 
-# ffmpeg 8.x with --enable-libvpl (QSV/oneVPL), VA-API, NVENC, Vulkan,
-# and all HW encoders (av1_qsv, av1_vaapi, h264_qsv, hevc_vaapi, etc.).
 FROM linuxserver/ffmpeg:latest
 
 ENV DEBIAN_FRONTEND=noninteractive
@@ -18,22 +16,22 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /tvproxy /usr/local/bin/tvproxy
-COPY pkg/defaults/clients.json /data/clients.json
-COPY pkg/defaults/settings.json /data/settings.json
+COPY pkg/defaults/clients.json /defaults/clients.json
+COPY pkg/defaults/settings.json /defaults/settings.json
 
-# Create tvproxy user at default UID 1000.
 RUN (usermod -l tvproxy -d /home/tvproxy ubuntu 2>/dev/null && groupmod -n tvproxy ubuntu 2>/dev/null || useradd -m -u 1000 tvproxy)
 
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh
 
-WORKDIR /data
+WORKDIR /config
 
 ENV PUID=1000
 ENV PGID=1000
+ENV TVPROXY_DB_PATH=/config/tvproxy.db
+ENV TVPROXY_RECORD_DIR=/record
+ENV TVPROXY_VOD_TEMP_DIR=/tmp/tvproxy-vod
 
-# For Intel Arc GPU access, run with: --device /dev/dri:/dev/dri
-# For NVIDIA GPU access, run with: --gpus all (requires nvidia-container-toolkit)
 EXPOSE 8080
 
 ENTRYPOINT ["entrypoint.sh"]

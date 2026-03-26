@@ -34,8 +34,9 @@ type fullTestEnv struct {
 	userToken    string
 	db           *database.DB
 	clientDefs   *defaults.ClientDefaults
-	profileStore *store.ProfileStoreImpl
-	clientStore  *store.ClientStoreImpl
+	profileStore  *store.ProfileStoreImpl
+	clientStore   *store.ClientStoreImpl
+	settingsStore *store.SettingsStoreImpl
 }
 
 func setupFullEnv(t *testing.T) *fullTestEnv {
@@ -55,10 +56,11 @@ func setupFullEnv(t *testing.T) *fullTestEnv {
 
 	clientDefs, err := defaults.LoadClientDefaults(filepath.Join(dir, "clients.json"))
 	require.NoError(t, err)
+	settingsStore := store.NewSettingsStore(filepath.Join(dir, "core_settings.json"))
 	db.SetClientDefaults(clientDefs)
 	db.SetProfileStore(profileStore)
 	db.SetClientStore(clientStore)
-	err = service.SeedClientDefaults(context.Background(), clientDefs, profileStore, clientStore)
+	err = service.SeedClientDefaults(context.Background(), clientDefs, profileStore, clientStore, settingsStore)
 	require.NoError(t, err)
 
 	tuningSettings, err := defaults.LoadSettings(filepath.Join(dir, "settings.json"))
@@ -87,7 +89,6 @@ func setupFullEnv(t *testing.T) *fullTestEnv {
 	logoStore := store.NewLogoStore(filepath.Join(dir, "logos.json"))
 	epgSourceStore := store.NewEPGSourceStore(filepath.Join(dir, "epg_sources.json"))
 	hdhrStore := store.NewHDHRDeviceStore(filepath.Join(dir, "hdhr_devices.json"))
-	settingsStore := store.NewSettingsStore(filepath.Join(dir, "core_settings.json"))
 	scheduledRecStore := store.NewScheduledRecordingStore(filepath.Join(dir, "scheduled_recordings.json"))
 
 	authService := service.NewAuthService(userStore, cfg.JWTSecret, cfg.AccessTokenExpiry, cfg.RefreshTokenExpiry)
@@ -137,7 +138,7 @@ func setupFullEnv(t *testing.T) *fullTestEnv {
 		profileStore, settingsStore, clientStore, logoStore, m3uAccountStore,
 		epgSourceStore, hdhrStore, userStore, channelStore, channelGroupStore,
 		scheduledRecStore, clientDefs, func() {
-			service.SeedClientDefaults(context.Background(), clientDefs, profileStore, clientStore)
+			service.SeedClientDefaults(context.Background(), clientDefs, profileStore, clientStore, settingsStore)
 		},
 	)
 	settingsHandler := NewSettingsHandler(settingsService, exportService, dataResetter, authService, streamStore, epgStore)
@@ -315,8 +316,9 @@ func setupFullEnv(t *testing.T) *fullTestEnv {
 		authService:  authService,
 		db:           db,
 		clientDefs:   clientDefs,
-		profileStore: profileStore,
-		clientStore:  clientStore,
+		profileStore:  profileStore,
+		clientStore:   clientStore,
+		settingsStore: settingsStore,
 	}
 
 	env.adminToken, _ = loginHelper(t, env, "admin", "adminpass")
@@ -2883,7 +2885,7 @@ func TestIntegration_ClientSyncSurvival(t *testing.T) {
 		}, env.adminToken)
 		require.Equal(t, http.StatusCreated, rec.Code)
 
-		err := service.SeedClientDefaults(context.Background(), env.clientDefs, env.profileStore, env.clientStore)
+		err := service.SeedClientDefaults(context.Background(), env.clientDefs, env.profileStore, env.clientStore, env.settingsStore)
 		require.NoError(t, err)
 
 		rec = doRequest(t, env, "GET", "/api/stream-profiles/", nil, env.adminToken)

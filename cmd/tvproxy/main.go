@@ -78,7 +78,12 @@ func main() {
 	if err != nil {
 		log.Fatal().Err(err).Msg("failed to load client defaults")
 	}
-	if err := service.SeedClientDefaults(ctx, clientDefs, profileStore, clientStore); err != nil {
+	settingsStore := store.NewSettingsStore(filepath.Join(dataDir, "core_settings.json"))
+	if err := settingsStore.Load(); err != nil {
+		log.Fatal().Err(err).Msg("failed to load settings store")
+	}
+
+	if err := service.SeedClientDefaults(ctx, clientDefs, profileStore, clientStore, settingsStore); err != nil {
 		log.Fatal().Err(err).Msg("failed to seed client defaults")
 	}
 
@@ -124,10 +129,6 @@ func main() {
 	hdhrStore := store.NewHDHRDeviceStore(filepath.Join(dataDir, "hdhr_devices.json"))
 	if err := hdhrStore.Load(); err != nil {
 		log.Fatal().Err(err).Msg("failed to load hdhr device store")
-	}
-	settingsStore := store.NewSettingsStore(filepath.Join(dataDir, "core_settings.json"))
-	if err := settingsStore.Load(); err != nil {
-		log.Fatal().Err(err).Msg("failed to load settings store")
 	}
 	scheduledRecStore := store.NewScheduledRecordingStore(filepath.Join(dataDir, "scheduled_recordings.json"))
 	if err := scheduledRecStore.Load(); err != nil {
@@ -209,7 +210,7 @@ func main() {
 		profileStore, settingsStore, clientStore, logoStore, m3uAccountStore,
 		epgSourceStore, hdhrStore, userStore, channelStore, channelGroupStore,
 		scheduledRecStore, clientDefs, func() {
-			service.SeedClientDefaults(ctx, clientDefs, profileStore, clientStore)
+			service.SeedClientDefaults(ctx, clientDefs, profileStore, clientStore, settingsStore)
 			settingsService.RecomposeDefaultProfiles(ctx)
 		},
 	)
@@ -403,6 +404,8 @@ func main() {
 			r.Put("/", settingsHandler.Update)
 			r.Get("/export", settingsHandler.Export)
 			r.Post("/import", settingsHandler.Import)
+			r.Get("/backup", settingsHandler.Backup)
+			r.Post("/restore", settingsHandler.Restore)
 			r.Post("/soft-reset", settingsHandler.SoftReset)
 			r.Post("/hard-reset", settingsHandler.HardReset)
 		})

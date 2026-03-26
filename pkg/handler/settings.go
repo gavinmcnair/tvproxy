@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"io"
 	"net/http"
 
 	"github.com/gavinmcnair/tvproxy/pkg/service"
@@ -13,6 +14,8 @@ type storeClearer interface {
 type Resetter interface {
 	HardReset() error
 	SoftReset() error
+	Backup() ([]byte, error)
+	Restore([]byte) error
 }
 
 type SettingsHandler struct {
@@ -128,4 +131,30 @@ func (h *SettingsHandler) Import(w http.ResponseWriter, r *http.Request) {
 		"message":  "import complete",
 		"imported": imported,
 	})
+}
+
+func (h *SettingsHandler) Backup(w http.ResponseWriter, r *http.Request) {
+	data, err := h.resetter.Backup()
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "backup failed: "+err.Error())
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Content-Disposition", "attachment; filename=tvproxy-backup.json")
+	w.WriteHeader(http.StatusOK)
+	w.Write(data)
+}
+
+func (h *SettingsHandler) Restore(w http.ResponseWriter, r *http.Request) {
+	data, err := io.ReadAll(io.LimitReader(r.Body, 50*1024*1024))
+	if err != nil {
+		respondError(w, http.StatusBadRequest, "failed to read body")
+		return
+	}
+	defer r.Body.Close()
+	if err := h.resetter.Restore(data); err != nil {
+		respondError(w, http.StatusInternalServerError, "restore failed: "+err.Error())
+		return
+	}
+	respondJSON(w, http.StatusOK, map[string]string{"message": "restore complete"})
 }
