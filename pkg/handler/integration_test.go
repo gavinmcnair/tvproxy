@@ -57,9 +57,6 @@ func setupFullEnv(t *testing.T) *fullTestEnv {
 	clientDefs, err := defaults.LoadClientDefaults(filepath.Join(dir, "clients.json"))
 	require.NoError(t, err)
 	settingsStore := store.NewSettingsStore(filepath.Join(dir, "core_settings.json"))
-	db.SetClientDefaults(clientDefs)
-	db.SetProfileStore(profileStore)
-	db.SetClientStore(clientStore)
 	err = service.SeedClientDefaults(context.Background(), clientDefs, profileStore, clientStore, settingsStore)
 	require.NoError(t, err)
 
