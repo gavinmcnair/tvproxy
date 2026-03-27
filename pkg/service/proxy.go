@@ -625,21 +625,3 @@ func (s *ProxyService) copyToClient(reader io.Reader, w http.ResponseWriter, flu
 		}
 	}
 }
-
-func (s *ProxyService) ActiveConnections() int {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return len(s.connections)
-}
-
-func (s *ProxyService) ActiveClients() int {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	total := 0
-	for _, conn := range s.connections {
-		conn.mu.Lock()
-		total += len(conn.clients)
-		conn.mu.Unlock()
-	}
-	return total
-}

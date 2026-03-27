@@ -171,6 +171,7 @@ func (s *M3UService) refreshXtreamAccount(ctx context.Context, account *models.M
 
 func (s *M3UService) refreshM3UAccount(ctx context.Context, account *models.M3UAccount) error {
 	s.log.Info().Str("account_id", account.ID).Str("name", account.Name).Msg("refreshing m3u account")
+	s.Set(account.ID, RefreshStatus{State: "running", Message: "Downloading playlist..."})
 
 	body, err := httputil.FetchAndDecompress(ctx, s.httpClient, s.config, account.URL, s.log)
 	if err != nil {
@@ -178,12 +179,14 @@ func (s *M3UService) refreshM3UAccount(ctx context.Context, account *models.M3UA
 	}
 	defer body.Close()
 
+	s.Set(account.ID, RefreshStatus{State: "running", Message: "Parsing entries..."})
 	entries, err := m3u.Parse(body)
 	if err != nil {
 		return fmt.Errorf("parsing m3u: %w", err)
 	}
 
 	s.log.Info().Int("entries", len(entries)).Msg("parsed m3u entries")
+	s.Set(account.ID, RefreshStatus{State: "running", Message: "Processing streams...", Total: len(entries)})
 
 	seen := make(map[string]struct{}, len(entries))
 	streams := make([]models.Stream, 0, len(entries))
@@ -214,6 +217,7 @@ func (s *M3UService) refreshM3UAccount(ctx context.Context, account *models.M3UA
 }
 
 func (s *M3UService) upsertAndFinalize(ctx context.Context, account *models.M3UAccount, streams []models.Stream, keepIDs []string) error {
+	s.Set(account.ID, RefreshStatus{State: "running", Message: "Saving streams...", Total: len(streams), Progress: len(streams)})
 	if err := s.streamStore.BulkUpsert(ctx, streams); err != nil {
 		return fmt.Errorf("upserting streams: %w", err)
 	}

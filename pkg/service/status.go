@@ -3,8 +3,10 @@ package service
 import "sync"
 
 type RefreshStatus struct {
-	State   string `json:"state"`
-	Message string `json:"message,omitempty"`
+	State    string `json:"state"`
+	Message  string `json:"message,omitempty"`
+	Total    int    `json:"total,omitempty"`
+	Progress int    `json:"progress,omitempty"`
 }
 
 type StatusTracker struct {
