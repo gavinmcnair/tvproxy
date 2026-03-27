@@ -1299,6 +1299,41 @@ paths:
                   message:
                     type: string
 
+  /api/settings/backup:
+    get:
+      summary: Download full system backup as JSON
+      tags: [Settings]
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: Backup JSON file
+          content:
+            application/json:
+              schema:
+                type: object
+
+  /api/settings/restore:
+    post:
+      summary: Restore system from backup JSON
+      tags: [Settings]
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        "200":
+          description: Restore complete
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+
   # ── Clients ─────────────────────────────────────────────────────────
   /api/clients:
     get:
@@ -2553,8 +2588,6 @@ components:
           nullable: true
         logo:
           type: string
-        logo_cached:
-          type: string
         tvg_id:
           type: string
         channel_group_id:
@@ -2660,8 +2693,6 @@ components:
         name:
           type: string
         url:
-          type: string
-        cached_filename:
           type: string
         created_at:
           type: string
