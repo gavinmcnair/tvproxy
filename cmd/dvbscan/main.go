@@ -911,7 +911,7 @@ func discoverMuxes(host string, caps map[string]int, seedTimeout, muxTimeout tim
 				found = append(found, r.tp)
 				for _, m := range r.nitMuxes {
 					nitMentioned[muxKey(m)] = true
-					enqueue(m, muxTimeout)
+				enqueue(m, muxTimeout)
 				}
 			}
 
@@ -931,19 +931,18 @@ func discoverMuxes(host string, caps map[string]int, seedTimeout, muxTimeout tim
 	for _, seed := range allSeeds {
 		pass1 = append(pass1, workItem{seed, seedTimeout})
 	}
-	found1, failed1, nitMentioned1 := runPool(pass1, scanned, true)
+	found1, failed1, nitMentioned := runPool(pass1, scanned, true)
 
 	var allFound []transponder
 	allFound = append(allFound, found1...)
 
 	// Pass 2: retry seeds that are worth a slow scan:
-	//   (a) appeared in a NIT during pass 1 — known to be on the network
-	//   (b) T2/S2/C2 modulation types — hardware needs more time to lock,
-	//       so they fail the fast pass even when signal is present
+	//   (a) appeared in a NIT during pass 1 — confirmed on the network
+	//   (b) T2/S2/C2 types — hardware needs more time to lock regardless of NIT
+	// Seeds not meeting either condition are almost certainly dead frequencies.
 	var pass2 []workItem
 	for _, seed := range failed1 {
-		isSlowLock := strings.HasSuffix(seed.System, "2") // dvbt2, dvbs2, dvbc2
-		if nitMentioned1[muxKey(seed)] || isSlowLock {
+		if nitMentioned[muxKey(seed)] || strings.HasSuffix(seed.System, "2") {
 			pass2 = append(pass2, workItem{seed, muxTimeout})
 		}
 	}
@@ -963,7 +962,7 @@ func main() {
 	host := flag.String("host", "192.168.1.149:554", "Minisatip RTSP host:port")
 	httpPort := flag.Int("http-port", 8875, "Minisatip HTTP port (for capability discovery)")
 	timeout := flag.Duration("timeout", 15*time.Second, "Per-transponder scan timeout")
-	seedTimeout := flag.Duration("seed-timeout", 3*time.Second, "Timeout for blind seed scans (fast pass)")
+	seedTimeout := flag.Duration("seed-timeout", 5*time.Second, "Timeout for blind seed scans (fast pass)")
 	muxTimeout := flag.Duration("mux-timeout", 20*time.Second, "Timeout for discovered muxes and slow retry")
 	parallel := flag.Int("parallel", 4, "Max parallel scans per scan group")
 	verbose := flag.Bool("v", false, "Verbose RTSP exchange")
