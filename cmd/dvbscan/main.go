@@ -367,6 +367,7 @@ type scanResult struct {
 	channels  []channel
 	nitMuxes  []transponder
 	networkID uint16
+	elapsed   time.Duration
 	err       error
 }
 
@@ -383,7 +384,9 @@ func buildPMTURL(base string, pmtPIDs []uint16) string {
 // pids controls what Minisatip sends: "0,16,17" for SI-only (fast NIT), "all" for full metadata.
 // parentCtx allows callers to cancel this scan early (e.g. when a parallel race winner is found).
 func scanTransponder(parentCtx context.Context, host string, tp transponder, timeout time.Duration, pids string, verbose bool) scanResult {
+	start := time.Now()
 	result := scanResult{tp: tp}
+	defer func() { result.elapsed = time.Since(start) }()
 
 	c, err := dialRTSP(host, 5*time.Second)
 	if err != nil {
@@ -767,7 +770,7 @@ var typeOrder = []string{"dvbt2", "dvbt", "dvbs2", "dvbs", "dvbc", "dvbc2"}
 // discoverMuxes finds the entry point via seeds, then does BFS using each
 // mux's NIT to discover further muxes. No-signal muxes are skipped.
 // Returns the complete set of muxes that have signal.
-func discoverMuxes(host string, caps map[string]int, nitTimeout time.Duration, verbose bool) []transponder {
+func discoverMuxes(host string, caps map[string]int, seedTimeout, muxTimeout time.Duration, verbose bool) []transponder {
 	// Build ordered seed list across all active types.
 	seen := map[string]bool{}
 	var allSeeds []transponder
@@ -787,30 +790,9 @@ func discoverMuxes(host string, caps map[string]int, nitTimeout time.Duration, v
 		}
 	}
 
-	// Find entry point: first seed with signal.
-	fmt.Fprintf(os.Stderr, "  Finding entry point...\n")
-	var entry *scanResult
-	for _, seed := range allSeeds {
-		r := scanTransponder(context.Background(), host, seed, nitTimeout, "0,16,17", verbose)
-		if r.err != nil || (len(r.nitMuxes) == 0 && r.networkID == 0) {
-			fmt.Fprintf(os.Stderr, "  %s → no signal\n", seed)
-			continue
-		}
-		fmt.Fprintf(os.Stderr, "  %s → entry point, network 0x%04x, NIT has %d muxes\n",
-			seed, r.networkID, len(r.nitMuxes))
-		entry = &r
-		break
-	}
-	if entry == nil {
-		fmt.Fprintf(os.Stderr, "  No entry point found.\n")
-		return nil
-	}
-
-	// BFS: track scanned and queued muxes in a simple array.
-	// Entry mux is already scanned — mark it done, add it to found directly.
 	scanned := map[string]bool{}
-	var queue []transponder
 	var found []transponder
+	var queue []transponder
 
 	enqueue := func(tp transponder) {
 		k := muxKey(tp)
@@ -820,27 +802,68 @@ func discoverMuxes(host string, caps map[string]int, nitTimeout time.Duration, v
 		}
 	}
 
-	// Entry mux already scanned — record it and queue only what its NIT listed.
-	scanned[muxKey(entry.tp)] = true
-	found = append(found, entry.tp)
-	for _, m := range entry.nitMuxes {
-		enqueue(m)
+	bfs := func(timeout time.Duration) {
+		for len(queue) > 0 {
+			tp := queue[0]
+			queue = queue[1:]
+			r := scanTransponder(context.Background(), host, tp, timeout, "0,16,17", verbose)
+			if r.err != nil || (len(r.nitMuxes) == 0 && r.networkID == 0) {
+				fmt.Fprintf(os.Stderr, "  %s → no signal (%s)\n", tp, r.elapsed.Round(time.Millisecond))
+				continue
+			}
+			fmt.Fprintf(os.Stderr, "  %s → signal, NIT has %d muxes (%s)\n", tp, len(r.nitMuxes), r.elapsed.Round(time.Millisecond))
+			found = append(found, tp)
+			for _, m := range r.nitMuxes {
+				enqueue(m)
+			}
+		}
 	}
 
-	for len(queue) > 0 {
-		tp := queue[0]
-		queue = queue[1:]
-
-		r := scanTransponder(context.Background(), host, tp, nitTimeout, "0,16,17", verbose)
-		if r.err != nil || (len(r.nitMuxes) == 0 && r.networkID == 0) {
-			fmt.Fprintf(os.Stderr, "  %s → no signal\n", tp)
+	// Pass 1: try all seeds at seedTimeout (fast).
+	// Seeds that respond get BFS'd immediately.
+	// Seeds that fail are collected for retry.
+	fmt.Fprintf(os.Stderr, "  Pass 1 (fast, %s per seed)...\n", seedTimeout)
+	var failedSeeds []transponder
+	for _, seed := range allSeeds {
+		k := muxKey(seed)
+		if scanned[k] {
 			continue
 		}
-		fmt.Fprintf(os.Stderr, "  %s → signal, NIT has %d muxes\n", tp, len(r.nitMuxes))
-		found = append(found, tp)
-
+		r := scanTransponder(context.Background(), host, seed, seedTimeout, "0,16,17", verbose)
+		if r.err != nil || (len(r.nitMuxes) == 0 && r.networkID == 0) {
+			fmt.Fprintf(os.Stderr, "  %s → no signal (%s)\n", seed, r.elapsed.Round(time.Millisecond))
+			failedSeeds = append(failedSeeds, seed)
+			continue
+		}
+		fmt.Fprintf(os.Stderr, "  %s → signal, NIT has %d muxes (%s)\n", seed, len(r.nitMuxes), r.elapsed.Round(time.Millisecond))
+		scanned[k] = true
+		found = append(found, seed)
 		for _, m := range r.nitMuxes {
 			enqueue(m)
+		}
+		bfs(muxTimeout)
+	}
+
+	// Pass 2: retry failed seeds at muxTimeout (slower, catches weak/slow muxes).
+	if len(failedSeeds) > 0 {
+		fmt.Fprintf(os.Stderr, "  Pass 2 (slow retry, %s per seed)...\n", muxTimeout)
+		for _, seed := range failedSeeds {
+			k := muxKey(seed)
+			if scanned[k] {
+				continue
+			}
+			r := scanTransponder(context.Background(), host, seed, muxTimeout, "0,16,17", verbose)
+			if r.err != nil || (len(r.nitMuxes) == 0 && r.networkID == 0) {
+				fmt.Fprintf(os.Stderr, "  %s → no signal (%s)\n", seed, r.elapsed.Round(time.Millisecond))
+				continue
+			}
+			fmt.Fprintf(os.Stderr, "  %s → signal, NIT has %d muxes (%s)\n", seed, len(r.nitMuxes), r.elapsed.Round(time.Millisecond))
+			scanned[k] = true
+			found = append(found, seed)
+			for _, m := range r.nitMuxes {
+				enqueue(m)
+			}
+			bfs(muxTimeout)
 		}
 	}
 
@@ -851,7 +874,8 @@ func main() {
 	host := flag.String("host", "192.168.1.149:554", "Minisatip RTSP host:port")
 	httpPort := flag.Int("http-port", 8875, "Minisatip HTTP port (for capability discovery)")
 	timeout := flag.Duration("timeout", 15*time.Second, "Per-transponder scan timeout")
-	nitTimeout := flag.Duration("nit-timeout", 20*time.Second, "NIT seed scan timeout")
+	seedTimeout := flag.Duration("seed-timeout", 3*time.Second, "Timeout for blind seed scans (fast pass)")
+	muxTimeout := flag.Duration("mux-timeout", 20*time.Second, "Timeout for discovered muxes and slow retry")
 	parallel := flag.Int("parallel", 4, "Max parallel scans per scan group")
 	verbose := flag.Bool("v", false, "Verbose RTSP exchange")
 	jsonOut := flag.Bool("json", false, "Output results as JSON")
@@ -885,7 +909,7 @@ func main() {
 	fmt.Fprintf(os.Stderr, "\nNIT discovery (all types in parallel)...\n")
 	// Step 2: BFS mux discovery via NIT
 	fmt.Fprintf(os.Stderr, "\nDiscovering muxes via NIT...\n")
-	muxes := discoverMuxes(rtspHost, caps, *nitTimeout, *verbose)
+	muxes := discoverMuxes(rtspHost, caps, *seedTimeout, *muxTimeout, *verbose)
 
 	if len(muxes) == 0 {
 		fmt.Fprintf(os.Stderr, "\nNo muxes discovered.\n")
