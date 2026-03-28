@@ -806,22 +806,23 @@ func discoverMuxes(host string, caps map[string]int, nitTimeout time.Duration, v
 		return nil
 	}
 
-	// BFS: queue starts with muxes from the entry NIT.
-	// Each mux scanned may reveal further muxes via its own NIT.
-	queued := map[string]bool{}
+	// BFS: track scanned and queued muxes in a simple array.
+	// Entry mux is already scanned — mark it done, add it to found directly.
+	scanned := map[string]bool{}
 	var queue []transponder
 	var found []transponder
 
 	enqueue := func(tp transponder) {
 		k := muxKey(tp)
-		if !queued[k] {
-			queued[k] = true
+		if !scanned[k] {
+			scanned[k] = true
 			queue = append(queue, tp)
 		}
 	}
 
-	// Seed the queue with the entry mux itself and everything its NIT listed.
-	enqueue(entry.tp)
+	// Entry mux already scanned — record it and queue only what its NIT listed.
+	scanned[muxKey(entry.tp)] = true
+	found = append(found, entry.tp)
 	for _, m := range entry.nitMuxes {
 		enqueue(m)
 	}
