@@ -761,55 +761,89 @@ type nitResult struct {
 	err       error
 }
 
-// typeOrder controls the order system types are scanned during NIT discovery.
-// dvbt2 goes first so it gets uncontested tuner access before dvbt starts.
+// typeOrder controls the order system types are tried as entry points.
 var typeOrder = []string{"dvbt2", "dvbt", "dvbs2", "dvbs", "dvbc", "dvbc2"}
 
-// discoverNIT scans every seed for every active system type, serially, one at a time.
-// dvbt2 runs before dvbt so they never compete for tuners.
-// All mux results from all seeds are merged — no early exit.
-func discoverNIT(host string, caps map[string]int, nitTimeout time.Duration, verbose bool) []nitResult {
-	// Build ordered type list: typeOrder first, then anything else.
+// discoverMuxes finds the entry point via seeds, then does BFS using each
+// mux's NIT to discover further muxes. No-signal muxes are skipped.
+// Returns the complete set of muxes that have signal.
+func discoverMuxes(host string, caps map[string]int, nitTimeout time.Duration, verbose bool) []transponder {
+	// Build ordered seed list across all active types.
 	seen := map[string]bool{}
-	var types []string
+	var allSeeds []transponder
 	for _, sys := range typeOrder {
 		if caps[sys] > 0 {
-			if _, ok := defaultSeeds[sys]; ok {
-				types = append(types, sys)
+			if seeds, ok := defaultSeeds[sys]; ok {
+				allSeeds = append(allSeeds, seeds...)
 				seen[sys] = true
 			}
 		}
 	}
-	for sys, count := range caps {
-		if count > 0 && !seen[sys] {
-			if _, ok := defaultSeeds[sys]; ok {
-				types = append(types, sys)
+	for sys := range caps {
+		if !seen[sys] {
+			if seeds, ok := defaultSeeds[sys]; ok {
+				allSeeds = append(allSeeds, seeds...)
 			}
 		}
 	}
 
-	var results []nitResult
-	for _, sys := range types {
-		seeds := defaultSeeds[sys]
-		fmt.Fprintf(os.Stderr, "  [%s] trying %d seeds serially\n", sys, len(seeds))
-		for _, seed := range seeds {
-			r := scanTransponder(context.Background(), host, seed, nitTimeout, "0,16,17", verbose)
-			if r.err != nil || (len(r.nitMuxes) == 0 && r.networkID == 0) {
-				fmt.Fprintf(os.Stderr, "  [%s] %s → no signal\n", sys, seed)
-				continue
-			}
-			fmt.Fprintf(os.Stderr, "  [%s] %s → %d ch, network 0x%04x, NIT has %d muxes\n",
-				sys, seed, len(r.channels), r.networkID, len(r.nitMuxes))
-			results = append(results, nitResult{
-				sys:       sys,
-				seed:      seed,
-				networkID: r.networkID,
-				nitMuxes:  r.nitMuxes,
-				channels:  len(r.channels),
-			})
+	// Find entry point: first seed with signal.
+	fmt.Fprintf(os.Stderr, "  Finding entry point...\n")
+	var entry *scanResult
+	for _, seed := range allSeeds {
+		r := scanTransponder(context.Background(), host, seed, nitTimeout, "0,16,17", verbose)
+		if r.err != nil || (len(r.nitMuxes) == 0 && r.networkID == 0) {
+			fmt.Fprintf(os.Stderr, "  %s → no signal\n", seed)
+			continue
+		}
+		fmt.Fprintf(os.Stderr, "  %s → entry point, network 0x%04x, NIT has %d muxes\n",
+			seed, r.networkID, len(r.nitMuxes))
+		entry = &r
+		break
+	}
+	if entry == nil {
+		fmt.Fprintf(os.Stderr, "  No entry point found.\n")
+		return nil
+	}
+
+	// BFS: queue starts with muxes from the entry NIT.
+	// Each mux scanned may reveal further muxes via its own NIT.
+	queued := map[string]bool{}
+	var queue []transponder
+	var found []transponder
+
+	enqueue := func(tp transponder) {
+		k := muxKey(tp)
+		if !queued[k] {
+			queued[k] = true
+			queue = append(queue, tp)
 		}
 	}
-	return results
+
+	// Seed the queue with the entry mux itself and everything its NIT listed.
+	enqueue(entry.tp)
+	for _, m := range entry.nitMuxes {
+		enqueue(m)
+	}
+
+	for len(queue) > 0 {
+		tp := queue[0]
+		queue = queue[1:]
+
+		r := scanTransponder(context.Background(), host, tp, nitTimeout, "0,16,17", verbose)
+		if r.err != nil || (len(r.nitMuxes) == 0 && r.networkID == 0) {
+			fmt.Fprintf(os.Stderr, "  %s → no signal\n", tp)
+			continue
+		}
+		fmt.Fprintf(os.Stderr, "  %s → signal, NIT has %d muxes\n", tp, len(r.nitMuxes))
+		found = append(found, tp)
+
+		for _, m := range r.nitMuxes {
+			enqueue(m)
+		}
+	}
+
+	return found
 }
 
 func main() {
@@ -848,90 +882,40 @@ func main() {
 
 	// Step 2: NIT discovery — all system types in parallel
 	fmt.Fprintf(os.Stderr, "\nNIT discovery (all types in parallel)...\n")
-	nitResults := discoverNIT(rtspHost, caps, *nitTimeout, *verbose)
+	// Step 2: BFS mux discovery via NIT
+	fmt.Fprintf(os.Stderr, "\nDiscovering muxes via NIT...\n")
+	muxes := discoverMuxes(rtspHost, caps, *nitTimeout, *verbose)
 
-	// Step 3: build networks — group NIT results by network_id to detect overlap
-	type network struct {
-		id        uint16
-		systems   []string
-		muxes     []transponder
-		muxesSeen map[string]bool
-	}
-	networks := map[uint16]*network{}
-
-	for _, nr := range nitResults {
-		if nr.err != nil || nr.channels == 0 {
-			continue
-		}
-		net, exists := networks[nr.networkID]
-		if !exists {
-			net = &network{id: nr.networkID, muxesSeen: map[string]bool{}}
-			networks[nr.networkID] = net
-		}
-		net.systems = appendUnique(net.systems, nr.sys)
-
-		addMux := func(m transponder) {
-			k := fmt.Sprintf("%g/%s", m.FreqMHz, m.System)
-			if !net.muxesSeen[k] {
-				net.muxes = append(net.muxes, m)
-				net.muxesSeen[k] = true
-			}
-		}
-		addMux(nr.seed)
-		for _, m := range nr.nitMuxes {
-			addMux(m)
-		}
-	}
-
-	if len(networks) == 0 {
-		fmt.Fprintf(os.Stderr, "\nNo networks discovered.\n")
+	if len(muxes) == 0 {
+		fmt.Fprintf(os.Stderr, "\nNo muxes discovered.\n")
 		os.Exit(0)
 	}
 
-	fmt.Fprintf(os.Stderr, "\nDiscovered %d network(s):\n", len(networks))
-	totalMuxes := 0
-	for _, net := range networks {
-		overlap := ""
-		if len(net.systems) > 1 {
-			overlap = " ← OVERLAP (same network, scanning once)"
-		}
-		fmt.Fprintf(os.Stderr, "  Network 0x%04x: %d muxes via %v%s\n",
-			net.id, len(net.muxes), net.systems, overlap)
-		for _, m := range net.muxes {
-			fmt.Fprintf(os.Stderr, "    %s\n", m)
-		}
-		totalMuxes += len(net.muxes)
+	fmt.Fprintf(os.Stderr, "\nDiscovered %d mux(es) with signal:\n", len(muxes))
+	for _, m := range muxes {
+		fmt.Fprintf(os.Stderr, "  %s\n", m)
 	}
-	fmt.Fprintf(os.Stderr, "Total muxes to scan: %d\n", totalMuxes)
 
 	if *nitOnly {
 		os.Exit(0)
 	}
 
-	// Step 4: full channel scan, grouped for parallelism
+	// Step 3: full channel scan of discovered muxes
 	fmt.Fprintf(os.Stderr, "\nScanning all muxes...\n")
 	var allChannels []channel
 
-	for _, net := range networks {
-		groups := buildScanGroups(net.muxes)
-		for _, grp := range groups {
-			if len(groups) > 1 {
-				fmt.Fprintf(os.Stderr, "  Group %q (%d muxes):\n", grp.label, len(grp.muxes))
-			}
-			results := scanParallel(rtspHost, grp.muxes, *parallel, *timeout, *verbose)
-			for _, r := range results {
-				if r.err != nil {
-					fmt.Fprintf(os.Stderr, "  %s: %v\n", r.tp, r.err)
-					continue
-				}
-				if len(r.channels) == 0 {
-					fmt.Fprintf(os.Stderr, "  %s: no signal\n", r.tp)
-					continue
-				}
-				fmt.Fprintf(os.Stderr, "  %s: %d channels\n", r.tp, len(r.channels))
-				allChannels = append(allChannels, r.channels...)
-			}
+	results := scanParallel(rtspHost, muxes, *parallel, *timeout, *verbose)
+	for _, r := range results {
+		if r.err != nil {
+			fmt.Fprintf(os.Stderr, "  %s: %v\n", r.tp, r.err)
+			continue
 		}
+		if len(r.channels) == 0 {
+			fmt.Fprintf(os.Stderr, "  %s: no signal\n", r.tp)
+			continue
+		}
+		fmt.Fprintf(os.Stderr, "  %s: %d channels\n", r.tp, len(r.channels))
+		allChannels = append(allChannels, r.channels...)
 	}
 
 	sort.Slice(allChannels, func(i, j int) bool {
@@ -942,7 +926,7 @@ func main() {
 	})
 
 	fmt.Fprintf(os.Stderr, "\nTotal: %d channels across %d networks\n\n",
-		len(allChannels), len(networks))
+		len(allChannels), len(muxes))
 
 	// Per-mux summary: always printed so regressions are visible at a glance.
 	printMuxSummary(os.Stderr, allChannels)
