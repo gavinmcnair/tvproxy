@@ -22,3 +22,11 @@
 
 # Project instructions (local only)
 CLAUDE.md
+# Runtime data files
+clients_data.json
+profiles.json
+satip_sources.json
+users.json
+dvbscan
+*.bak
+.claude/worktrees/
