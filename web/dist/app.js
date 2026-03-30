@@ -2674,17 +2674,12 @@
     var savedVol = parseFloat(localStorage.getItem('tvproxy_volume') || '0.5');
     vjsPlayer = videojs(videoEl.id, {
       controls: true,
-      autoplay: true,
+      autoplay: false,
       preload: 'auto',
       fluid: !audioOnly,
       aspectRatio: audioOnly ? undefined : '16:9',
       audioOnlyMode: audioOnly,
       liveui: isLive,
-      html5: {
-        vhs: { overrideNative: true },
-        nativeAudioTracks: false,
-        nativeVideoTracks: false
-      },
       controlBar: {
         volumePanel: { inline: true },
         pictureInPictureToggle: false
@@ -2693,7 +2688,14 @@
     vjsPlayer.volume(savedVol);
     vjsPlayer.on('volumechange', function() { localStorage.setItem('tvproxy_volume', String(vjsPlayer.volume())); });
 
-    vjsPlayer.src({ src: streamSrc, type: useHLS ? 'application/x-mpegURL' : 'video/mp4' });
+    if (useHLS) {
+      vjsPlayer.src({ src: streamSrc, type: 'application/x-mpegURL' });
+    } else {
+      vjsPlayer.src({ src: streamSrc, type: 'video/mp4' });
+    }
+    vjsPlayer.ready(function() {
+      vjsPlayer.play().catch(function() {});
+    });
 
     vjsPlayer.on('playing', function() {
       retryCount = 0;
