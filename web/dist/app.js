@@ -2546,6 +2546,7 @@
     let retryCount = 0;
     const MAX_RETRIES = 3;
     let retryTimeout = null;
+    let statsInterval = null;
     let vjsPlayer = null;
     const audioOnly = isAudioOnly(streamTracks);
 
@@ -2557,6 +2558,7 @@
       if (pollInterval) { clearInterval(pollInterval); pollInterval = null; }
       if (progInterval) { clearInterval(progInterval); progInterval = null; }
       if (signalInterval) { clearInterval(signalInterval); signalInterval = null; }
+      if (statsInterval) { clearInterval(statsInterval); statsInterval = null; }
       if (vjsPlayer) {
         vjsPlayer.dispose();
         vjsPlayer = null;
@@ -2616,6 +2618,12 @@
       }
     };
 
+    var statsBtn = document.createElement('button');
+    statsBtn.className = 'btn btn-sm';
+    statsBtn.style.cssText = 'padding:4px 8px;line-height:1;font-size:12px;';
+    statsBtn.textContent = '\u2139';
+    statsBtn.title = 'Stats';
+
     var closeBtn = document.createElement('button');
     closeBtn.className = 'btn btn-sm';
     closeBtn.style.cssText = 'padding:4px 8px;font-size:14px;line-height:1;';
@@ -2623,6 +2631,7 @@
     closeBtn.title = 'Close';
     closeBtn.onclick = cleanup;
 
+    hdrRight.appendChild(statsBtn);
     hdrRight.appendChild(recordBtn);
     hdrRight.appendChild(closeBtn);
     header.appendChild(titleEl);
@@ -2637,6 +2646,11 @@
     if (audioOnly) videoEl.classList.add('vjs-audio');
     videoEl.setAttribute('playsinline', '');
     playerWrap.appendChild(videoEl);
+
+    var statsOverlay = document.createElement('div');
+    statsOverlay.style.cssText = 'display:none;position:absolute;top:8px;left:8px;background:rgba(0,0,0,0.8);color:#fff;padding:10px 12px;border-radius:6px;font-size:11px;font-family:monospace;line-height:1.6;z-index:100;max-height:80%;overflow-y:auto;pointer-events:none;';
+    statsBtn.onclick = function() { statsOverlay.style.display = statsOverlay.style.display === 'none' ? 'block' : 'none'; };
+    playerWrap.appendChild(statsOverlay);
     modal.appendChild(playerWrap);
 
     var statusEl = document.createElement('div');
@@ -2825,6 +2839,63 @@
         }
       }, 2000);
     }
+
+    function updateStats() {
+      if (playerCtx.signal.aborted || statsOverlay.style.display === 'none') return;
+      var vi = probeData && probeData.video ? probeData.video : null;
+      var at = probeData && probeData.audio_tracks ? probeData.audio_tracks : [];
+      var activeAudio = at.length > 0 ? at[currentAudioIndex] || at[0] : null;
+      var videoEl = vjsPlayer ? vjsPlayer.tech({ IWillNotUseThisInPlugins: true }).el() : null;
+      var res = videoEl && videoEl.videoWidth ? videoEl.videoWidth + 'x' + videoEl.videoHeight : null;
+      var buf = vjsPlayer && vjsPlayer.bufferedEnd() > 0 ? (vjsPlayer.bufferedEnd() - vjsPlayer.currentTime()).toFixed(1) + 's' : '0s';
+
+      var left = [];
+      if (res) left.push(res);
+      if (vi) {
+        left.push(esc(vi.codec) + (vi.profile ? ' (' + esc(vi.profile) + ')' : ''));
+        if (vi.fps) left.push(esc(vi.fps) + ' fps');
+        if (vi.bit_rate) left.push((parseInt(vi.bit_rate) / 1000).toFixed(0) + ' kbps');
+        if (vi.field_order && vi.field_order !== 'unknown' && vi.field_order !== 'progressive') left.push(esc(vi.field_order));
+        if (vi.pix_fmt) left.push(esc(vi.pix_fmt));
+        if (vi.color_space && vi.color_space !== 'unknown') left.push(esc(vi.color_space));
+      }
+      if (activeAudio) {
+        var aLabel = esc(activeAudio.codec || '?');
+        if (activeAudio.language) aLabel += ' [' + esc(activeAudio.language) + ']';
+        if (activeAudio.channels) aLabel += ' ' + activeAudio.channels + 'ch';
+        left.push(aLabel);
+      }
+      left.push('buf ' + esc(buf));
+      if (probeData && probeData.profile) left.push(esc(probeData.profile));
+
+      var right = [];
+      if (signalData) {
+        var lockColor = signalData.lock ? '#4caf50' : '#ff6b6b';
+        var lvl = signalData.level_pct;
+        var qlt = signalData.quality_pct;
+        var lvlColor = lvl > 60 ? '#4caf50' : lvl > 30 ? '#ffb300' : '#ff6b6b';
+        var qltColor = qlt > 60 ? '#4caf50' : qlt > 30 ? '#ffb300' : '#ff6b6b';
+        function sigBar(pct, color) {
+          return '<span style="display:inline-block;width:50px;height:5px;background:#333;vertical-align:middle;border-radius:2px">'
+            + '<span style="display:block;width:' + pct + '%;height:100%;background:' + color + ';border-radius:2px"></span></span>';
+        }
+        var tunerLabel = signalData.fe_id ? 'FE' + signalData.fe_id + ' ' : '';
+        right.push(esc(tunerLabel) + '<span style="color:' + lockColor + '">' + (signalData.lock ? 'Locked' : 'No Lock') + '</span>');
+        right.push('Lvl ' + sigBar(lvl, lvlColor) + ' <span style="color:' + lvlColor + '">' + lvl + '%</span>');
+        right.push('Qlt ' + sigBar(qlt, qltColor) + ' <span style="color:' + qltColor + '">' + qlt + '%</span>');
+        if (signalData.ber != null) right.push('BER ' + signalData.ber);
+        if (signalData.freq_mhz) right.push(signalData.freq_mhz + ' MHz ' + esc((signalData.msys || '').toUpperCase()));
+        if (signalData.bitrate_kbps) right.push((signalData.bitrate_kbps / 1000).toFixed(1) + ' Mbps');
+      }
+
+      var html = '<div style="display:flex;gap:24px;">';
+      html += '<div>' + left.join('<br>') + '</div>';
+      if (right.length) html += '<div>' + right.join('<br>') + '</div>';
+      html += '</div>';
+      statsOverlay.innerHTML = html;
+    }
+
+    statsInterval = setInterval(updateStats, 2000);
 
     if (probeUrl) {
       api.get(probeUrl).then(function(pd) {
