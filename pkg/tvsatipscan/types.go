@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"fmt"
 	"time"
+
+	"github.com/rs/zerolog"
 )
 
 // Transponder holds the full tuning parameters for one multiplex.
@@ -14,6 +16,7 @@ type Transponder struct {
 	BandwidthMHz int    // DVB-T/T2
 	SymbolRateKS int    // DVB-S/C (kSym/s)
 	Polarization string // h or v (DVB-S)
+	PLPID        int    // DVB-T2 Physical Layer Pipe ID
 }
 
 func (t Transponder) String() string {
@@ -42,6 +45,9 @@ func (t Transponder) RTSPURL(host, pids string) string {
 	switch t.System {
 	case "dvbt", "dvbt2":
 		fmt.Fprintf(&b, "&bw=%d", t.BandwidthMHz)
+		if t.System == "dvbt2" {
+			fmt.Fprintf(&b, "&plp=%d", t.PLPID)
+		}
 	case "dvbs", "dvbs2":
 		fmt.Fprintf(&b, "&pol=%s&sr=%d", t.Polarization, t.SymbolRateKS)
 	case "dvbc", "dvbc2":
@@ -64,6 +70,9 @@ type StreamComponent struct {
 	PID        uint16
 	StreamType uint8
 	Language   string
+	AudioType  uint8  // ISO 639 audio_type: 0=normal, 1=clean effects, 2=hearing impaired, 3=audio description
+	Label      string // component descriptor text (e.g. "English AD")
+	Category   string // video, audio, subtitle, teletext
 	TypeName   string
 }
 
@@ -95,20 +104,25 @@ func (ch Channel) RTSPURL(host string) string {
 
 // ScanResult is the output of a complete scan.
 type ScanResult struct {
-	Host        string
-	NetworkName string
-	Muxes       []Transponder
-	Channels    []Channel
+	Host          string
+	NetworkName   string
+	Muxes         []Transponder
+	Channels      []Channel
+	NoSignalMuxes []Transponder // muxes that were scanned but returned no channels
+	ErrorMuxes    []Transponder // muxes that returned an RTSP/transport error
 }
 
 // Config configures a scan operation.
 type Config struct {
-	SeedTimeout time.Duration // timeout for blind seed scans (fast pass)
-	MuxTimeout  time.Duration // timeout for discovered muxes and slow retry
-	Timeout     time.Duration // per-transponder timeout for the final channel scan
-	Parallel    int           // max parallel scans during final channel scan
-	Verbose     bool          // log RTSP exchange to stderr
-	Satellite   string        // satellite ID for DVB-S/S2 ("" = auto-detect)
+	SeedTimeout     time.Duration // timeout for blind seed scans (fast pass)
+	MuxTimeout      time.Duration // timeout for discovered muxes and slow retry
+	Timeout         time.Duration // per-transponder timeout for the final channel scan
+	Parallel        int           // max parallel scans during final channel scan
+	Verbose         bool          // log RTSP exchange at debug level
+	Satellite       string        // satellite ID for DVB-S/S2 ("" = auto-detect)
+	TransmitterFile string        // relative path to dtv-scan-tables file (e.g. "dvb-t/uk-CrystalPalace")
+	Log             zerolog.Logger
+	OnMuxScanned    func(done, total int) // called after each mux completes (may be nil)
 }
 
 // ServiceTypeName returns the human-readable name for a DVB service type byte.

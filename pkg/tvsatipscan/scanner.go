@@ -2,72 +2,47 @@ package tvsatipscan
 
 import (
 	"fmt"
-	"os"
 	"sort"
 )
 
 // Scan performs a complete channel scan against the SAT>IP server at host:rtspPort.
 // httpPort is the UPnP HTTP port for capability discovery. cfg controls timing and
-// parallelism. Progress is logged to stderr.
+// parallelism.
 //
-// The scan proceeds in three steps:
-//  1. Capability discovery — determine which delivery systems the hardware supports.
-//  2. NIT BFS mux discovery — find all live muxes via two-pass NIT scanning.
-//  3. Full channel scan — collect PAT + SDT + PMT from every discovered mux.
+// When cfg.TransmitterFile is set, seeds are loaded from the dtv-scan-tables file
+// and capability/NIT discovery is skipped. Otherwise a blind NIT BFS sweep is used.
 func Scan(host string, httpPort int, cfg Config) (*ScanResult, error) {
-	httpBase := fmt.Sprintf("http://%s:%d", splitHost(host), httpPort)
-
-	caps, err := fetchSatIPCaps(httpBase)
+	muxes, networkName, err := resolveMuxes(host, httpPort, cfg)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "HTTP caps failed (%v); assuming DVB-T2 + DVB-C\n", err)
-		caps = map[string]int{"dvbt2": 1, "dvbc": 1}
-	}
-	fmt.Fprintf(os.Stderr, "Capabilities:")
-	for sys, n := range caps {
-		fmt.Fprintf(os.Stderr, "  %s×%d", sys, n)
-	}
-	fmt.Fprintf(os.Stderr, "\n")
-
-	applySatelliteSeeds(host, caps, cfg)
-
-	if caps["dvbt2"] > 0 && caps["dvbt"] == 0 {
-		caps["dvbt"] = caps["dvbt2"]
-	}
-
-	fmt.Fprintf(os.Stderr, "\nDiscovering muxes via NIT...\n")
-	muxes, networkName := discoverMuxes(host, caps, cfg.SeedTimeout, cfg.MuxTimeout, cfg.Verbose)
-	if networkName != "" {
-		fmt.Fprintf(os.Stderr, "Network: %s\n", networkName)
+		return nil, err
 	}
 
 	if len(muxes) == 0 {
-		fmt.Fprintf(os.Stderr, "\nNo muxes discovered.\n")
+		cfg.Log.Info().Msg("no muxes to scan")
 		return &ScanResult{Host: host, NetworkName: networkName}, nil
 	}
 
-	fmt.Fprintf(os.Stderr, "\nDiscovered %d mux(es) with signal:\n", len(muxes))
-	for _, m := range muxes {
-		fmt.Fprintf(os.Stderr, "  %s\n", m)
-	}
-
-	fmt.Fprintf(os.Stderr, "\nScanning all muxes...\n")
+	cfg.Log.Info().Msg("scanning all muxes")
 	parallel := cfg.Parallel
 	if parallel < 1 {
 		parallel = 4
 	}
-	results := scanParallel(host, muxes, parallel, cfg.Timeout, cfg.Verbose)
+	results := scanParallel(host, muxes, parallel, cfg.Timeout, cfg.Log, cfg.OnMuxScanned)
 
 	var allChannels []Channel
+	var noSignalMuxes, errorMuxes []Transponder
 	for _, r := range results {
 		if r.err != nil {
-			fmt.Fprintf(os.Stderr, "  %s: %v\n", r.tp, r.err)
+			cfg.Log.Error().Err(r.err).Str("mux", r.tp.String()).Msg("mux scan error")
+			errorMuxes = append(errorMuxes, r.tp)
 			continue
 		}
 		if len(r.channels) == 0 {
-			fmt.Fprintf(os.Stderr, "  %s: no signal\n", r.tp)
+			cfg.Log.Info().Str("mux", r.tp.String()).Msg("no signal")
+			noSignalMuxes = append(noSignalMuxes, r.tp)
 			continue
 		}
-		fmt.Fprintf(os.Stderr, "  %s: %d channels\n", r.tp, len(r.channels))
+		cfg.Log.Info().Str("mux", r.tp.String()).Int("channels", len(r.channels)).Msg("mux scan complete")
 		allChannels = append(allChannels, r.channels...)
 	}
 
@@ -79,28 +54,51 @@ func Scan(host string, httpPort int, cfg Config) (*ScanResult, error) {
 	})
 
 	return &ScanResult{
-		Host:        host,
-		NetworkName: networkName,
-		Muxes:       muxes,
-		Channels:    allChannels,
+		Host:          host,
+		NetworkName:   networkName,
+		Muxes:         muxes,
+		Channels:      allChannels,
+		NoSignalMuxes: noSignalMuxes,
+		ErrorMuxes:    errorMuxes,
 	}, nil
 }
 
-// DiscoverMuxes performs only the NIT BFS discovery step (steps 1–2 of Scan).
-// Useful for quickly listing available muxes without a full channel scan.
+// DiscoverMuxes performs only the mux discovery step.
+// When cfg.TransmitterFile is set, returns the muxes from the file directly.
+// Otherwise performs a NIT BFS sweep.
 func DiscoverMuxes(host string, httpPort int, cfg Config) ([]Transponder, string, error) {
+	return resolveMuxes(host, httpPort, cfg)
+}
+
+// resolveMuxes returns the mux list either from a transmitter file or via NIT BFS.
+func resolveMuxes(host string, httpPort int, cfg Config) ([]Transponder, string, error) {
+	if cfg.TransmitterFile != "" {
+		cfg.Log.Info().Str("file", cfg.TransmitterFile).Msg("loading muxes from transmitter file")
+		muxes, err := ParseTransmitterFile(cfg.TransmitterFile)
+		if err != nil {
+			return nil, "", err
+		}
+		cfg.Log.Info().Int("count", len(muxes)).Msg("loaded muxes from transmitter file")
+		return muxes, "", nil
+	}
+
+	return discoverMuxesViaNIT(host, httpPort, cfg)
+}
+
+// discoverMuxesViaNIT performs capability discovery then NIT BFS sweep.
+func discoverMuxesViaNIT(host string, httpPort int, cfg Config) ([]Transponder, string, error) {
 	httpBase := fmt.Sprintf("http://%s:%d", splitHost(host), httpPort)
 
 	caps, err := fetchSatIPCaps(httpBase)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "HTTP caps failed (%v); assuming DVB-T2 + DVB-C\n", err)
+		cfg.Log.Warn().Err(err).Msg("HTTP caps failed; assuming DVB-T2 + DVB-C")
 		caps = map[string]int{"dvbt2": 1, "dvbc": 1}
 	}
-	fmt.Fprintf(os.Stderr, "Capabilities:")
+	capsEvent := cfg.Log.Info()
 	for sys, n := range caps {
-		fmt.Fprintf(os.Stderr, "  %s×%d", sys, n)
+		capsEvent = capsEvent.Int(sys, n)
 	}
-	fmt.Fprintf(os.Stderr, "\n")
+	capsEvent.Msg("capabilities")
 
 	applySatelliteSeeds(host, caps, cfg)
 
@@ -108,10 +106,15 @@ func DiscoverMuxes(host string, httpPort int, cfg Config) ([]Transponder, string
 		caps["dvbt"] = caps["dvbt2"]
 	}
 
-	fmt.Fprintf(os.Stderr, "\nDiscovering muxes via NIT...\n")
-	muxes, networkName := discoverMuxes(host, caps, cfg.SeedTimeout, cfg.MuxTimeout, cfg.Verbose)
+	cfg.Log.Info().Msg("discovering muxes via NIT")
+	muxes, networkName := discoverMuxes(host, caps, cfg.SeedTimeout, cfg.MuxTimeout, cfg.Log)
 	if networkName != "" {
-		fmt.Fprintf(os.Stderr, "Network: %s\n", networkName)
+		cfg.Log.Info().Str("network", networkName).Msg("network name")
+	}
+	if len(muxes) == 0 {
+		cfg.Log.Info().Msg("no muxes discovered")
+	} else {
+		cfg.Log.Info().Int("count", len(muxes)).Msg("discovered muxes with signal")
 	}
 	return muxes, networkName, nil
 }
@@ -124,20 +127,16 @@ func applySatelliteSeeds(host string, caps map[string]int, cfg Config) {
 	}
 	if cfg.Satellite != "" {
 		defaultSeeds["dvbs2"] = europeanSatellites[cfg.Satellite]
-		fmt.Fprintf(os.Stderr, "Satellite: %s (manual)\n", cfg.Satellite)
+		cfg.Log.Info().Str("satellite", cfg.Satellite).Msg("satellite set manually")
 		return
 	}
-	fmt.Fprintf(os.Stderr, "Detecting satellite...")
-	satID, satNetwork, satSeeds := detectSatellite(host, cfg.SeedTimeout, cfg.Verbose)
+	cfg.Log.Info().Msg("detecting satellite")
+	satID, satNetwork, satSeeds := detectSatellite(host, cfg.SeedTimeout, cfg.Log)
 	if satID != "" {
-		label := satID
-		if satNetwork != "" {
-			label += " — " + satNetwork
-		}
-		fmt.Fprintf(os.Stderr, " %s\n", label)
+		cfg.Log.Info().Str("satellite", satID).Str("network", satNetwork).Msg("satellite detected")
 		defaultSeeds["dvbs2"] = satSeeds
 	} else {
-		fmt.Fprintf(os.Stderr, " none detected\n")
+		cfg.Log.Info().Msg("no satellite detected")
 		delete(caps, "dvbs2")
 		delete(caps, "dvbs")
 	}

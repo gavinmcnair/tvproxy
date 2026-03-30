@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"net/url"
 	"strconv"
 	"time"
 
@@ -101,6 +102,24 @@ func (s *SatIPService) ScanSource(ctx context.Context, sourceID string) error {
 	return nil
 }
 
+func satipTracks(comps []tvsatipscan.StreamComponent) []models.StreamTrack {
+	if len(comps) == 0 {
+		return nil
+	}
+	tracks := make([]models.StreamTrack, 0, len(comps))
+	for _, c := range comps {
+		tracks = append(tracks, models.StreamTrack{
+			PID:       c.PID,
+			Type:      c.TypeName,
+			Category:  c.Category,
+			Language:  c.Language,
+			AudioType: c.AudioType,
+			Label:     c.Label,
+		})
+	}
+	return tracks
+}
+
 func satipStreamGroup(serviceType uint8) string {
 	switch serviceType {
 	case 0x02, 0x07, 0x0A:
@@ -122,10 +141,20 @@ func (s *SatIPService) scanSource(ctx context.Context, source *models.SatIPSourc
 	}
 
 	cfg := tvsatipscan.Config{
-		SeedTimeout: 5 * time.Second,
-		MuxTimeout:  20 * time.Second,
-		Timeout:     15 * time.Second,
-		Parallel:    4,
+		SeedTimeout:     20 * time.Second,
+		MuxTimeout:      60 * time.Second,
+		Timeout:         60 * time.Second,
+		Parallel:        2,
+		Log:             s.log,
+		TransmitterFile: source.TransmitterFile,
+		OnMuxScanned: func(done, total int) {
+			s.Set(source.ID, RefreshStatus{
+				State:    "running",
+				Progress: done,
+				Total:    total,
+				Message:  fmt.Sprintf("Scanning mux %d/%d...", done, total),
+			})
+		},
 	}
 
 	scanHost := source.Host
@@ -156,7 +185,29 @@ func (s *SatIPService) scanSource(ctx context.Context, source *models.SatIPSourc
 			Group:         satipStreamGroup(ch.ServiceType),
 			ContentHash:   contentHash,
 			IsActive:      true,
+			Tracks:        satipTracks(ch.Streams),
 		})
+	}
+
+	// Preserve existing streams from muxes that had no signal or errors this scan.
+	// Intermittent scan failures (tuner contention, signal drop) must not delete
+	// channels that were successfully discovered in a previous scan.
+	noSignalKeys := make(map[string]bool, len(result.NoSignalMuxes)+len(result.ErrorMuxes))
+	for _, tp := range result.NoSignalMuxes {
+		noSignalKeys[tp.MuxKey()] = true
+	}
+	for _, tp := range result.ErrorMuxes {
+		noSignalKeys[tp.MuxKey()] = true
+	}
+	if len(noSignalKeys) > 0 {
+		existing, err := s.streamStore.ListBySatIPSourceID(ctx, source.ID)
+		if err == nil {
+			for _, st := range existing {
+				if noSignalKeys[satipMuxKeyFromURL(st.URL)] {
+					keepIDs = append(keepIDs, st.ID)
+				}
+			}
+		}
 	}
 
 	return s.upsertAndFinalizeSource(ctx, source, streams, keepIDs)
@@ -226,4 +277,32 @@ func (s *SatIPService) ClearSource(ctx context.Context, sourceID string) error {
 		s.log.Error().Err(err).Msg("failed to update stream count after clear")
 	}
 	return nil
+}
+
+// satipMuxKeyFromURL extracts a deduplication key from a SAT>IP RTSP stream URL.
+// Matches the format produced by Transponder.MuxKey() so we can correlate stored
+// stream URLs back to the transponders reported as no-signal during a scan.
+func satipMuxKeyFromURL(rawURL string) string {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return ""
+	}
+	q := u.Query()
+	freq := q.Get("freq")
+	msys := q.Get("msys")
+	if freq == "" || msys == "" {
+		return ""
+	}
+	switch msys {
+	case "dvbt2":
+		plp := q.Get("plp")
+		if plp == "" {
+			plp = "0"
+		}
+		return fmt.Sprintf("%s/%s/%s", freq, msys, plp)
+	case "dvbt":
+		return fmt.Sprintf("%s/%s", freq, msys)
+	default:
+		return fmt.Sprintf("%s/%s", freq, msys)
+	}
 }
