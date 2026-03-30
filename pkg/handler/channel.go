@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"net/http"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 
@@ -24,7 +25,7 @@ func (h *ChannelHandler) resolveLogoID(ctx context.Context, logoID *string, logo
 	if logoID != nil {
 		return logoID, nil
 	}
-	if logoURL == "" {
+	if logoURL == "" || strings.HasPrefix(logoURL, "data:") {
 		return nil, nil
 	}
 	logo, err := h.logoService.GetByURL(ctx, logoURL)

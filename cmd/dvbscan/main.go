@@ -8,15 +8,17 @@ import (
 	"strings"
 	"time"
 
+	"github.com/rs/zerolog"
+
 	"github.com/gavinmcnair/tvproxy/pkg/tvsatipscan"
 )
 
 func main() {
 	host := flag.String("host", "192.168.1.149:554", "Minisatip RTSP host:port")
 	httpPort := flag.Int("http-port", 8875, "Minisatip HTTP port (for capability discovery)")
-	timeout := flag.Duration("timeout", 15*time.Second, "Per-transponder scan timeout")
-	seedTimeout := flag.Duration("seed-timeout", 5*time.Second, "Timeout for blind seed scans (fast pass)")
-	muxTimeout := flag.Duration("mux-timeout", 20*time.Second, "Timeout for discovered muxes and slow retry")
+	timeout := flag.Duration("timeout", 60*time.Second, "Per-transponder scan timeout")
+	seedTimeout := flag.Duration("seed-timeout", 20*time.Second, "Timeout for blind seed scans (fast pass)")
+	muxTimeout := flag.Duration("mux-timeout", 60*time.Second, "Timeout for discovered muxes and slow retry")
 	parallel := flag.Int("parallel", 4, "Max parallel scans per scan group")
 	verbose := flag.Bool("v", false, "Verbose RTSP exchange")
 	jsonOut := flag.Bool("json", false, "Output results as JSON")
@@ -24,7 +26,12 @@ func main() {
 	nitOnly := flag.Bool("nit-only", false, "Run NIT discovery only, print mux list, then exit")
 	satellite := flag.String("satellite", "", fmt.Sprintf("Satellite for DVB-S/S2 scanning (auto-detected if omitted). Supported: %s",
 		strings.Join(tvsatipscan.Satellites(), ", ")))
+	transmitter := flag.String("transmitter", "", "Transmitter file from dtv-scan-tables (e.g. dvb-t/uk-CrystalPalace). Skips blind sweep.")
 	flag.Parse()
+
+	if !strings.Contains(*host, ":") {
+		*host = *host + ":554"
+	}
 
 	if *satellite != "" {
 		supported := tvsatipscan.Satellites()
@@ -41,13 +48,23 @@ func main() {
 		}
 	}
 
+	logLevel := zerolog.InfoLevel
+	if *verbose {
+		logLevel = zerolog.DebugLevel
+	}
+	logger := zerolog.New(zerolog.ConsoleWriter{Out: os.Stderr, TimeFormat: "15:04:05"}).
+		Level(logLevel).
+		With().Timestamp().Logger()
+
 	cfg := tvsatipscan.Config{
-		SeedTimeout: *seedTimeout,
-		MuxTimeout:  *muxTimeout,
-		Timeout:     *timeout,
-		Parallel:    *parallel,
-		Verbose:     *verbose,
-		Satellite:   *satellite,
+		SeedTimeout:     *seedTimeout,
+		MuxTimeout:      *muxTimeout,
+		Timeout:         *timeout,
+		Parallel:        *parallel,
+		Verbose:         *verbose,
+		Satellite:       *satellite,
+		TransmitterFile: *transmitter,
+		Log:             logger,
 	}
 
 	if *nitOnly {

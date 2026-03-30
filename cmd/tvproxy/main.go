@@ -158,9 +158,8 @@ func main() {
 	if err == nil && adminUser != nil {
 		adminUserID = adminUser.ID
 	}
-	settingsService := service.NewSettingsService(settingsStore, profileStore, log)
+	settingsService := service.NewSettingsService(settingsStore, log)
 	settingsService.LoadDebugFlag(ctx)
-	settingsService.RecomposeDefaultProfiles(ctx)
 
 	wgService := service.NewWireGuardService(settingsService, log)
 	if err := wgService.Start(ctx); err != nil {
@@ -174,12 +173,14 @@ func main() {
 		logoTimeout = cfg.Settings.Network.LogoDownloadTimeout
 	}
 	logoCache := logocache.New(filepath.Join(dataDir, "static", "logocache"), cfg, logoTimeout)
-	logoService := service.NewLogoService(logoStore, logoCache, log)
+	logoService := service.NewLogoService(logoStore, epgStore, logoCache, log)
 
 	satipService := service.NewSatIPService(satipSourceStore, streamStore, channelStore, log)
 	m3uService := service.NewM3UService(m3uAccountStore, streamStore, channelStore, logoService, cfg, wgHTTPClient, log)
+	m3uService.CleanupOrphanedStreams(ctx)
 	channelService := service.NewChannelService(channelStore, channelGroupStore, streamStore, log)
 	epgService := service.NewEPGService(epgSourceStore, epgStore, cfg, wgHTTPClient, log)
+	epgService.CleanupOrphanedEPGData(ctx)
 	activityService := service.NewActivityService()
 	clientService := service.NewClientService(clientStore, profileStore, settingsService, log)
 	proxyService := service.NewProxyService(channelStore, streamStore, profileStore, clientService, activityService, cfg, wgHTTPClient, log)
@@ -202,7 +203,7 @@ func main() {
 	channelHandler := handler.NewChannelHandler(channelService, logoService)
 	channelGroupHandler := handler.NewChannelGroupHandler(channelService)
 	logoHandler := handler.NewLogoHandler(logoService)
-	streamProfileHandler := handler.NewStreamProfileHandler(profileStore, settingsService)
+	streamProfileHandler := handler.NewStreamProfileHandler(profileStore)
 	epgSourceHandler := handler.NewEPGSourceHandler(epgService)
 	epgDataHandler := handler.NewEPGDataHandler(epgStore, epgStore)
 	hdhrHandler := handler.NewHDHRHandler(hdhrService, proxyService, cfg)
@@ -217,7 +218,6 @@ func main() {
 		epgSourceStore, hdhrStore, userStore, channelStore, channelGroupStore,
 		scheduledRecStore, clientDefs, func() {
 			service.SeedClientDefaults(ctx, clientDefs, profileStore, clientStore, settingsStore)
-			settingsService.RecomposeDefaultProfiles(ctx)
 		},
 	)
 	settingsHandler := handler.NewSettingsHandler(settingsService, exportService, dataResetter, authService, streamStore, epgStore)
@@ -332,6 +332,8 @@ func main() {
 			})
 		})
 
+		r.Get("/api/satip/signal", satipHandler.Signal)
+		r.Get("/api/satip/transmitters", satipHandler.ListTransmitters)
 		r.Route("/api/satip/sources", func(r chi.Router) {
 			r.Get("/", satipHandler.List)
 			r.Get("/{id}", satipHandler.Get)

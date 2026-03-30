@@ -46,11 +46,11 @@ func NewRecordingStore(rootDir string, log zerolog.Logger) *RecordingStoreImpl {
 	}
 }
 
-func (s *RecordingStoreImpl) GetProbe(streamID string) (*ffmpeg.ProbeResult, error) {
-	if err := validatePathComponent(streamID); err != nil {
-		return nil, fmt.Errorf("invalid stream ID: %w", err)
+func (s *RecordingStoreImpl) GetProbe(streamHash string) (*ffmpeg.ProbeResult, error) {
+	if err := validatePathComponent(streamHash); err != nil {
+		return nil, fmt.Errorf("invalid stream hash: %w", err)
 	}
-	path := filepath.Join(s.rootDir, streamID, "probe.json")
+	path := filepath.Join(s.rootDir, streamHash, "probe.json")
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -68,15 +68,15 @@ func (s *RecordingStoreImpl) GetProbe(streamID string) (*ffmpeg.ProbeResult, err
 	return &result, nil
 }
 
-func (s *RecordingStoreImpl) SaveProbe(streamID string, result *ffmpeg.ProbeResult) error {
-	if err := validatePathComponent(streamID); err != nil {
-		return fmt.Errorf("invalid stream ID: %w", err)
+func (s *RecordingStoreImpl) SaveProbe(streamHash string, result *ffmpeg.ProbeResult) error {
+	if err := validatePathComponent(streamHash); err != nil {
+		return fmt.Errorf("invalid stream hash: %w", err)
 	}
 	if !isUsefulProbe(result) {
 		return nil
 	}
 
-	dir := filepath.Join(s.rootDir, streamID)
+	dir := filepath.Join(s.rootDir, streamHash)
 	path := filepath.Join(dir, "probe.json")
 
 	if err := os.MkdirAll(dir, 0755); err != nil {
@@ -90,6 +90,17 @@ func (s *RecordingStoreImpl) SaveProbe(streamID string, result *ffmpeg.ProbeResu
 	return os.WriteFile(path, data, 0644)
 }
 
+func (s *RecordingStoreImpl) InvalidateProbe(streamHash string) error {
+	if err := validatePathComponent(streamHash); err != nil {
+		return fmt.Errorf("invalid stream hash: %w", err)
+	}
+	path := filepath.Join(s.rootDir, streamHash, "probe.json")
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return nil
+}
+
 func isUsefulProbe(result *ffmpeg.ProbeResult) bool {
 	if result == nil {
 		return false
@@ -97,15 +108,15 @@ func isUsefulProbe(result *ffmpeg.ProbeResult) bool {
 	return result.Video != nil || len(result.AudioTracks) > 0
 }
 
-func (s *RecordingStoreImpl) GetMeta(streamID, filename string) (*RecordingMeta, error) {
-	if err := validatePathComponent(streamID); err != nil {
-		return nil, fmt.Errorf("invalid stream ID: %w", err)
+func (s *RecordingStoreImpl) GetMeta(streamHash, filename string) (*RecordingMeta, error) {
+	if err := validatePathComponent(streamHash); err != nil {
+		return nil, fmt.Errorf("invalid stream hash: %w", err)
 	}
 	if err := validatePathComponent(filename); err != nil {
 		return nil, fmt.Errorf("invalid filename: %w", err)
 	}
 	jsonName := strings.TrimSuffix(filename, filepath.Ext(filename)) + ".json"
-	data, err := os.ReadFile(filepath.Join(s.rootDir, streamID, jsonName))
+	data, err := os.ReadFile(filepath.Join(s.rootDir, streamHash, "recording", jsonName))
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, nil
@@ -119,13 +130,13 @@ func (s *RecordingStoreImpl) GetMeta(streamID, filename string) (*RecordingMeta,
 	return &meta, nil
 }
 
-func (s *RecordingStoreImpl) Save(streamID string, srcPath string, meta RecordingMeta) (string, error) {
-	if err := validatePathComponent(streamID); err != nil {
-		return "", fmt.Errorf("invalid stream ID: %w", err)
+func (s *RecordingStoreImpl) Save(streamHash string, srcPath string, meta RecordingMeta) (string, error) {
+	if err := validatePathComponent(streamHash); err != nil {
+		return "", fmt.Errorf("invalid stream hash: %w", err)
 	}
-	dir := filepath.Join(s.rootDir, streamID)
+	dir := filepath.Join(s.rootDir, streamHash, "recording")
 	if err := os.MkdirAll(dir, 0755); err != nil {
-		return "", fmt.Errorf("creating stream dir: %w", err)
+		return "", fmt.Errorf("creating recording dir: %w", err)
 	}
 
 	baseName := ffmpeg.SanitizeFilename(meta.ProgramTitle, meta.StoppedAt)
@@ -173,9 +184,9 @@ func (s *RecordingStoreImpl) List(userID string, isAdmin bool) ([]RecordingEntry
 		if !sd.IsDir() {
 			continue
 		}
-		streamID := sd.Name()
-		dir := filepath.Join(s.rootDir, streamID)
-		files, err := os.ReadDir(dir)
+		streamHash := sd.Name()
+		recDir := filepath.Join(s.rootDir, streamHash, "recording")
+		files, err := os.ReadDir(recDir)
 		if err != nil {
 			continue
 		}
@@ -189,14 +200,14 @@ func (s *RecordingStoreImpl) List(userID string, isAdmin bool) ([]RecordingEntry
 			}
 
 			entry := RecordingEntry{
-				StreamID: streamID,
+				StreamID: streamHash,
 				Filename: f.Name(),
 				Size:     info.Size(),
 				ModTime:  info.ModTime().Format(time.RFC3339),
 			}
 
 			jsonName := strings.TrimSuffix(f.Name(), ".mp4") + ".json"
-			jsonPath := filepath.Join(dir, jsonName)
+			jsonPath := filepath.Join(recDir, jsonName)
 			if data, err := os.ReadFile(jsonPath); err == nil {
 				var meta RecordingMeta
 				if json.Unmarshal(data, &meta) == nil {
@@ -222,49 +233,47 @@ func (s *RecordingStoreImpl) List(userID string, isAdmin bool) ([]RecordingEntry
 	return entries, nil
 }
 
-func (s *RecordingStoreImpl) FilePath(streamID, filename string) (string, error) {
-	if err := validatePathComponent(streamID); err != nil {
-		return "", fmt.Errorf("invalid stream ID: %w", err)
+func (s *RecordingStoreImpl) FilePath(streamHash, filename string) (string, error) {
+	if err := validatePathComponent(streamHash); err != nil {
+		return "", fmt.Errorf("invalid stream hash: %w", err)
 	}
 	if err := validatePathComponent(filename); err != nil {
 		return "", fmt.Errorf("invalid filename: %w", err)
 	}
-	fullPath := filepath.Join(s.rootDir, streamID, filename)
+	fullPath := filepath.Join(s.rootDir, streamHash, "recording", filename)
 	if _, err := os.Stat(fullPath); os.IsNotExist(err) {
 		return "", fmt.Errorf("file not found")
 	}
 	return fullPath, nil
 }
 
-func (s *RecordingStoreImpl) Delete(streamID, filename string) error {
-	if err := validatePathComponent(streamID); err != nil {
-		return fmt.Errorf("invalid stream ID: %w", err)
+func (s *RecordingStoreImpl) Delete(streamHash, filename string) error {
+	if err := validatePathComponent(streamHash); err != nil {
+		return fmt.Errorf("invalid stream hash: %w", err)
 	}
 	if err := validatePathComponent(filename); err != nil {
 		return fmt.Errorf("invalid filename: %w", err)
 	}
 
-	dir := filepath.Join(s.rootDir, streamID)
-	mp4Path := filepath.Join(dir, filename)
+	recDir := filepath.Join(s.rootDir, streamHash, "recording")
+	mp4Path := filepath.Join(recDir, filename)
 	if err := os.Remove(mp4Path); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("removing recording file: %w", err)
 	}
 
 	jsonName := strings.TrimSuffix(filename, filepath.Ext(filename)) + ".json"
-	os.Remove(filepath.Join(dir, jsonName))
+	os.Remove(filepath.Join(recDir, jsonName))
 
-	remaining, err := os.ReadDir(dir)
-	if err == nil {
-		allProbe := true
-		for _, r := range remaining {
-			if r.Name() != "probe.json" {
-				allProbe = false
-				break
-			}
-		}
-		if len(remaining) == 0 || allProbe {
-			os.RemoveAll(dir)
-		}
+	remaining, _ := os.ReadDir(recDir)
+	if len(remaining) == 0 {
+		os.Remove(recDir)
+	}
+
+	streamDir := filepath.Join(s.rootDir, streamHash)
+	top, _ := os.ReadDir(streamDir)
+	probeOnly := len(top) == 0 || (len(top) == 1 && top[0].Name() == "probe.json")
+	if probeOnly {
+		os.RemoveAll(streamDir)
 	}
 
 	return nil

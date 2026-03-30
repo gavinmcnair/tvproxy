@@ -8,7 +8,6 @@ import (
 
 	"github.com/rs/zerolog"
 
-	"github.com/gavinmcnair/tvproxy/pkg/ffmpeg"
 	"github.com/gavinmcnair/tvproxy/pkg/models"
 	"github.com/gavinmcnair/tvproxy/pkg/store"
 )
@@ -68,17 +67,13 @@ func (s *ClientService) GetClient(ctx context.Context, id string) (*models.Clien
 }
 
 func (s *ClientService) CreateClient(ctx context.Context, client *models.Client, rules []models.ClientMatchRule) error {
-	args := ffmpeg.ComposeStreamProfileArgs(ffmpeg.ComposeOptions{SourceType: "m3u", HWAccel: "none", VideoCodec: "copy", Container: "mpegts"})
 	profile := &models.StreamProfile{
 		Name:       client.Name,
 		StreamMode: "ffmpeg",
-		SourceType: "m3u",
 		HWAccel:    "none",
-		VideoCodec: "copy",
 		Container:  "mpegts",
-		FPSMode:    "auto",
 		Command:    "ffmpeg",
-		Args:       args,
+		AutoDetect: true,
 		IsClient:   true,
 	}
 	if err := s.streamProfileRepo.Create(ctx, profile); err != nil {

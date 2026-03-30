@@ -236,6 +236,29 @@ func (s *EPGService) refreshSource(ctx context.Context, source *models.EPGSource
 	return nil
 }
 
+func (s *EPGService) CleanupOrphanedEPGData(ctx context.Context) {
+	sources, err := s.epgSourceStore.List(ctx)
+	if err != nil {
+		s.log.Error().Err(err).Msg("listing epg sources for orphan cleanup")
+		return
+	}
+	knownIDs := make([]string, 0, len(sources))
+	for _, src := range sources {
+		knownIDs = append(knownIDs, src.ID)
+	}
+	deleted, err := s.epgStore.DeleteOrphanedEPGData(ctx, knownIDs)
+	if err != nil {
+		s.log.Error().Err(err).Msg("deleting orphaned epg data")
+		return
+	}
+	if deleted > 0 {
+		s.log.Info().Int("deleted", deleted).Msg("removed orphaned epg channels")
+		if err := s.epgStore.Save(); err != nil {
+			s.log.Error().Err(err).Msg("saving epg store after orphan cleanup")
+		}
+	}
+}
+
 func (s *EPGService) RefreshAllSources(ctx context.Context) error {
 	sources, err := s.epgSourceStore.List(ctx)
 	if err != nil {

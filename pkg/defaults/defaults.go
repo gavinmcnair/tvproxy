@@ -17,9 +17,8 @@ type MatchRule struct {
 type ClientDefault struct {
 	Name       string      `json:"name"`
 	Priority   int         `json:"priority"`
-	SourceType string      `json:"source_type"`
+	AutoDetect bool        `json:"auto_detect"`
 	HWAccel    string      `json:"hwaccel"`
-	VideoCodec string      `json:"video_codec"`
 	Container  string      `json:"container"`
 	MatchRules []MatchRule `json:"match_rules"`
 }

@@ -90,6 +90,12 @@ func (s *SatIPSourceStoreImpl) Create(_ context.Context, source *models.SatIPSou
 	source.UpdatedAt = now
 
 	s.mu.Lock()
+	for _, src := range s.sources {
+		if src.Name == source.Name {
+			s.mu.Unlock()
+			return fmt.Errorf("satip source with name %q already exists", source.Name)
+		}
+	}
 	s.sources = append(s.sources, *source)
 	s.mu.Unlock()
 

@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"strings"
 
 	"github.com/rs/zerolog"
 
@@ -11,18 +12,20 @@ import (
 )
 
 type LogoService struct {
-	store store.LogoStore
-	cache *logocache.Cache
-	log   zerolog.Logger
-	rev   *store.Revision
+	store    store.LogoStore
+	epgStore store.EPGReader
+	cache    *logocache.Cache
+	log      zerolog.Logger
+	rev      *store.Revision
 }
 
-func NewLogoService(logoStore store.LogoStore, cache *logocache.Cache, log zerolog.Logger) *LogoService {
+func NewLogoService(logoStore store.LogoStore, epgStore store.EPGReader, cache *logocache.Cache, log zerolog.Logger) *LogoService {
 	return &LogoService{
-		store: logoStore,
-		cache: cache,
-		log:   log.With().Str("service", "logo").Logger(),
-		rev:   store.NewRevision(),
+		store:    logoStore,
+		epgStore: epgStore,
+		cache:    cache,
+		log:      log.With().Str("service", "logo").Logger(),
+		rev:      store.NewRevision(),
 	}
 }
 
@@ -70,12 +73,17 @@ func (s *LogoService) Resolve(url string) string {
 
 func (s *LogoService) ResolveChannel(ch models.Channel) string {
 	if ch.LogoID != nil {
-		if logo, err := s.store.GetByID(context.Background(), *ch.LogoID); err == nil {
+		if logo, err := s.store.GetByID(context.Background(), *ch.LogoID); err == nil && logo.URL != logocache.Placeholder && !strings.HasPrefix(logo.URL, "data:") {
 			return s.cache.Resolve(logo.URL)
 		}
 	}
-	if ch.Logo != "" {
+	if ch.Logo != "" && ch.Logo != logocache.Placeholder && !strings.HasPrefix(ch.Logo, "data:") {
 		return s.cache.Resolve(ch.Logo)
+	}
+	if ch.TvgID != "" && s.epgStore != nil {
+		if icon := s.epgStore.GetIconByChannelID(context.Background(), ch.TvgID); icon != "" {
+			return s.cache.Resolve(icon)
+		}
 	}
 	return logocache.Placeholder
 }

@@ -3,9 +3,8 @@
     {
       "name": "Plex",
       "priority": 10,
-      "source_type": "m3u",
+      "auto_detect": true,
       "hwaccel": "default",
-      "video_codec": "default",
       "container": "mpegts",
       "match_rules": [
         {"header_name": "User-Agent", "match_type": "contains", "match_value": "Lavf/"},
@@ -15,9 +14,8 @@
     {
       "name": "VLC",
       "priority": 20,
-      "source_type": "m3u",
+      "auto_detect": true,
       "hwaccel": "default",
-      "video_codec": "default",
       "container": "matroska",
       "match_rules": [
         {"header_name": "User-Agent", "match_type": "contains", "match_value": "VLC/"}
@@ -26,9 +24,8 @@
     {
       "name": "Skybox",
       "priority": 25,
-      "source_type": "m3u",
+      "auto_detect": true,
       "hwaccel": "default",
-      "video_codec": "default",
       "container": "mpegts",
       "match_rules": [
         {"header_name": "User-Agent", "match_type": "contains", "match_value": "libmpv"},
@@ -38,9 +35,8 @@
     {
       "name": "4XVR",
       "priority": 30,
-      "source_type": "m3u",
+      "auto_detect": true,
       "hwaccel": "default",
-      "video_codec": "default",
       "container": "matroska",
       "match_rules": [
         {"header_name": "User-Agent", "match_type": "contains", "match_value": "Dalvik/2.1.0"},
@@ -50,9 +46,8 @@
     {
       "name": "LG TV",
       "priority": 40,
-      "source_type": "m3u",
+      "auto_detect": true,
       "hwaccel": "default",
-      "video_codec": "default",
       "container": "mpegts",
       "match_rules": [
         {"header_name": "User-Agent", "match_type": "contains", "match_value": "Web0S"}
@@ -61,9 +56,8 @@
     {
       "name": "Samsung TV",
       "priority": 45,
-      "source_type": "m3u",
+      "auto_detect": true,
       "hwaccel": "default",
-      "video_codec": "default",
       "container": "mpegts",
       "match_rules": [
         {"header_name": "User-Agent", "match_type": "contains", "match_value": "SMART-TV"}
@@ -72,9 +66,8 @@
     {
       "name": "Panasonic TV",
       "priority": 46,
-      "source_type": "m3u",
+      "auto_detect": true,
       "hwaccel": "default",
-      "video_codec": "default",
       "container": "mpegts",
       "match_rules": [
         {"header_name": "User-Agent", "match_type": "contains", "match_value": "Viera"}
@@ -83,9 +76,8 @@
     {
       "name": "iPhone",
       "priority": 50,
-      "source_type": "m3u",
+      "auto_detect": true,
       "hwaccel": "default",
-      "video_codec": "default",
       "container": "mp4",
       "match_rules": [
         {"header_name": "User-Agent", "match_type": "contains", "match_value": "iPhone"}
@@ -94,9 +86,8 @@
     {
       "name": "Safari",
       "priority": 55,
-      "source_type": "m3u",
+      "auto_detect": true,
       "hwaccel": "default",
-      "video_codec": "default",
       "container": "mp4",
       "match_rules": [
         {"header_name": "User-Agent", "match_type": "contains", "match_value": "Version/"},
@@ -106,9 +97,8 @@
     {
       "name": "Browser",
       "priority": 100,
-      "source_type": "m3u",
+      "auto_detect": true,
       "hwaccel": "default",
-      "video_codec": "default",
       "container": "mp4",
       "match_rules": [
         {"header_name": "User-Agent", "match_type": "contains", "match_value": "Mozilla/"}

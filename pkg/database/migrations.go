@@ -364,7 +364,7 @@ func addDefaultHWAccelMigration(ctx context.Context, db *sql.DB) error {
 		return err
 	}
 
-	args := ffmpeg.ComposeStreamProfileArgs(ffmpeg.ComposeOptions{SourceType: "m3u", HWAccel: "none", VideoCodec: "av1", Container: "mp4"})
+	_, args := ffmpeg.Build(ffmpeg.BuildOptions{HWAccel: "none", VideoCodec: "av1", Container: "mp4"})
 	_, err = db.ExecContext(ctx,
 		`UPDATE stream_profiles SET hwaccel = 'none', args = ? WHERE name = 'Recording' AND is_system = 1`,
 		args)

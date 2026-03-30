@@ -96,9 +96,9 @@ func setupFullEnv(t *testing.T) *fullTestEnv {
 	require.NoError(t, err)
 	adminUserID := adminUser.ID
 
-	settingsService := service.NewSettingsService(settingsStore, profileStore, log)
+	settingsService := service.NewSettingsService(settingsStore, log)
 	testLogoCache := logocache.New(filepath.Join(dir, "static", "logocache"), cfg, 5*time.Second)
-	logoService := service.NewLogoService(logoStore, testLogoCache, log)
+	logoService := service.NewLogoService(logoStore, epgStore, testLogoCache, log)
 
 	satipSourceStore := store.NewSatIPSourceStore(filepath.Join(dir, "satip_sources.json"))
 	satipService := service.NewSatIPService(satipSourceStore, streamStore, channelStore, log)
@@ -126,7 +126,7 @@ func setupFullEnv(t *testing.T) *fullTestEnv {
 	channelHandler := NewChannelHandler(channelService, logoService)
 	channelGroupHandler := NewChannelGroupHandler(channelService)
 	logoHandler := NewLogoHandler(logoService)
-	streamProfileHandler := NewStreamProfileHandler(profileStore, settingsService)
+	streamProfileHandler := NewStreamProfileHandler(profileStore)
 	epgSourceHandler := NewEPGSourceHandler(epgService)
 	epgDataHandler := NewEPGDataHandler(epgStore, epgStore)
 	hdhrHandler := NewHDHRHandler(hdhrService, proxyService, cfg)
@@ -206,6 +206,7 @@ func setupFullEnv(t *testing.T) *fullTestEnv {
 			})
 		})
 
+		r.Get("/api/satip/transmitters", satipHandler.ListTransmitters)
 		r.Route("/api/satip/sources", func(r chi.Router) {
 			r.Get("/", satipHandler.List)
 			r.Get("/{id}", satipHandler.Get)
@@ -684,8 +685,7 @@ func TestIntegration_StreamProfileCRUD(t *testing.T) {
 		assert.Equal(t, "qsv", profile["hwaccel"])
 		assert.Equal(t, "h264", profile["video_codec"])
 		assert.Equal(t, "ffmpeg", profile["command"])
-		assert.Contains(t, profile["args"], "h264_qsv")
-		assert.Nil(t, profile["custom_args"])
+		assert.Empty(t, profile["args"])
 		createdProfileID1 = profile["id"].(string)
 	})
 
@@ -699,8 +699,7 @@ func TestIntegration_StreamProfileCRUD(t *testing.T) {
 		decodeResponse(t, rec, &profile)
 		assert.Equal(t, "ffmpeg", profile["command"])
 		assert.Equal(t, "-b:v 4M", profile["custom_args"])
-		assert.Contains(t, profile["args"], "-b:v 4M")
-		assert.Contains(t, profile["args"], "-i {input}")
+		assert.Empty(t, profile["args"])
 		createdProfileID2 = profile["id"].(string)
 	})
 
@@ -752,7 +751,7 @@ func TestIntegration_StreamProfileCRUD(t *testing.T) {
 		assert.Equal(t, "SAT>IP NVENC AV1", profile["name"])
 		assert.Equal(t, "nvenc", profile["hwaccel"])
 		assert.Equal(t, "av1", profile["video_codec"])
-		assert.Contains(t, profile["args"], "av1_nvenc")
+		assert.Empty(t, profile["args"])
 	})
 
 	t.Run("delete non-system profile", func(t *testing.T) {
@@ -2957,6 +2956,7 @@ func TestIntegration_SatIPSourceCRUD(t *testing.T) {
 	t.Run("create requires admin", func(t *testing.T) {
 		rec := doRequest(t, env, "POST", "/api/satip/sources/", map[string]any{
 			"name": "Test Source", "host": "192.168.1.100", "http_port": 8875, "is_enabled": true,
+			"transmitter_file": "dvb-t/uk-CrystalPalace",
 		}, env.userToken)
 		assert.Equal(t, http.StatusForbidden, rec.Code)
 	})
@@ -2965,6 +2965,7 @@ func TestIntegration_SatIPSourceCRUD(t *testing.T) {
 	t.Run("create source", func(t *testing.T) {
 		rec := doRequest(t, env, "POST", "/api/satip/sources/", map[string]any{
 			"name": "Home SAT>IP", "host": "192.168.1.100", "http_port": 8875, "is_enabled": true,
+			"transmitter_file": "dvb-t/uk-CrystalPalace",
 		}, env.adminToken)
 		assert.Equal(t, http.StatusCreated, rec.Code)
 		var source map[string]any
@@ -2973,6 +2974,7 @@ func TestIntegration_SatIPSourceCRUD(t *testing.T) {
 		assert.Equal(t, "192.168.1.100", source["host"])
 		assert.Equal(t, float64(8875), source["http_port"])
 		assert.Equal(t, true, source["is_enabled"])
+		assert.Equal(t, "dvb-t/uk-CrystalPalace", source["transmitter_file"])
 		assert.NotEmpty(t, source["id"])
 		sourceID = source["id"].(string)
 	})
@@ -2997,6 +2999,7 @@ func TestIntegration_SatIPSourceCRUD(t *testing.T) {
 	t.Run("update source", func(t *testing.T) {
 		rec := doRequest(t, env, "PUT", "/api/satip/sources/"+sourceID, map[string]any{
 			"name": "Updated SAT>IP", "host": "192.168.1.200", "http_port": 8875, "is_enabled": false,
+			"transmitter_file": "dvb-t/uk-Mendip",
 		}, env.adminToken)
 		assert.Equal(t, http.StatusOK, rec.Code)
 		var source map[string]any
@@ -3004,6 +3007,7 @@ func TestIntegration_SatIPSourceCRUD(t *testing.T) {
 		assert.Equal(t, "Updated SAT>IP", source["name"])
 		assert.Equal(t, "192.168.1.200", source["host"])
 		assert.Equal(t, false, source["is_enabled"])
+		assert.Equal(t, "dvb-t/uk-Mendip", source["transmitter_file"])
 	})
 
 	t.Run("scan status", func(t *testing.T) {

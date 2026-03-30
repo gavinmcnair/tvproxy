@@ -7,25 +7,22 @@ import (
 
 	"github.com/rs/zerolog"
 
-	"github.com/gavinmcnair/tvproxy/pkg/ffmpeg"
 	"github.com/gavinmcnair/tvproxy/pkg/models"
 	"github.com/gavinmcnair/tvproxy/pkg/store"
 )
 
 type SettingsService struct {
-	settingsStore     store.SettingsStore
-	streamProfileRepo store.ProfileStore
-	debug             atomic.Bool
-	normalLogLevel    zerolog.Level
-	log               zerolog.Logger
+	settingsStore  store.SettingsStore
+	debug          atomic.Bool
+	normalLogLevel zerolog.Level
+	log            zerolog.Logger
 }
 
-func NewSettingsService(settingsStore store.SettingsStore, streamProfileRepo store.ProfileStore, log zerolog.Logger) *SettingsService {
+func NewSettingsService(settingsStore store.SettingsStore, log zerolog.Logger) *SettingsService {
 	return &SettingsService{
-		settingsStore:     settingsStore,
-		streamProfileRepo: streamProfileRepo,
-		normalLogLevel:    zerolog.GlobalLevel(),
-		log:               log.With().Str("service", "settings").Logger(),
+		settingsStore:  settingsStore,
+		normalLogLevel: zerolog.GlobalLevel(),
+		log:            log.With().Str("service", "settings").Logger(),
 	}
 }
 
@@ -59,72 +56,31 @@ func (s *SettingsService) Set(ctx context.Context, key, value string) error {
 	if err := s.settingsStore.Set(ctx, key, value); err != nil {
 		return fmt.Errorf("setting %q: %w", key, err)
 	}
-	switch key {
-	case "debug_enabled":
+	if key == "debug_enabled" {
 		s.setDebug(value == "true")
-	case "default_hwaccel", "default_video_codec":
-		s.RecomposeDefaultProfiles(ctx)
 	}
 	return nil
 }
 
-func (s *SettingsService) RecomposeDefaultProfiles(ctx context.Context) {
-	if s.streamProfileRepo == nil {
-		return
-	}
-	profiles, err := s.streamProfileRepo.List(ctx)
-	if err != nil {
-		return
-	}
-
-	hwaccel := "none"
+func (s *SettingsService) ResolveGlobalDefaults(ctx context.Context) (hwaccel, videoCodec string) {
+	hwaccel = "none"
+	videoCodec = "copy"
 	if val, _ := s.Get(ctx, "default_hwaccel"); val != "" {
 		hwaccel = val
 	}
-	videoCodec := "copy"
 	if val, _ := s.Get(ctx, "default_video_codec"); val != "" {
 		videoCodec = val
 	}
-
-	s.log.Info().Str("hwaccel", hwaccel).Str("video_codec", videoCodec).Msg("recomposing default profiles")
-
-	for i := range profiles {
-		p := &profiles[i]
-		if p.HWAccel != "default" && p.VideoCodec != "default" {
-			continue
-		}
-		if p.UseCustomArgs {
-			continue
-		}
-		resolvedHW := p.HWAccel
-		if resolvedHW == "default" {
-			resolvedHW = hwaccel
-		}
-		resolvedCodec := p.VideoCodec
-		if resolvedCodec == "default" {
-			resolvedCodec = videoCodec
-		}
-		p.Args = ffmpeg.ComposeStreamProfileArgs(ffmpeg.ComposeOptions{
-			SourceType:  p.SourceType,
-			HWAccel:     resolvedHW,
-			VideoCodec:  resolvedCodec,
-			Container:   p.Container,
-			Deinterlace: p.Deinterlace,
-			FPSMode:     p.FPSMode,
-		})
-		s.log.Info().Str("profile", p.Name).Str("hwaccel_db", p.HWAccel).Str("codec_db", p.VideoCodec).Str("resolved_hw", resolvedHW).Str("resolved_codec", resolvedCodec).Msg("recomposed profile")
-		if err := s.streamProfileRepo.Update(ctx, p); err != nil {
-			s.log.Error().Err(err).Str("profile", p.Name).Msg("failed to recompose profile with default values")
-		}
-	}
+	return hwaccel, videoCodec
 }
 
+
 var apiVisibleKeys = map[string]bool{
-	"vod_profile_selector": true,
-	"default_hwaccel":      true,
-	"default_video_codec":  true,
-	"dlna_enabled":         true,
-	"debug_enabled":        true,
+	"vod_profile_selector":       true,
+	"default_hwaccel":            true,
+	"default_video_codec":        true,
+	"dlna_enabled":               true,
+	"debug_enabled":              true,
 }
 
 func IsAPISettable(key string) bool {

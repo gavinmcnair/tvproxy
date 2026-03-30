@@ -2,7 +2,9 @@ package ffmpeg
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
+	"fmt"
 	"io"
 	"math"
 	"os/exec"
@@ -11,6 +13,11 @@ import (
 
 	"github.com/gavinmcnair/tvproxy/pkg/defaults"
 )
+
+func StreamHash(url string) string {
+	sum := sha256.Sum256([]byte(url))
+	return fmt.Sprintf("%x", sum)[:16]
+}
 
 type VideoInfo struct {
 	Codec          string `json:"codec"`
@@ -24,14 +31,25 @@ type VideoInfo struct {
 	BitRate        string `json:"bit_rate,omitempty"`
 }
 
+type StreamDisposition struct {
+	VisualImpaired int `json:"visual_impaired"`
+	Dependent      int `json:"dependent"`
+	Descriptions   int `json:"descriptions"`
+}
+
+func (d StreamDisposition) IsSkippable() bool {
+	return d.VisualImpaired != 0 || d.Dependent != 0 || d.Descriptions != 0
+}
+
 type AudioTrack struct {
-	Index      int    `json:"index"`
-	Language   string `json:"language"`
-	Codec      string `json:"codec"`
-	Profile    string `json:"profile,omitempty"`
-	SampleRate string `json:"sample_rate,omitempty"`
-	Channels   int    `json:"channels,omitempty"`
-	BitRate    string `json:"bit_rate,omitempty"`
+	Index       int                `json:"index"`
+	Language    string             `json:"language"`
+	Codec       string             `json:"codec"`
+	Profile     string             `json:"profile,omitempty"`
+	SampleRate  string             `json:"sample_rate,omitempty"`
+	Channels    int                `json:"channels,omitempty"`
+	BitRate     string             `json:"bit_rate,omitempty"`
+	Disposition StreamDisposition  `json:"disposition,omitempty"`
 }
 
 type ProbeResult struct {
@@ -39,6 +57,8 @@ type ProbeResult struct {
 	IsVOD       bool         `json:"is_vod"`
 	Width       int          `json:"width"`
 	Height      int          `json:"height"`
+	HasVideo    bool         `json:"has_video"`
+	SourceType  string       `json:"source_type,omitempty"`
 	FormatName  string       `json:"format_name,omitempty"`
 	Video       *VideoInfo   `json:"video,omitempty"`
 	AudioTracks []AudioTrack `json:"audio_tracks,omitempty"`
@@ -55,22 +75,23 @@ type ffprobeFormat struct {
 }
 
 type ffprobeStream struct {
-	CodecType      string            `json:"codec_type"`
-	CodecName      string            `json:"codec_name"`
-	Profile        string            `json:"profile"`
-	Index          int               `json:"index"`
-	Width          int               `json:"width"`
-	Height         int               `json:"height"`
-	PixFmt         string            `json:"pix_fmt"`
-	ColorSpace     string            `json:"color_space"`
-	ColorTransfer  string            `json:"color_transfer"`
-	ColorPrimaries string            `json:"color_primaries"`
-	FieldOrder     string            `json:"field_order"`
-	RFrameRate     string            `json:"r_frame_rate"`
-	SampleRate     string            `json:"sample_rate"`
-	Channels       int               `json:"channels"`
-	BitRate        string            `json:"bit_rate"`
-	Tags           map[string]string `json:"tags"`
+	CodecType      string             `json:"codec_type"`
+	CodecName      string             `json:"codec_name"`
+	Profile        string             `json:"profile"`
+	Index          int                `json:"index"`
+	Width          int                `json:"width"`
+	Height         int                `json:"height"`
+	PixFmt         string             `json:"pix_fmt"`
+	ColorSpace     string             `json:"color_space"`
+	ColorTransfer  string             `json:"color_transfer"`
+	ColorPrimaries string             `json:"color_primaries"`
+	FieldOrder     string             `json:"field_order"`
+	RFrameRate     string             `json:"r_frame_rate"`
+	SampleRate     string             `json:"sample_rate"`
+	Channels       int                `json:"channels"`
+	BitRate        string             `json:"bit_rate"`
+	Tags           map[string]string  `json:"tags"`
+	Disposition    StreamDisposition  `json:"disposition"`
 }
 
 func NormalizeVideoCodec(ffprobeCodec string) string {
@@ -119,7 +140,7 @@ func Probe(ctx context.Context, url, userAgent string) (*ProbeResult, error) {
 	ctx, cancel := context.WithTimeout(ctx, s.ProbeTimeout)
 	defer cancel()
 
-	args := probeArgs(s)
+	args := probeArgs(s, url)
 	if userAgent != "" {
 		args = append(args, "-user_agent", userAgent)
 	}
@@ -139,7 +160,7 @@ func ProbeReader(ctx context.Context, reader io.Reader) (*ProbeResult, error) {
 	ctx, cancel := context.WithTimeout(ctx, s.ProbeTimeout)
 	defer cancel()
 
-	args := probeArgs(s)
+	args := probeArgs(s, "")
 	args = append(args, "pipe:0")
 
 	cmd := exec.CommandContext(ctx, "ffprobe", args...)
@@ -152,15 +173,26 @@ func ProbeReader(ctx context.Context, reader io.Reader) (*ProbeResult, error) {
 	return parseProbeOutput(out)
 }
 
-func probeArgs(s *defaults.FFmpegSettings) []string {
-	return []string{
-		"-v", "quiet",
-		"-analyzeduration", strconv.Itoa(s.AnalyzeDuration),
-		"-probesize", strconv.Itoa(s.ProbeSize),
+func probeArgs(s *defaults.FFmpegSettings, url string) []string {
+	analyzeDuration := s.AnalyzeDuration
+	probeSize := s.ProbeSize
+
+	args := []string{"-v", "quiet"}
+
+	if strings.HasPrefix(url, "rtsp://") || strings.HasPrefix(url, "rtsps://") {
+		args = append(args, "-rtsp_transport", "tcp")
+		analyzeDuration = 3000000
+		probeSize = 3000000
+	}
+
+	args = append(args,
+		"-analyzeduration", strconv.Itoa(analyzeDuration),
+		"-probesize", strconv.Itoa(probeSize),
 		"-print_format", "json",
 		"-show_format",
 		"-show_streams",
-	}
+	)
+	return args
 }
 
 func parseProbeOutput(out []byte) (*ProbeResult, error) {
@@ -186,6 +218,7 @@ func parseProbeOutput(out []byte) (*ProbeResult, error) {
 		if s.CodecType == "video" && s.Width > 0 && result.Width == 0 {
 			result.Width = s.Width
 			result.Height = s.Height
+			result.HasVideo = true
 			result.Video = &VideoInfo{
 				Codec:          s.CodecName,
 				Profile:        s.Profile,
@@ -198,19 +231,20 @@ func parseProbeOutput(out []byte) (*ProbeResult, error) {
 				BitRate:        s.BitRate,
 			}
 		}
-		if s.CodecType == "audio" {
+		if s.CodecType == "audio" && !s.Disposition.IsSkippable() {
 			lang := ""
 			if s.Tags != nil {
 				lang = s.Tags["language"]
 			}
 			result.AudioTracks = append(result.AudioTracks, AudioTrack{
-				Index:      audioIdx,
-				Language:   lang,
-				Codec:      s.CodecName,
-				Profile:    s.Profile,
-				SampleRate: s.SampleRate,
-				Channels:   s.Channels,
-				BitRate:    s.BitRate,
+				Index:       audioIdx,
+				Language:    lang,
+				Codec:       s.CodecName,
+				Profile:     s.Profile,
+				SampleRate:  s.SampleRate,
+				Channels:    s.Channels,
+				BitRate:     s.BitRate,
+				Disposition: s.Disposition,
 			})
 			audioIdx++
 		}

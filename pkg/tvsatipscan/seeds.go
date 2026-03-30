@@ -39,7 +39,10 @@ func init() {
 // Round DVB-T/T2 to the nearest MHz. DVB-S/C keep full precision because their
 // transponders can be legitimately 1 MHz apart.
 func muxKey(t Transponder) string {
-	if t.System == "dvbt" || t.System == "dvbt2" {
+	if t.System == "dvbt2" {
+		return fmt.Sprintf("%.0f/%s/%d", t.FreqMHz, t.System, t.PLPID)
+	}
+	if t.System == "dvbt" {
 		return fmt.Sprintf("%.0f/%s", t.FreqMHz, t.System)
 	}
 	return fmt.Sprintf("%g/%s", t.FreqMHz, t.System)

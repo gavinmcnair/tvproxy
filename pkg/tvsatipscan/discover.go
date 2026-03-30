@@ -2,18 +2,18 @@ package tvsatipscan
 
 import (
 	"context"
-	"fmt"
-	"os"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/rs/zerolog"
 )
 
 // detectSatellite probes one seed per known satellite in parallel.
 // The first seed that returns a NIT response wins; all others are cancelled.
 // Returns the satellite identifier (e.g. "S28.2E"), its NIT network name, and
 // its full seed list for use in BFS discovery.
-func detectSatellite(host string, timeout time.Duration, verbose bool) (id, networkName string, seeds []Transponder) {
+func detectSatellite(host string, timeout time.Duration, log zerolog.Logger) (id, networkName string, seeds []Transponder) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -25,7 +25,7 @@ func detectSatellite(host string, timeout time.Duration, verbose bool) (id, netw
 
 	for satID, seed := range satelliteDetectionSeeds {
 		go func(satID string, seed Transponder) {
-			r := scanTransponder(ctx, host, seed, timeout, "0,16,17", verbose)
+			r := scanTransponder(ctx, host, seed, timeout, "0,16,17", log)
 			if r.networkID != 0 {
 				ch <- result{satID, r.networkName}
 			} else {
@@ -56,7 +56,7 @@ func detectSatellite(host string, timeout time.Duration, verbose bool) (id, netw
 // (c) dvbs2/dvbc2 seeds (small count, always worth retrying).
 //
 // At most workerCount(caps) scans run concurrently — one per physical tuner.
-func discoverMuxes(host string, caps map[string]int, seedTimeout, muxTimeout time.Duration, verbose bool) ([]Transponder, string) {
+func discoverMuxes(host string, caps map[string]int, seedTimeout, muxTimeout time.Duration, log zerolog.Logger) ([]Transponder, string) {
 	// When both dvbt and dvbt2 are available, defer dvbt2 seeds from Pass 1.
 	// Pass 1 finds dvbt muxes first; Pass 2 retries dvbt2 only in that frequency band.
 	// This avoids scanning all 48 dvbt2 UHF seeds upfront when they will all return "no signal".
@@ -100,7 +100,7 @@ func discoverMuxes(host string, caps map[string]int, seedTimeout, muxTimeout tim
 				if item.signalOnly {
 					pids = "0"
 				}
-				resultsCh <- scanTransponder(context.Background(), host, item.tp, item.timeout, pids, verbose)
+				resultsCh <- scanTransponder(context.Background(), host, item.tp, item.timeout, pids, log)
 			}
 		}()
 	}
@@ -167,15 +167,15 @@ func discoverMuxes(host string, caps map[string]int, seedTimeout, muxTimeout tim
 			elapsed := r.elapsed.Round(time.Millisecond)
 
 			if noSignal {
-				fmt.Fprintf(os.Stderr, "  %s → no signal (%s)\n", r.tp, elapsed)
+				log.Debug().Str("mux", r.tp.String()).Dur("elapsed", elapsed).Msg("no signal")
 				if retryOnFail && initialKeys[muxKey(r.tp)] {
 					failedSeeds = append(failedSeeds, r.tp)
 				}
 			} else {
 				if r.signalOnly {
-					fmt.Fprintf(os.Stderr, "  %s → signal (%s)\n", r.tp, elapsed)
+					log.Debug().Str("mux", r.tp.String()).Dur("elapsed", elapsed).Msg("signal")
 				} else {
-					fmt.Fprintf(os.Stderr, "  %s → signal, NIT has %d muxes (%s)\n", r.tp, len(r.nitMuxes), elapsed)
+					log.Debug().Str("mux", r.tp.String()).Int("nit_muxes", len(r.nitMuxes)).Dur("elapsed", elapsed).Msg("signal")
 				}
 				found = append(found, r.tp)
 				if detectedNetwork == "" && r.networkName != "" {
@@ -196,7 +196,7 @@ func discoverMuxes(host string, caps map[string]int, seedTimeout, muxTimeout tim
 
 	scanned := map[string]bool{}
 
-	fmt.Fprintf(os.Stderr, "  Pass 1 (fast %s, %d workers)...\n", seedTimeout, workers)
+	log.Info().Dur("seed_timeout", seedTimeout).Int("workers", workers).Msg("pass 1")
 	var pass1 []workItem
 	for _, seed := range allSeeds {
 		pass1 = append(pass1, workItem{seed, seedTimeout, false})
@@ -255,7 +255,7 @@ func discoverMuxes(host string, caps map[string]int, seedTimeout, muxTimeout tim
 		}
 	}
 	if len(pass2) > 0 {
-		fmt.Fprintf(os.Stderr, "  Pass 2 (slow retry %s, %d workers, %d candidates)...\n", muxTimeout, workers, len(pass2))
+		log.Info().Dur("mux_timeout", muxTimeout).Int("workers", workers).Int("candidates", len(pass2)).Msg("pass 2")
 		found2, _, _ := runPool(pass2, scanned, false)
 		allFound = append(allFound, found2...)
 	}

@@ -13,6 +13,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gosu \
+    dtv-scan-tables \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /tvproxy /usr/local/bin/tvproxy

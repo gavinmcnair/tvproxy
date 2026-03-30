@@ -7,27 +7,29 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/gavinmcnair/tvproxy/pkg/defaults"
-	"github.com/gavinmcnair/tvproxy/pkg/ffmpeg"
 	"github.com/gavinmcnair/tvproxy/pkg/models"
 	"github.com/gavinmcnair/tvproxy/pkg/store"
 )
 
+func resolveGlobalDefaults(settingsStore store.SettingsStore) (hwaccel, videoCodec string) {
+	hwaccel = "none"
+	videoCodec = "copy"
+	if settingsStore == nil {
+		return
+	}
+	ctx := context.Background()
+	if s, err := settingsStore.Get(ctx, "default_hwaccel"); err == nil && s.Value != "" {
+		hwaccel = s.Value
+	}
+	if s, err := settingsStore.Get(ctx, "default_video_codec"); err == nil && s.Value != "" {
+		videoCodec = s.Value
+	}
+	return
+}
+
 func SeedClientDefaults(_ context.Context, defs *defaults.ClientDefaults, profileStore store.ProfileStore, clientStore store.ClientStore, settingsStore store.SettingsStore) error {
 	if defs == nil {
 		return nil
-	}
-
-	globalHW := "none"
-	if settingsStore != nil {
-		if s, err := settingsStore.Get(context.Background(), "default_hwaccel"); err == nil && s.Value != "" {
-			globalHW = s.Value
-		}
-	}
-	globalCodec := "copy"
-	if settingsStore != nil {
-		if s, err := settingsStore.Get(context.Background(), "default_video_codec"); err == nil && s.Value != "" {
-			globalCodec = s.Value
-		}
 	}
 
 	clientStore.Clear()
@@ -37,28 +39,27 @@ func SeedClientDefaults(_ context.Context, defs *defaults.ClientDefaults, profil
 
 	for _, c := range defs.Clients {
 		hwaccel := c.HWAccel
-		if hwaccel == "default" {
-			hwaccel = globalHW
-		}
-		videoCodec := c.VideoCodec
-		if videoCodec == "default" {
-			videoCodec = globalCodec
-		}
-		args := ffmpeg.ComposeStreamProfileArgs(ffmpeg.ComposeOptions{SourceType: c.SourceType, HWAccel: hwaccel, VideoCodec: videoCodec, Container: c.Container})
 
 		profile := &models.StreamProfile{
 			ID:         uuid.New().String(),
 			Name:       c.Name,
 			StreamMode: "ffmpeg",
-			SourceType: c.SourceType,
-			HWAccel:    c.HWAccel,
-			VideoCodec: c.VideoCodec,
+			HWAccel:    hwaccel,
 			Container:  c.Container,
-			FPSMode:    "auto",
+			AutoDetect: c.AutoDetect,
 			Command:    "ffmpeg",
-			Args:       args,
 			IsClient:   true,
 		}
+
+		if !c.AutoDetect {
+			globalHW, globalCodec := resolveGlobalDefaults(settingsStore)
+			if hwaccel == "default" {
+				hwaccel = globalHW
+			}
+			profile.VideoCodec = globalCodec
+			profile.FPSMode = "auto"
+		}
+
 		profileStore.CreateDirect(profile)
 
 		rules := make([]models.ClientMatchRule, len(c.MatchRules))

@@ -270,18 +270,27 @@ func (s *ChannelStoreImpl) RemoveStreamMappings(_ context.Context, streamIDs []s
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	changed := false
+	var kept []channelEntry
 	for i := range s.channels {
-		var kept []models.ChannelStream
+		hadStreams := len(s.channels[i].StreamIDs) > 0
+		var keptStreams []models.ChannelStream
 		for _, cs := range s.channels[i].StreamIDs {
 			if !removeSet[cs.StreamID] {
-				kept = append(kept, cs)
+				keptStreams = append(keptStreams, cs)
 			} else {
 				changed = true
 			}
 		}
-		s.channels[i].StreamIDs = kept
+		s.channels[i].StreamIDs = keptStreams
+		// cascade delete channels that had streams and are now empty
+		if hadStreams && len(keptStreams) == 0 {
+			changed = true
+			continue
+		}
+		kept = append(kept, s.channels[i])
 	}
 	if changed {
+		s.channels = kept
 		return s.save()
 	}
 	return nil

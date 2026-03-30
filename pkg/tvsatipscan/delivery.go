@@ -47,6 +47,16 @@ func serviceTypStr(t uint8) string {
 	return "0x" + byteHex(t)
 }
 
+func streamCategory(t uint8) string {
+	switch t {
+	case 0x01, 0x02, 0x1b, 0x24, 0x42:
+		return "video"
+	case 0x03, 0x04, 0x0f, 0x11, 0x81, 0x87:
+		return "audio"
+	}
+	return ""
+}
+
 func streamTypStr(t uint8) string {
 	if s, ok := streamTypeName[t]; ok {
 		return s

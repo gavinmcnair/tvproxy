@@ -4,327 +4,262 @@ import (
 	"testing"
 )
 
-func TestComposeStreamProfileArgs(t *testing.T) {
+func TestBuild(t *testing.T) {
+	probeH264Progressive := &ProbeResult{
+		HasVideo:    true,
+		Video:       &VideoInfo{Codec: "h264", FieldOrder: "progressive"},
+		AudioTracks: []AudioTrack{{Codec: "aac"}},
+	}
+	probeH264Interlaced := &ProbeResult{
+		HasVideo:    true,
+		Video:       &VideoInfo{Codec: "h264", FieldOrder: "tt"},
+		AudioTracks: []AudioTrack{{Codec: "aac"}},
+	}
+	probeMpeg2 := &ProbeResult{
+		HasVideo:    true,
+		Video:       &VideoInfo{Codec: "mpeg2video", FieldOrder: "progressive"},
+		AudioTracks: []AudioTrack{{Codec: "mp2"}},
+	}
+	probeMpeg2Interlaced := &ProbeResult{
+		HasVideo:    true,
+		Video:       &VideoInfo{Codec: "mpeg2video", FieldOrder: "tt"},
+		AudioTracks: []AudioTrack{{Codec: "mp2"}},
+	}
+	probeHevcProgressive := &ProbeResult{
+		HasVideo:    true,
+		Video:       &VideoInfo{Codec: "hevc", FieldOrder: "progressive"},
+		AudioTracks: []AudioTrack{{Codec: "aac"}},
+	}
+	probeHevcInterlaced := &ProbeResult{
+		HasVideo:    true,
+		Video:       &VideoInfo{Codec: "hevc", FieldOrder: "tt"},
+		AudioTracks: []AudioTrack{{Codec: "aac"}},
+	}
+	probeRadio := &ProbeResult{
+		HasVideo:    false,
+		AudioTracks: []AudioTrack{{Codec: "aac"}},
+	}
+
 	tests := []struct {
-		name        string
-		sourceType  string
-		hwaccel     string
-		videoCodec  string
-		container   string
-		deinterlace bool
-		fpsMode     string
-		want        string
+		name    string
+		opts    BuildOptions
+		wantCmd string
+		want    string
 	}{
 		{
-			name:       "satip copy no hwaccel",
-			sourceType: "satip",
-			hwaccel:    "none",
-			videoCodec: "copy",
-			container:  "mpegts",
-			want:       "-hide_banner -loglevel warning -nostdin -rw_timeout 5000000 -err_detect ignore_err -i {input} -max_muxing_queue_size 4096 -c:v copy -c:a copy -bsf:v dump_extra -f mpegts pipe:1",
+			name:    "custom command passthrough",
+			opts:    BuildOptions{CustomCommand: "-i {input} -c copy pipe:1"},
+			wantCmd: "ffmpeg",
+			want:    "-i {input} -c copy pipe:1",
 		},
 		{
-			name:       "m3u copy no hwaccel",
-			sourceType: "m3u",
-			hwaccel:    "none",
-			videoCodec: "copy",
-			container:  "mpegts",
-			want:       "-hide_banner -loglevel warning -nostdin -analyzeduration 1000000 -probesize 1000000 -err_detect ignore_err -i {input} -map 0:v -map 0:a:0 -max_muxing_queue_size 4096 -c:v copy -c:a aac -b:a 192k -ac 2 -c:s copy -f mpegts -fflags +genpts+discardcorrupt -copyts pipe:1",
+			name: "RTSP copy nil probe mpegts",
+			opts: BuildOptions{StreamURL: "rtsp://example.com/stream", VideoCodec: "copy", Container: "mpegts"},
+			want: "-hide_banner -loglevel warning -nostdin -rtsp_transport tcp -analyzeduration 3000000 -probesize 2000000 -max_delay 500000 -err_detect ignore_err -fflags +genpts+discardcorrupt -i {input} -map 0:v:0? -map 0:a:0? -max_muxing_queue_size 4096 -c:v copy -c:a aac -b:a 192k -f mpegts pipe:1",
 		},
 		{
-			name:       "satip software h264",
-			sourceType: "satip",
-			hwaccel:    "none",
-			videoCodec: "h264",
-			container:  "mpegts",
-			want:       "-hide_banner -loglevel warning -nostdin -rw_timeout 5000000 -err_detect ignore_err -i {input} -max_muxing_queue_size 4096 -c:v libx264 -preset fast -c:a copy -bsf:v dump_extra -f mpegts pipe:1",
+			name: "HTTP copy nil probe mpegts",
+			opts: BuildOptions{StreamURL: "http://example.com/stream", VideoCodec: "copy", Container: "mpegts"},
+			want: "-hide_banner -loglevel warning -nostdin -reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5 -analyzeduration 1000000 -probesize 1000000 -err_detect ignore_err -fflags +genpts+discardcorrupt -i {input} -map 0:v:0? -map 0:a:0? -max_muxing_queue_size 4096 -c:v copy -c:a aac -b:a 192k -f mpegts pipe:1",
 		},
 		{
-			name:       "satip software h265",
-			sourceType: "satip",
-			hwaccel:    "none",
-			videoCodec: "h265",
-			container:  "mpegts",
-			want:       "-hide_banner -loglevel warning -nostdin -rw_timeout 5000000 -err_detect ignore_err -i {input} -max_muxing_queue_size 4096 -c:v libx265 -preset fast -c:a copy -bsf:v dump_extra -f mpegts pipe:1",
+			name: "HTTP explicit h264 software nil probe",
+			opts: BuildOptions{StreamURL: "http://example.com/stream", VideoCodec: "h264", Container: "mpegts"},
+			want: "-hide_banner -loglevel warning -nostdin -reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5 -analyzeduration 1000000 -probesize 1000000 -err_detect ignore_err -fflags +genpts+discardcorrupt -i {input} -map 0:v:0? -map 0:a:0? -max_muxing_queue_size 4096 -c:v libx264 -preset fast -c:a aac -b:a 192k -f mpegts pipe:1",
 		},
 		{
-			name:       "m3u software h265",
-			sourceType: "m3u",
-			hwaccel:    "none",
-			videoCodec: "h265",
-			container:  "mpegts",
-			want:       "-hide_banner -loglevel warning -nostdin -analyzeduration 1000000 -probesize 1000000 -err_detect ignore_err -i {input} -map 0:v:0 -map 0:a:0 -max_muxing_queue_size 4096 -c:v libx265 -preset fast -c:a aac -b:a 192k -ac 2 -c:s copy -f mpegts -fflags +genpts+discardcorrupt -copyts pipe:1",
+			name: "HTTP explicit h265 software nil probe",
+			opts: BuildOptions{StreamURL: "http://example.com/stream", VideoCodec: "h265", Container: "mpegts"},
+			want: "-hide_banner -loglevel warning -nostdin -reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5 -analyzeduration 1000000 -probesize 1000000 -err_detect ignore_err -fflags +genpts+discardcorrupt -i {input} -map 0:v:0? -map 0:a:0? -max_muxing_queue_size 4096 -c:v libx265 -preset fast -c:a aac -b:a 192k -f mpegts pipe:1",
 		},
 		{
-			name:       "m3u software av1 matroska",
-			sourceType: "m3u",
-			hwaccel:    "none",
-			videoCodec: "av1",
-			container:  "matroska",
-			want:       "-hide_banner -loglevel warning -nostdin -analyzeduration 1000000 -probesize 1000000 -err_detect ignore_err -i {input} -map 0:v:0 -map 0:a:0 -max_muxing_queue_size 4096 -c:v libsvtav1 -preset 6 -crf 24 -pix_fmt yuv420p10le -c:a aac -b:a 192k -ac 2 -c:s copy -f matroska -fflags +genpts+discardcorrupt -copyts pipe:1",
+			name: "RTSP explicit h265 software nil probe",
+			opts: BuildOptions{StreamURL: "rtsp://example.com/stream", VideoCodec: "h265", Container: "mpegts"},
+			want: "-hide_banner -loglevel warning -nostdin -rtsp_transport tcp -analyzeduration 3000000 -probesize 2000000 -max_delay 500000 -err_detect ignore_err -fflags +genpts+discardcorrupt -i {input} -map 0:v:0? -map 0:a:0? -max_muxing_queue_size 4096 -c:v libx265 -preset fast -c:a aac -b:a 192k -f mpegts pipe:1",
 		},
 		{
-			name:       "satip qsv h264",
-			sourceType: "satip",
-			hwaccel:    "qsv",
-			videoCodec: "h264",
-			container:  "mpegts",
-			want:       "-hide_banner -loglevel warning -nostdin -init_hw_device vaapi=va:/dev/dri/renderD128 -init_hw_device qsv=qs@va -hwaccel qsv -hwaccel_output_format qsv -rw_timeout 5000000 -err_detect ignore_err -i {input} -max_muxing_queue_size 4096 -c:v h264_qsv -preset veryslow -global_quality 20 -c:a copy -bsf:v dump_extra -f mpegts pipe:1",
+			name: "probe mpeg2video forces h264 transcode",
+			opts: BuildOptions{StreamURL: "http://example.com/stream", Probe: probeMpeg2, VideoCodec: "copy", Container: "mpegts"},
+			want: "-hide_banner -loglevel warning -nostdin -reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5 -analyzeduration 1000000 -probesize 1000000 -err_detect ignore_err -fflags +genpts+discardcorrupt -i {input} -map 0:v:0? -map 0:a:0? -max_muxing_queue_size 4096 -c:v libx264 -preset fast -c:a aac -b:a 192k -f mpegts pipe:1",
 		},
 		{
-			name:       "m3u qsv h264",
-			sourceType: "m3u",
-			hwaccel:    "qsv",
-			videoCodec: "h264",
-			container:  "mpegts",
-			want:       "-hide_banner -loglevel warning -nostdin -init_hw_device vaapi=va:/dev/dri/renderD128 -init_hw_device qsv=qs@va -hwaccel qsv -hwaccel_output_format qsv -analyzeduration 1000000 -probesize 1000000 -err_detect ignore_err -i {input} -map 0:v:0 -map 0:a:0 -max_muxing_queue_size 4096 -c:v h264_qsv -preset veryslow -global_quality 20 -c:a aac -b:a 192k -ac 2 -c:s copy -f mpegts -fflags +genpts+discardcorrupt -copyts pipe:1",
+			name: "probe h264 progressive stays copy",
+			opts: BuildOptions{StreamURL: "http://example.com/stream", Probe: probeH264Progressive, VideoCodec: "copy", Container: "mpegts"},
+			want: "-hide_banner -loglevel warning -nostdin -reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5 -analyzeduration 1000000 -probesize 1000000 -err_detect ignore_err -fflags +genpts+discardcorrupt -i {input} -map 0:v:0? -map 0:a:0? -max_muxing_queue_size 4096 -c:v copy -c:a copy -f mpegts pipe:1",
 		},
 		{
-			name:       "satip qsv av1 matroska",
-			sourceType: "satip",
-			hwaccel:    "qsv",
-			videoCodec: "av1",
-			container:  "matroska",
-			want:       "-hide_banner -loglevel warning -nostdin -init_hw_device vaapi=va:/dev/dri/renderD128 -init_hw_device qsv=qs@va -hwaccel qsv -hwaccel_output_format qsv -rw_timeout 5000000 -err_detect ignore_err -i {input} -max_muxing_queue_size 4096 -c:v av1_qsv -preset veryslow -global_quality 25 -c:a copy -f matroska pipe:1",
+			name: "probe h264 interlaced forces h264 plus yadif",
+			opts: BuildOptions{StreamURL: "http://example.com/stream", Probe: probeH264Interlaced, VideoCodec: "copy", Container: "mpegts"},
+			want: "-hide_banner -loglevel warning -nostdin -reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5 -analyzeduration 1000000 -probesize 1000000 -err_detect ignore_err -fflags +genpts+discardcorrupt -i {input} -map 0:v:0? -map 0:a:0? -max_muxing_queue_size 4096 -vf yadif -c:v libx264 -preset fast -c:a copy -f mpegts pipe:1",
 		},
 		{
-			name:       "m3u qsv av1 matroska",
-			sourceType: "m3u",
-			hwaccel:    "qsv",
-			videoCodec: "av1",
-			container:  "matroska",
-			want:       "-hide_banner -loglevel warning -nostdin -init_hw_device vaapi=va:/dev/dri/renderD128 -init_hw_device qsv=qs@va -hwaccel qsv -hwaccel_output_format qsv -analyzeduration 1000000 -probesize 1000000 -err_detect ignore_err -i {input} -map 0:v:0 -map 0:a:0 -max_muxing_queue_size 4096 -c:v av1_qsv -preset veryslow -global_quality 25 -c:a aac -b:a 192k -ac 2 -c:s copy -f matroska -fflags +genpts+discardcorrupt -copyts pipe:1",
+			name: "probe hevc progressive stays copy",
+			opts: BuildOptions{StreamURL: "rtsp://example.com/stream", Probe: probeHevcProgressive, VideoCodec: "copy", Container: "mpegts"},
+			want: "-hide_banner -loglevel warning -nostdin -rtsp_transport tcp -analyzeduration 3000000 -probesize 2000000 -max_delay 500000 -err_detect ignore_err -fflags +genpts+discardcorrupt -i {input} -map 0:v:0? -map 0:a:0? -max_muxing_queue_size 4096 -c:v copy -c:a copy -f mpegts pipe:1",
 		},
 		{
-			name:       "satip qsv h265",
-			sourceType: "satip",
-			hwaccel:    "qsv",
-			videoCodec: "h265",
-			container:  "mpegts",
-			want:       "-hide_banner -loglevel warning -nostdin -init_hw_device vaapi=va:/dev/dri/renderD128 -init_hw_device qsv=qs@va -hwaccel qsv -hwaccel_output_format qsv -rw_timeout 5000000 -err_detect ignore_err -i {input} -max_muxing_queue_size 4096 -c:v hevc_qsv -preset veryslow -global_quality 22 -c:a copy -bsf:v dump_extra -f mpegts pipe:1",
+			name: "probe hevc interlaced forces h265 plus yadif",
+			opts: BuildOptions{StreamURL: "rtsp://example.com/stream", Probe: probeHevcInterlaced, VideoCodec: "copy", Container: "mpegts"},
+			want: "-hide_banner -loglevel warning -nostdin -rtsp_transport tcp -analyzeduration 3000000 -probesize 2000000 -max_delay 500000 -err_detect ignore_err -fflags +genpts+discardcorrupt -i {input} -map 0:v:0? -map 0:a:0? -max_muxing_queue_size 4096 -vf yadif -c:v libx265 -preset fast -c:a copy -f mpegts pipe:1",
 		},
 		{
-			name:       "satip nvenc h264",
-			sourceType: "satip",
-			hwaccel:    "nvenc",
-			videoCodec: "h264",
-			container:  "mpegts",
-			want:       "-hide_banner -loglevel warning -nostdin -hwaccel cuda -hwaccel_output_format cuda -rw_timeout 5000000 -err_detect ignore_err -i {input} -max_muxing_queue_size 4096 -c:v h264_nvenc -preset p4 -c:a copy -bsf:v dump_extra -f mpegts pipe:1",
+			name: "radio stream omits video map",
+			opts: BuildOptions{StreamURL: "http://example.com/stream", Probe: probeRadio, VideoCodec: "copy", Container: "mpegts"},
+			want: "-hide_banner -loglevel warning -nostdin -reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5 -analyzeduration 1000000 -probesize 1000000 -err_detect ignore_err -fflags +genpts+discardcorrupt -i {input} -map 0:a:0? -max_muxing_queue_size 4096 -c:v copy -c:a copy -f mpegts pipe:1",
 		},
 		{
-			name:       "m3u nvenc h264",
-			sourceType: "m3u",
-			hwaccel:    "nvenc",
-			videoCodec: "h264",
-			container:  "mpegts",
-			want:       "-hide_banner -loglevel warning -nostdin -hwaccel cuda -hwaccel_output_format cuda -analyzeduration 1000000 -probesize 1000000 -err_detect ignore_err -i {input} -map 0:v:0 -map 0:a:0 -max_muxing_queue_size 4096 -c:v h264_nvenc -preset p4 -c:a aac -b:a 192k -ac 2 -c:s copy -f mpegts -fflags +genpts+discardcorrupt -copyts pipe:1",
+			name: "webm container uses opus audio",
+			opts: BuildOptions{StreamURL: "http://example.com/stream", VideoCodec: "h264", Container: "webm"},
+			want: "-hide_banner -loglevel warning -nostdin -reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5 -analyzeduration 1000000 -probesize 1000000 -err_detect ignore_err -fflags +genpts+discardcorrupt -i {input} -map 0:v:0? -map 0:a:0? -max_muxing_queue_size 4096 -c:v libx264 -preset fast -c:a libopus -b:a 192k -f webm pipe:1",
 		},
 		{
-			name:       "satip nvenc av1 matroska",
-			sourceType: "satip",
-			hwaccel:    "nvenc",
-			videoCodec: "av1",
-			container:  "matroska",
-			want:       "-hide_banner -loglevel warning -nostdin -hwaccel cuda -hwaccel_output_format cuda -rw_timeout 5000000 -err_detect ignore_err -i {input} -max_muxing_queue_size 4096 -c:v av1_nvenc -preset p4 -cq 24 -pix_fmt p010le -c:a copy -f matroska pipe:1",
+			name: "mp4 container uses fragmented movflags",
+			opts: BuildOptions{StreamURL: "http://example.com/stream", VideoCodec: "copy", Container: "mp4"},
+			want: "-hide_banner -loglevel warning -nostdin -reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5 -analyzeduration 1000000 -probesize 1000000 -err_detect ignore_err -fflags +genpts+discardcorrupt -i {input} -map 0:v:0? -map 0:a:0? -max_muxing_queue_size 4096 -c:v copy -c:a aac -b:a 192k -f mp4 -movflags frag_keyframe+empty_moov+default_base_moof pipe:1",
 		},
 		{
-			name:       "m3u nvenc av1 matroska",
-			sourceType: "m3u",
-			hwaccel:    "nvenc",
-			videoCodec: "av1",
-			container:  "matroska",
-			want:       "-hide_banner -loglevel warning -nostdin -hwaccel cuda -hwaccel_output_format cuda -analyzeduration 1000000 -probesize 1000000 -err_detect ignore_err -i {input} -map 0:v:0 -map 0:a:0 -max_muxing_queue_size 4096 -c:v av1_nvenc -preset p4 -cq 24 -pix_fmt p010le -c:a aac -b:a 192k -ac 2 -c:s copy -f matroska -fflags +genpts+discardcorrupt -copyts pipe:1",
+			name: "matroska container",
+			opts: BuildOptions{StreamURL: "http://example.com/stream", VideoCodec: "copy", Container: "matroska"},
+			want: "-hide_banner -loglevel warning -nostdin -reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5 -analyzeduration 1000000 -probesize 1000000 -err_detect ignore_err -fflags +genpts+discardcorrupt -i {input} -map 0:v:0? -map 0:a:0? -max_muxing_queue_size 4096 -c:v copy -c:a aac -b:a 192k -f matroska pipe:1",
 		},
 		{
-			name:       "satip nvenc h265",
-			sourceType: "satip",
-			hwaccel:    "nvenc",
-			videoCodec: "h265",
-			container:  "mpegts",
-			want:       "-hide_banner -loglevel warning -nostdin -hwaccel cuda -hwaccel_output_format cuda -rw_timeout 5000000 -err_detect ignore_err -i {input} -max_muxing_queue_size 4096 -c:v hevc_nvenc -preset p4 -c:a copy -bsf:v dump_extra -f mpegts pipe:1",
+			name: "user agent included before input",
+			opts: BuildOptions{StreamURL: "http://example.com/stream", UserAgent: "TestAgent/1.0", VideoCodec: "copy", Container: "mpegts"},
+			want: "-hide_banner -loglevel warning -nostdin -reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5 -analyzeduration 1000000 -probesize 1000000 -user_agent TestAgent/1.0 -err_detect ignore_err -fflags +genpts+discardcorrupt -i {input} -map 0:v:0? -map 0:a:0? -max_muxing_queue_size 4096 -c:v copy -c:a aac -b:a 192k -f mpegts pipe:1",
 		},
 		{
-			name:       "satip vaapi h264",
-			sourceType: "satip",
-			hwaccel:    "vaapi",
-			videoCodec: "h264",
-			container:  "mpegts",
-			want:       "-hide_banner -loglevel warning -nostdin -init_hw_device vaapi=va:/dev/dri/renderD128 -filter_hw_device va -rw_timeout 5000000 -err_detect ignore_err -i {input} -max_muxing_queue_size 4096 -vf format=nv12,hwupload -c:v h264_vaapi -c:a copy -bsf:v dump_extra -f mpegts pipe:1",
+			name: "no URL no transport flags",
+			opts: BuildOptions{VideoCodec: "copy", Container: "mpegts"},
+			want: "-hide_banner -loglevel warning -nostdin -err_detect ignore_err -fflags +genpts+discardcorrupt -i {input} -map 0:v:0? -map 0:a:0? -max_muxing_queue_size 4096 -c:v copy -c:a aac -b:a 192k -f mpegts pipe:1",
 		},
 		{
-			name:       "m3u vaapi h265",
-			sourceType: "m3u",
-			hwaccel:    "vaapi",
-			videoCodec: "h265",
-			container:  "mpegts",
-			want:       "-hide_banner -loglevel warning -nostdin -init_hw_device vaapi=va:/dev/dri/renderD128 -filter_hw_device va -analyzeduration 1000000 -probesize 1000000 -err_detect ignore_err -i {input} -map 0:v:0 -map 0:a:0 -max_muxing_queue_size 4096 -vf format=nv12,hwupload -c:v hevc_vaapi -c:a aac -b:a 192k -ac 2 -c:s copy -f mpegts -fflags +genpts+discardcorrupt -copyts pipe:1",
+			name: "QSV h264 RTSP",
+			opts: BuildOptions{StreamURL: "rtsp://example.com/stream", HWAccel: "qsv", VideoCodec: "h264", Container: "mpegts"},
+			want: "-hide_banner -loglevel warning -nostdin -init_hw_device vaapi=va:/dev/dri/renderD128 -init_hw_device qsv=qs@va -hwaccel qsv -hwaccel_output_format qsv -rtsp_transport tcp -analyzeduration 3000000 -probesize 2000000 -max_delay 500000 -err_detect ignore_err -fflags +genpts+discardcorrupt -i {input} -map 0:v:0? -map 0:a:0? -max_muxing_queue_size 4096 -c:v h264_qsv -preset veryslow -global_quality 20 -c:a aac -b:a 192k -f mpegts pipe:1",
 		},
 		{
-			name:       "satip vaapi av1 matroska",
-			sourceType: "satip",
-			hwaccel:    "vaapi",
-			videoCodec: "av1",
-			container:  "matroska",
-			want:       "-hide_banner -loglevel warning -nostdin -hwaccel vaapi -hwaccel_output_format vaapi -vaapi_device /dev/dri/renderD128 -rw_timeout 5000000 -err_detect ignore_err -i {input} -max_muxing_queue_size 4096 -c:v av1_vaapi -global_quality 25 -rc_mode ICQ -c:a copy -f matroska pipe:1",
+			name: "QSV h264 HTTP",
+			opts: BuildOptions{StreamURL: "http://example.com/stream", HWAccel: "qsv", VideoCodec: "h264", Container: "mpegts"},
+			want: "-hide_banner -loglevel warning -nostdin -init_hw_device vaapi=va:/dev/dri/renderD128 -init_hw_device qsv=qs@va -hwaccel qsv -hwaccel_output_format qsv -reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5 -analyzeduration 1000000 -probesize 1000000 -err_detect ignore_err -fflags +genpts+discardcorrupt -i {input} -map 0:v:0? -map 0:a:0? -max_muxing_queue_size 4096 -c:v h264_qsv -preset veryslow -global_quality 20 -c:a aac -b:a 192k -f mpegts pipe:1",
 		},
 		{
-			name:       "m3u vaapi av1 matroska",
-			sourceType: "m3u",
-			hwaccel:    "vaapi",
-			videoCodec: "av1",
-			container:  "matroska",
-			want:       "-hide_banner -loglevel warning -nostdin -hwaccel vaapi -hwaccel_output_format vaapi -vaapi_device /dev/dri/renderD128 -analyzeduration 1000000 -probesize 1000000 -err_detect ignore_err -i {input} -map 0:v:0 -map 0:a:0 -max_muxing_queue_size 4096 -c:v av1_vaapi -global_quality 25 -rc_mode ICQ -c:a aac -b:a 192k -ac 2 -c:s copy -f matroska -fflags +genpts+discardcorrupt -copyts pipe:1",
+			name: "QSV h265 RTSP",
+			opts: BuildOptions{StreamURL: "rtsp://example.com/stream", HWAccel: "qsv", VideoCodec: "h265", Container: "mpegts"},
+			want: "-hide_banner -loglevel warning -nostdin -init_hw_device vaapi=va:/dev/dri/renderD128 -init_hw_device qsv=qs@va -hwaccel qsv -hwaccel_output_format qsv -rtsp_transport tcp -analyzeduration 3000000 -probesize 2000000 -max_delay 500000 -err_detect ignore_err -fflags +genpts+discardcorrupt -i {input} -map 0:v:0? -map 0:a:0? -max_muxing_queue_size 4096 -c:v hevc_qsv -preset veryslow -global_quality 22 -c:a aac -b:a 192k -f mpegts pipe:1",
 		},
 		{
-			name:       "m3u vaapi copy (no hwupload needed)",
-			sourceType: "m3u",
-			hwaccel:    "vaapi",
-			videoCodec: "copy",
-			container:  "mpegts",
-			want:       "-hide_banner -loglevel warning -nostdin -init_hw_device vaapi=va:/dev/dri/renderD128 -filter_hw_device va -analyzeduration 1000000 -probesize 1000000 -err_detect ignore_err -i {input} -map 0:v -map 0:a:0 -max_muxing_queue_size 4096 -c:v copy -c:a aac -b:a 192k -ac 2 -c:s copy -f mpegts -fflags +genpts+discardcorrupt -copyts pipe:1",
+			name: "QSV av1 matroska RTSP",
+			opts: BuildOptions{StreamURL: "rtsp://example.com/stream", HWAccel: "qsv", VideoCodec: "av1", Container: "matroska"},
+			want: "-hide_banner -loglevel warning -nostdin -init_hw_device vaapi=va:/dev/dri/renderD128 -init_hw_device qsv=qs@va -hwaccel qsv -hwaccel_output_format qsv -rtsp_transport tcp -analyzeduration 3000000 -probesize 2000000 -max_delay 500000 -err_detect ignore_err -fflags +genpts+discardcorrupt -i {input} -map 0:v:0? -map 0:a:0? -max_muxing_queue_size 4096 -c:v av1_qsv -preset veryslow -global_quality 25 -c:a aac -b:a 192k -f matroska pipe:1",
 		},
 		{
-			name:       "satip videotoolbox h264",
-			sourceType: "satip",
-			hwaccel:    "videotoolbox",
-			videoCodec: "h264",
-			container:  "mpegts",
-			want:       "-hide_banner -loglevel warning -nostdin -hwaccel videotoolbox -hwaccel_output_format videotoolbox_vld -rw_timeout 5000000 -err_detect ignore_err -i {input} -max_muxing_queue_size 4096 -c:v h264_videotoolbox -c:a copy -bsf:v dump_extra -f mpegts pipe:1",
+			name: "NVENC h264 RTSP",
+			opts: BuildOptions{StreamURL: "rtsp://example.com/stream", HWAccel: "nvenc", VideoCodec: "h264", Container: "mpegts"},
+			want: "-hide_banner -loglevel warning -nostdin -hwaccel cuda -hwaccel_output_format cuda -rtsp_transport tcp -analyzeduration 3000000 -probesize 2000000 -max_delay 500000 -err_detect ignore_err -fflags +genpts+discardcorrupt -i {input} -map 0:v:0? -map 0:a:0? -max_muxing_queue_size 4096 -c:v h264_nvenc -preset p4 -c:a aac -b:a 192k -f mpegts pipe:1",
 		},
 		{
-			name:       "m3u videotoolbox h265",
-			sourceType: "m3u",
-			hwaccel:    "videotoolbox",
-			videoCodec: "h265",
-			container:  "mpegts",
-			want:       "-hide_banner -loglevel warning -nostdin -hwaccel videotoolbox -hwaccel_output_format videotoolbox_vld -analyzeduration 1000000 -probesize 1000000 -err_detect ignore_err -i {input} -map 0:v:0 -map 0:a:0 -max_muxing_queue_size 4096 -c:v hevc_videotoolbox -c:a aac -b:a 192k -ac 2 -c:s copy -f mpegts -fflags +genpts+discardcorrupt -copyts pipe:1",
+			name: "NVENC h265 RTSP",
+			opts: BuildOptions{StreamURL: "rtsp://example.com/stream", HWAccel: "nvenc", VideoCodec: "h265", Container: "mpegts"},
+			want: "-hide_banner -loglevel warning -nostdin -hwaccel cuda -hwaccel_output_format cuda -rtsp_transport tcp -analyzeduration 3000000 -probesize 2000000 -max_delay 500000 -err_detect ignore_err -fflags +genpts+discardcorrupt -i {input} -map 0:v:0? -map 0:a:0? -max_muxing_queue_size 4096 -c:v hevc_nvenc -preset p4 -c:a aac -b:a 192k -f mpegts pipe:1",
 		},
 		{
-			name:       "satip videotoolbox av1 falls back to software",
-			sourceType: "satip",
-			hwaccel:    "videotoolbox",
-			videoCodec: "av1",
-			container:  "matroska",
-			want:       "-hide_banner -loglevel warning -nostdin -hwaccel videotoolbox -hwaccel_output_format videotoolbox_vld -rw_timeout 5000000 -err_detect ignore_err -i {input} -max_muxing_queue_size 4096 -vf hwdownload,format=nv12 -c:v libsvtav1 -preset 6 -crf 24 -pix_fmt yuv420p10le -c:a copy -f matroska pipe:1",
+			name: "NVENC av1 matroska RTSP",
+			opts: BuildOptions{StreamURL: "rtsp://example.com/stream", HWAccel: "nvenc", VideoCodec: "av1", Container: "matroska"},
+			want: "-hide_banner -loglevel warning -nostdin -hwaccel cuda -hwaccel_output_format cuda -rtsp_transport tcp -analyzeduration 3000000 -probesize 2000000 -max_delay 500000 -err_detect ignore_err -fflags +genpts+discardcorrupt -i {input} -map 0:v:0? -map 0:a:0? -max_muxing_queue_size 4096 -c:v av1_nvenc -preset p4 -cq 24 -pix_fmt p010le -c:a aac -b:a 192k -f matroska pipe:1",
 		},
 		{
-			name:       "m3u copy mp4 fragmented",
-			sourceType: "m3u",
-			hwaccel:    "none",
-			videoCodec: "copy",
-			container:  "mp4",
-			want:       "-hide_banner -loglevel warning -nostdin -analyzeduration 1000000 -probesize 1000000 -err_detect ignore_err -i {input} -map 0:v -map 0:a:0 -max_muxing_queue_size 4096 -c:v copy -c:a aac -b:a 192k -ac 2 -c:s copy -f mp4 -movflags frag_keyframe+empty_moov+default_base_moof -fflags +genpts+discardcorrupt pipe:1",
+			name: "VAAPI h264 HTTP with hwupload filter",
+			opts: BuildOptions{StreamURL: "http://example.com/stream", HWAccel: "vaapi", VideoCodec: "h264", Container: "mpegts"},
+			want: "-hide_banner -loglevel warning -nostdin -init_hw_device vaapi=va:/dev/dri/renderD128 -filter_hw_device va -reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5 -analyzeduration 1000000 -probesize 1000000 -err_detect ignore_err -fflags +genpts+discardcorrupt -i {input} -map 0:v:0? -map 0:a:0? -max_muxing_queue_size 4096 -vf format=nv12,hwupload -c:v h264_vaapi -c:a aac -b:a 192k -f mpegts pipe:1",
 		},
 		{
-			name:       "m3u copy matroska",
-			sourceType: "m3u",
-			hwaccel:    "none",
-			videoCodec: "copy",
-			container:  "matroska",
-			want:       "-hide_banner -loglevel warning -nostdin -analyzeduration 1000000 -probesize 1000000 -err_detect ignore_err -i {input} -map 0:v -map 0:a:0 -max_muxing_queue_size 4096 -c:v copy -c:a aac -b:a 192k -ac 2 -c:s copy -f matroska -fflags +genpts+discardcorrupt -copyts pipe:1",
+			name: "VAAPI h265 HTTP with hwupload filter",
+			opts: BuildOptions{StreamURL: "http://example.com/stream", HWAccel: "vaapi", VideoCodec: "h265", Container: "mpegts"},
+			want: "-hide_banner -loglevel warning -nostdin -init_hw_device vaapi=va:/dev/dri/renderD128 -filter_hw_device va -reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5 -analyzeduration 1000000 -probesize 1000000 -err_detect ignore_err -fflags +genpts+discardcorrupt -i {input} -map 0:v:0? -map 0:a:0? -max_muxing_queue_size 4096 -vf format=nv12,hwupload -c:v hevc_vaapi -c:a aac -b:a 192k -f mpegts pipe:1",
 		},
 		{
-			name:       "m3u h264 webm uses opus",
-			sourceType: "m3u",
-			hwaccel:    "none",
-			videoCodec: "h264",
-			container:  "webm",
-			want:       "-hide_banner -loglevel warning -nostdin -analyzeduration 1000000 -probesize 1000000 -err_detect ignore_err -i {input} -map 0:v:0 -map 0:a:0 -max_muxing_queue_size 4096 -c:v libx264 -preset fast -c:a libopus -b:a 192k -ac 2 -c:s copy -f webm -fflags +genpts+discardcorrupt pipe:1",
+			name: "VAAPI av1 matroska uses software decode with hwupload filter",
+			opts: BuildOptions{StreamURL: "rtsp://example.com/stream", HWAccel: "vaapi", VideoCodec: "av1", Container: "matroska"},
+			want: "-hide_banner -loglevel warning -nostdin -init_hw_device vaapi=va:/dev/dri/renderD128 -filter_hw_device va -rtsp_transport tcp -analyzeduration 3000000 -probesize 2000000 -max_delay 500000 -err_detect ignore_err -fflags +genpts+discardcorrupt -i {input} -map 0:v:0? -map 0:a:0? -max_muxing_queue_size 4096 -vf format=nv12,hwupload -c:v av1_vaapi -global_quality 25 -rc_mode ICQ -c:a aac -b:a 192k -f matroska pipe:1",
 		},
 		{
-			name:       "satip copy matroska no dump_extra",
-			sourceType: "satip",
-			hwaccel:    "none",
-			videoCodec: "copy",
-			container:  "matroska",
-			want:       "-hide_banner -loglevel warning -nostdin -rw_timeout 5000000 -err_detect ignore_err -i {input} -max_muxing_queue_size 4096 -c:v copy -c:a copy -f matroska pipe:1",
+			name: "VideoToolbox h264 RTSP software decode hardware encode",
+			opts: BuildOptions{StreamURL: "rtsp://example.com/stream", HWAccel: "videotoolbox", VideoCodec: "h264", Container: "mpegts"},
+			want: "-hide_banner -loglevel warning -nostdin -rtsp_transport tcp -analyzeduration 3000000 -probesize 2000000 -max_delay 500000 -err_detect ignore_err -fflags +genpts+discardcorrupt -i {input} -map 0:v:0? -map 0:a:0? -max_muxing_queue_size 4096 -c:v h264_videotoolbox -c:a aac -b:a 192k -f mpegts pipe:1",
 		},
 		{
-			name:        "m3u h264 deinterlace",
-			sourceType:  "m3u",
-			hwaccel:     "none",
-			videoCodec:  "h264",
-			container:   "mpegts",
-			deinterlace: true,
-			want:        "-hide_banner -loglevel warning -nostdin -analyzeduration 1000000 -probesize 1000000 -err_detect ignore_err -i {input} -map 0:v:0 -map 0:a:0 -max_muxing_queue_size 4096 -vf yadif -c:v libx264 -preset fast -c:a aac -b:a 192k -ac 2 -c:s copy -f mpegts -fflags +genpts+discardcorrupt -copyts pipe:1",
+			name: "VideoToolbox h265 RTSP software decode hardware encode",
+			opts: BuildOptions{StreamURL: "rtsp://example.com/stream", HWAccel: "videotoolbox", VideoCodec: "h265", Container: "mpegts"},
+			want: "-hide_banner -loglevel warning -nostdin -rtsp_transport tcp -analyzeduration 3000000 -probesize 2000000 -max_delay 500000 -err_detect ignore_err -fflags +genpts+discardcorrupt -i {input} -map 0:v:0? -map 0:a:0? -max_muxing_queue_size 4096 -c:v hevc_videotoolbox -c:a aac -b:a 192k -f mpegts pipe:1",
 		},
 		{
-			name:       "m3u h264 cfr",
-			sourceType: "m3u",
-			hwaccel:    "none",
-			videoCodec: "h264",
-			container:  "mpegts",
-			fpsMode:    "cfr",
-			want:       "-hide_banner -loglevel warning -nostdin -analyzeduration 1000000 -probesize 1000000 -err_detect ignore_err -i {input} -map 0:v:0 -map 0:a:0 -max_muxing_queue_size 4096 -fps_mode cfr -c:v libx264 -preset fast -c:a aac -b:a 192k -ac 2 -c:s copy -f mpegts -fflags +genpts+discardcorrupt -copyts pipe:1",
+			name: "VideoToolbox av1 falls back to software encode no hwdownload",
+			opts: BuildOptions{StreamURL: "rtsp://example.com/stream", HWAccel: "videotoolbox", VideoCodec: "av1", Container: "matroska"},
+			want: "-hide_banner -loglevel warning -nostdin -rtsp_transport tcp -analyzeduration 3000000 -probesize 2000000 -max_delay 500000 -err_detect ignore_err -fflags +genpts+discardcorrupt -i {input} -map 0:v:0? -map 0:a:0? -max_muxing_queue_size 4096 -c:v libsvtav1 -preset 6 -crf 24 -pix_fmt yuv420p10le -c:a aac -b:a 192k -f matroska pipe:1",
 		},
 		{
-			name:        "vaapi h264 deinterlace adds yadif before hwupload",
-			sourceType:  "m3u",
-			hwaccel:     "vaapi",
-			videoCodec:  "h264",
-			container:   "mpegts",
-			deinterlace: true,
-			want:        "-hide_banner -loglevel warning -nostdin -init_hw_device vaapi=va:/dev/dri/renderD128 -filter_hw_device va -analyzeduration 1000000 -probesize 1000000 -err_detect ignore_err -i {input} -map 0:v:0 -map 0:a:0 -max_muxing_queue_size 4096 -vf yadif,format=nv12,hwupload -c:v h264_vaapi -c:a aac -b:a 192k -ac 2 -c:s copy -f mpegts -fflags +genpts+discardcorrupt -copyts pipe:1",
+			name: "VAAPI h264 auto-detect interlaced adds yadif before hwupload",
+			opts: BuildOptions{StreamURL: "http://example.com/stream", HWAccel: "vaapi", Probe: probeH264Interlaced, VideoCodec: "copy", Container: "mpegts"},
+			want: "-hide_banner -loglevel warning -nostdin -init_hw_device vaapi=va:/dev/dri/renderD128 -filter_hw_device va -reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5 -analyzeduration 1000000 -probesize 1000000 -err_detect ignore_err -fflags +genpts+discardcorrupt -i {input} -map 0:v:0? -map 0:a:0? -max_muxing_queue_size 4096 -vf yadif,format=nv12,hwupload -c:v h264_vaapi -c:a copy -f mpegts pipe:1",
 		},
 		{
-			name:        "videotoolbox av1 deinterlace with hwdownload",
-			sourceType:  "satip",
-			hwaccel:     "videotoolbox",
-			videoCodec:  "av1",
-			container:   "matroska",
-			deinterlace: true,
-			want:        "-hide_banner -loglevel warning -nostdin -hwaccel videotoolbox -hwaccel_output_format videotoolbox_vld -rw_timeout 5000000 -err_detect ignore_err -i {input} -max_muxing_queue_size 4096 -vf hwdownload,format=nv12,yadif -c:v libsvtav1 -preset 6 -crf 24 -pix_fmt yuv420p10le -c:a copy -f matroska pipe:1",
+			name: "QSV hevc auto-detect interlaced uses vpp_qsv",
+			opts: BuildOptions{StreamURL: "http://example.com/stream", HWAccel: "qsv", Probe: probeHevcInterlaced, VideoCodec: "copy", Container: "mpegts"},
+			want: "-hide_banner -loglevel warning -nostdin -init_hw_device vaapi=va:/dev/dri/renderD128 -init_hw_device qsv=qs@va -hwaccel qsv -hwaccel_output_format qsv -reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5 -analyzeduration 1000000 -probesize 1000000 -err_detect ignore_err -fflags +genpts+discardcorrupt -i {input} -map 0:v:0? -map 0:a:0? -max_muxing_queue_size 4096 -vf vpp_qsv=deinterlace_mode=advanced -c:v hevc_qsv -preset veryslow -global_quality 22 -c:a copy -f mpegts pipe:1",
 		},
 		{
-			name:        "qsv h265 deinterlace uses vpp_qsv",
-			sourceType:  "m3u",
-			hwaccel:     "qsv",
-			videoCodec:  "h265",
-			container:   "mpegts",
-			deinterlace: true,
-			want:        "-hide_banner -loglevel warning -nostdin -init_hw_device vaapi=va:/dev/dri/renderD128 -init_hw_device qsv=qs@va -hwaccel qsv -hwaccel_output_format qsv -analyzeduration 1000000 -probesize 1000000 -err_detect ignore_err -i {input} -map 0:v:0 -map 0:a:0 -max_muxing_queue_size 4096 -vf vpp_qsv=deinterlace_mode=advanced -c:v hevc_qsv -preset veryslow -global_quality 22 -c:a aac -b:a 192k -ac 2 -c:s copy -f mpegts -fflags +genpts+discardcorrupt -copyts pipe:1",
+			name: "NVENC h264 auto-detect interlaced uses yadif_cuda",
+			opts: BuildOptions{StreamURL: "rtsp://example.com/stream", HWAccel: "nvenc", Probe: probeH264Interlaced, VideoCodec: "copy", Container: "mpegts"},
+			want: "-hide_banner -loglevel warning -nostdin -hwaccel cuda -hwaccel_output_format cuda -rtsp_transport tcp -analyzeduration 3000000 -probesize 2000000 -max_delay 500000 -err_detect ignore_err -fflags +genpts+discardcorrupt -i {input} -map 0:v:0? -map 0:a:0? -max_muxing_queue_size 4096 -vf yadif_cuda -c:v h264_nvenc -preset p4 -c:a copy -f mpegts pipe:1",
 		},
 		{
-			name:        "nvenc h264 deinterlace uses yadif_cuda",
-			sourceType:  "satip",
-			hwaccel:     "nvenc",
-			videoCodec:  "h264",
-			container:   "mpegts",
-			deinterlace: true,
-			want:        "-hide_banner -loglevel warning -nostdin -hwaccel cuda -hwaccel_output_format cuda -rw_timeout 5000000 -err_detect ignore_err -i {input} -max_muxing_queue_size 4096 -vf yadif_cuda -c:v h264_nvenc -preset p4 -c:a copy -bsf:v dump_extra -f mpegts pipe:1",
-		},
-		{
-			name:       "copy ignores cfr",
-			sourceType: "m3u",
-			hwaccel:    "none",
-			videoCodec: "copy",
-			container:  "mpegts",
-			fpsMode:    "cfr",
-			want:       "-hide_banner -loglevel warning -nostdin -analyzeduration 1000000 -probesize 1000000 -err_detect ignore_err -i {input} -map 0:v -map 0:a:0 -max_muxing_queue_size 4096 -c:v copy -c:a aac -b:a 192k -ac 2 -c:s copy -f mpegts -fflags +genpts+discardcorrupt -copyts pipe:1",
-		},
-		{
-			name:        "copy ignores deinterlace",
-			sourceType:  "m3u",
-			hwaccel:     "none",
-			videoCodec:  "copy",
-			container:   "mpegts",
-			deinterlace: true,
-			want:        "-hide_banner -loglevel warning -nostdin -analyzeduration 1000000 -probesize 1000000 -err_detect ignore_err -i {input} -map 0:v -map 0:a:0 -max_muxing_queue_size 4096 -c:v copy -c:a aac -b:a 192k -ac 2 -c:s copy -f mpegts -fflags +genpts+discardcorrupt -copyts pipe:1",
+			name: "VideoToolbox av1 interlaced uses software decode then yadif",
+			opts: BuildOptions{StreamURL: "rtsp://example.com/stream", HWAccel: "videotoolbox", Probe: probeMpeg2Interlaced, VideoCodec: "av1", Container: "matroska"},
+			want: "-hide_banner -loglevel warning -nostdin -rtsp_transport tcp -analyzeduration 3000000 -probesize 2000000 -max_delay 500000 -err_detect ignore_err -fflags +genpts+discardcorrupt -i {input} -map 0:v:0? -map 0:a:0? -max_muxing_queue_size 4096 -vf yadif -c:v libsvtav1 -preset 6 -crf 24 -pix_fmt yuv420p10le -c:a aac -b:a 192k -f matroska pipe:1",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := ComposeStreamProfileArgs(ComposeOptions{
-				SourceType:  tt.sourceType,
-				HWAccel:     tt.hwaccel,
-				VideoCodec:  tt.videoCodec,
-				Container:   tt.container,
-				Deinterlace: tt.deinterlace,
-				FPSMode:     tt.fpsMode,
-			})
+			cmd, got := Build(tt.opts)
+			if tt.wantCmd != "" && cmd != tt.wantCmd {
+				t.Errorf("command: got %q, want %q", cmd, tt.wantCmd)
+			}
 			if got != tt.want {
 				t.Errorf("got  = %q\nwant = %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestResolveOutputCodec(t *testing.T) {
+	tests := []struct {
+		name       string
+		probe      *ProbeResult
+		videoCodec string
+		want       string
+	}{
+		{"explicit h264 wins over probe", nil, "h264", "h264"},
+		{"explicit h265 wins over probe", nil, "h265", "h265"},
+		{"explicit av1 wins over probe", nil, "av1", "av1"},
+		{"nil probe copy stays copy", nil, "copy", "copy"},
+		{"nil probe empty stays copy", nil, "", "copy"},
+		{"no video in probe stays copy", &ProbeResult{HasVideo: false}, "copy", "copy"},
+		{"mpeg2video forces h264", &ProbeResult{HasVideo: true, Video: &VideoInfo{Codec: "mpeg2video"}}, "copy", "h264"},
+		{"h264 progressive stays copy", &ProbeResult{HasVideo: true, Video: &VideoInfo{Codec: "h264", FieldOrder: "progressive"}}, "copy", "copy"},
+		{"h264 interlaced forces h264", &ProbeResult{HasVideo: true, Video: &VideoInfo{Codec: "h264", FieldOrder: "tt"}}, "copy", "h264"},
+		{"h264 interlaced bb forces h264", &ProbeResult{HasVideo: true, Video: &VideoInfo{Codec: "h264", FieldOrder: "bb"}}, "copy", "h264"},
+		{"hevc progressive stays copy", &ProbeResult{HasVideo: true, Video: &VideoInfo{Codec: "hevc", FieldOrder: "progressive"}}, "copy", "copy"},
+		{"hevc interlaced forces h265", &ProbeResult{HasVideo: true, Video: &VideoInfo{Codec: "hevc", FieldOrder: "tt"}}, "copy", "h265"},
+		{"unknown codec stays copy", &ProbeResult{HasVideo: true, Video: &VideoInfo{Codec: "vp9"}}, "copy", "copy"},
+		{"explicit codec overrides interlaced probe", &ProbeResult{HasVideo: true, Video: &VideoInfo{Codec: "h264", FieldOrder: "tt"}}, "h265", "h265"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := resolveOutputCodec(tt.probe, tt.videoCodec)
+			if got != tt.want {
+				t.Errorf("got %q, want %q", got, tt.want)
 			}
 		})
 	}

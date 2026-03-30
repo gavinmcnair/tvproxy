@@ -335,8 +335,9 @@
       ]);
       const nameMap = {};
       sources.forEach(s => { nameMap[s.id] = s.name; });
-      epgData.forEach(e => { e._display_name = (nameMap[e.epg_source_id] || 'Unknown') + '/' + e.name; });
-      return epgData;
+      const filtered = epgData.filter(e => nameMap[e.epg_source_id]);
+      filtered.forEach(e => { e._display_name = nameMap[e.epg_source_id] + '/' + e.name; });
+      return filtered;
     },
     searchKeys: ['_display_name', 'channel_id'],
     storageKey: 'epg',
@@ -364,9 +365,11 @@
       const satipMap = {};
       satipSources.forEach(s => { satipMap[s.id] = s.name; });
       streams.forEach(s => {
-        s._display_name = s.satip_source_id
-          ? (satipMap[s.satip_source_id] || 'SAT>IP') + '/' + s.name
-          : (nameMap[s.m3u_account_id] || 'Unknown') + '/' + s.name;
+        if (s.satip_source_id) {
+          s._display_name = (satipMap[s.satip_source_id] || 'SAT>IP') + '/' + s.name;
+        } else {
+          s._display_name = (nameMap[s.m3u_account_id] || '') + '/' + s.name;
+        }
       });
       for (var k in streamGroupsCache) delete streamGroupsCache[k];
       return streams;
@@ -1137,7 +1140,21 @@
           const logo = s.logo
             ? '<img class="stream-group-logo" src="' + esc(s.logo) + '" loading="lazy" alt="">'
             : '';
-          rows.push('<tr><td>' + logo + '</td><td>' + esc(s.name) + '</td><td style="width:80px"><div class="actions-cell" style="justify-content:flex-end"><button class="btn btn-primary btn-sm btn-icon" title="Add as Channel" style="font-size:16px" data-qadd="1" data-sid="' + s.id + '" data-sname="' + esc(s.name) + '" data-tvgid="' + esc(s.tvg_id || '') + '" data-slogo="' + esc(s.logo || '') + '">+</button><button class="btn btn-secondary btn-sm btn-icon" title="Play" data-sid="' + s.id + '" data-sname="' + esc(s.name) + '" data-tvgid="' + esc(s.tvg_id || '') + '">\u25B6</button></div></td></tr>');
+          let tracksCell = '';
+          if (s.tracks && s.tracks.length > 0) {
+            const parts = s.tracks.filter(function(t) { return t.category === 'video' || t.category === 'audio'; }).map(function(t) {
+              var label = t.label || t.type || '';
+              if (!t.label && t.language) label += '[' + t.language.replace(/\0/g, '').trim() + ']';
+              if (t.audio_type === 3) label += '[AD]';
+              else if (t.audio_type === 2) label += '[HI]';
+              var color = t.category === 'video' ? 'var(--accent)' : t.audio_type === 3 ? 'var(--text-muted)' : 'inherit';
+              return '<span style="background:var(--bg-hover);border-radius:3px;padding:1px 4px;font-size:11px;white-space:nowrap;color:' + color + '">' + esc(label) + '</span>';
+            });
+            tracksCell = '<td style="color:var(--text-muted);font-size:11px">' + parts.join(' ') + '</td>';
+          } else {
+            tracksCell = '<td></td>';
+          }
+          rows.push('<tr><td>' + logo + '</td><td>' + esc(s.name) + '</td>' + tracksCell + '<td style="width:80px"><div class="actions-cell" style="justify-content:flex-end"><button class="btn btn-primary btn-sm btn-icon" title="Add as Channel" style="font-size:16px" data-qadd="1" data-sid="' + s.id + '" data-sname="' + esc(s.name) + '" data-tvgid="' + esc(s.tvg_id || '') + '" data-slogo="' + esc(s.logo || '') + '">+</button><button class="btn btn-secondary btn-sm btn-icon" title="Play" data-sid="' + s.id + '" data-sname="' + esc(s.name) + '" data-tvgid="' + esc(s.tvg_id || '') + '">\u25B6</button></div></td></tr>');
         }
         return rows;
       }
@@ -1330,15 +1347,16 @@
         api.get('/api/hdhr/devices').catch(() => []),
       ]);
 
-      const streamCount = accounts.reduce((sum, a) => sum + (a.stream_count || 0), 0)
-        + satipSources.reduce((sum, s) => sum + (s.stream_count || 0), 0);
+      const m3uStreamCount = accounts.reduce((sum, a) => sum + (a.stream_count || 0), 0);
+      const satipStreamCount = satipSources.reduce((sum, s) => sum + (s.stream_count || 0), 0);
 
       container.innerHTML = '';
 
       const cards = [
         { label: 'M3U Accounts', value: accounts.length, icon: '\u2630', page: 'm3u-accounts' },
         { label: 'SAT>IP Sources', value: satipSources.length, icon: '\ud83d\udce1', page: 'satip-sources' },
-        { label: 'Streams', value: streamCount, icon: '\u25b6', page: accounts.length ? 'streams-' + accounts[0].id : 'dashboard' },
+        { label: 'M3U Streams', value: m3uStreamCount, icon: '\u25b6', page: accounts.length ? 'streams-' + accounts[0].id : 'dashboard' },
+        { label: 'SAT>IP Streams', value: satipStreamCount, icon: '\ud83d\udce1', page: satipSources.length ? 'satip-sources' : 'dashboard' },
         { label: 'Channels', value: channels.length, icon: '\ud83d\udcfa', page: 'channels' },
         { label: 'Channel Groups', value: groups.length, icon: '\ud83d\udcc2', page: 'channels' },
         { label: 'EPG Sources', value: epgSources.length, icon: '\ud83d\udcc5', page: 'epg-sources' },
@@ -2454,18 +2472,34 @@
     document.body.style.cursor = 'wait';
     try {
       if (activePlayerCleanup) { activePlayerCleanup(); activePlayerCleanup = null; }
+      var streamTracks = null;
+      if (streamsCache._data) {
+        var s = streamsCache._data.find(function(s) { return s.id === streamID; });
+        if (s && s.tracks) streamTracks = s.tracks;
+      }
+      var defaultAudio = defaultAudioIndex(streamTracks);
+      var audioParam = defaultAudio > 0 ? '&audio=' + defaultAudio : '';
       let session = null;
       try {
-        const resp = await fetch('/stream/' + streamID + '/vod?profile=Browser', { method: 'POST' }).then(r => r.json());
+        const resp = await fetch('/stream/' + streamID + '/vod?profile=Browser' + audioParam, { method: 'POST' }).then(r => r.json());
         if (resp.session_id) {
           session = { id: resp.session_id, consumer_id: resp.consumer_id, duration: resp.duration, container: resp.container, request_headers: resp.request_headers };
         }
       } catch(e) {}
-      openVideoPlayer(name, '/stream/' + streamID + '?profile=Browser', tvgId, session);
+      openVideoPlayer(name, '/stream/' + streamID + '?profile=Browser', tvgId, session, undefined, undefined, streamTracks);
     } finally {
       playInProgress = false;
       document.body.style.cursor = '';
     }
+  }
+
+  function defaultAudioIndex(tracks) {
+    if (!tracks) return 0;
+    var audioTracks = tracks.filter(function(t) { return t.category === 'audio'; });
+    for (var i = 0; i < audioTracks.length; i++) {
+      if (audioTracks[i].audio_type !== 3) return i;
+    }
+    return 0;
   }
 
   async function playChannelWithDVR(channelID, name, tvgId) {
@@ -2488,7 +2522,7 @@
     }
   }
 
-  function openVideoPlayer(title, url, tvgId, dvr, channelID, probeUrl) {
+  function openVideoPlayer(title, url, tvgId, dvr, channelID, probeUrl, streamTracks) {
     if (activePlayerCleanup) { activePlayerCleanup(); activePlayerCleanup = null; }
     let mpegtsPlayer = null;
     let retryCount = 0;
@@ -2498,6 +2532,9 @@
     let progInterval = null;
     let dvrPollInterval = null;
     let dvrPosInterval = null;
+    let signalInterval = null;
+    let signalData = null;
+    let satipStreamUrl = null;
     let nowProgram = null;
     let currentContainer = '';
     let currentCodec = '';
@@ -2526,6 +2563,7 @@
     function clearDvrIntervals() {
       if (dvrPollInterval) { clearInterval(dvrPollInterval); dvrPollInterval = null; }
       if (dvrPosInterval) { clearInterval(dvrPosInterval); dvrPosInterval = null; }
+      if (signalInterval) { clearInterval(signalInterval); signalInterval = null; }
     }
 
     function cleanup() {
@@ -2712,6 +2750,30 @@
     hdrBtns.appendChild(recordBtn);
     hdrBtns.appendChild(statsBtn);
     hdrBtns.appendChild(closeBtn);
+
+    if (streamTracks) {
+      var scanAudioTracks = streamTracks.filter(function(t) { return t.category === 'audio'; });
+      if (scanAudioTracks.length > 1) {
+        audioSelect = document.createElement('select');
+        audioSelect.className = 'btn btn-sm';
+        audioSelect.title = 'Audio Track';
+        audioSelect.style.cssText = 'padding:2px 6px;font-size:12px;background:var(--bg-card);color:#e0e0e0;border:1px solid var(--border);border-radius:4px;cursor:pointer;max-width:140px;';
+        scanAudioTracks.forEach(function(t, idx) {
+          var opt = document.createElement('option');
+          opt.value = idx;
+          var label = t.label || (t.language ? t.language.toUpperCase() : 'Track ' + (idx + 1));
+          if (t.audio_type === 3) label += ' [AD]';
+          else if (t.audio_type === 2) label += ' [HI]';
+          opt.textContent = label;
+          audioSelect.appendChild(opt);
+        });
+        currentAudioIndex = defaultAudioIndex(streamTracks);
+        audioSelect.value = currentAudioIndex;
+        audioSelect.onchange = function() { switchAudioTrack(parseInt(audioSelect.value, 10)); };
+        hdrBtns.insertBefore(audioSelect, recordBtn);
+      }
+    }
+
     header.appendChild(titleEl);
     header.appendChild(hdrBtns);
     modal.appendChild(header);
@@ -2921,6 +2983,17 @@
           if (st.video || st.audio_tracks) {
             probeData = { video: st.video || null, audio_tracks: st.audio_tracks || [], duration: st.duration, profile: st.profile || '' };
           }
+          if (st.stream_url && st.stream_url.startsWith('rtsp://') && !signalInterval) {
+            satipStreamUrl = st.stream_url;
+            const pollSignal = async () => {
+              if (playerCtx.signal.aborted || !satipStreamUrl) return;
+              try {
+                signalData = await api.get('/api/satip/signal?url=' + encodeURIComponent(satipStreamUrl));
+              } catch(e) {}
+            };
+            pollSignal();
+            signalInterval = setInterval(pollSignal, 5000);
+          }
           if (st.audio_tracks && st.audio_tracks.length > 1 && !audioSelect) {
             audioSelect = document.createElement('select');
             audioSelect.className = 'btn btn-sm';
@@ -3050,6 +3123,28 @@
       }
       if (probeData) lines.push('Duration: ' + (probeData.duration > 0 ? fmtTime(probeData.duration) : '\u221E'));
       if (probeData && probeData.profile) lines.push('Profile: ' + esc(probeData.profile));
+      if (signalData) {
+        lines.push('');
+        var lockColor = signalData.lock ? '#4caf50' : '#ff6b6b';
+        var lvl = signalData.level_pct;
+        var qlt = signalData.quality_pct;
+        var lvlColor = lvl > 60 ? '#4caf50' : lvl > 30 ? '#ffb300' : '#ff6b6b';
+        var qltColor = qlt > 60 ? '#4caf50' : qlt > 30 ? '#ffb300' : '#ff6b6b';
+        function sigBar(pct, color) {
+          return '<span style="display:inline-block;width:60px;height:6px;background:#333;vertical-align:middle;border-radius:3px">'
+            + '<span style="display:block;width:' + pct + '%;height:100%;background:' + color + ';border-radius:3px"></span></span>';
+        }
+        lines.push('<b>SAT\u003eIP Signal</b>');
+        var tunerLabel = signalData.fe_id ? 'FE' + signalData.fe_id + ' — ' : '';
+        lines.push('Tuner: ' + esc(tunerLabel) + '<span style="color:' + lockColor + '">' + (signalData.lock ? 'Locked' : 'No Lock') + '</span>' + (signalData.active ? '' : ' <span style="color:#999">(idle)</span>'));
+        lines.push('Level: <span style="color:' + lvlColor + '">' + lvl + '%</span> ' + sigBar(lvl, lvlColor));
+        lines.push('Quality: <span style="color:' + qltColor + '">' + qlt + '%</span> ' + sigBar(qlt, qltColor));
+        if (signalData.ber != null) lines.push('BER: ' + signalData.ber);
+        if (signalData.freq_mhz) lines.push('Freq: ' + signalData.freq_mhz + ' MHz' + (signalData.bw_mhz ? ' / ' + signalData.bw_mhz + ' MHz' : ''));
+        if (signalData.msys) lines.push('System: ' + esc(signalData.msys.toUpperCase()) + (signalData.mtype ? ' ' + esc(signalData.mtype.toUpperCase()) : ''));
+        if (signalData.bitrate_kbps) lines.push('TS Bitrate: ' + (signalData.bitrate_kbps / 1000).toFixed(1) + ' Mbps');
+        if (signalData.server) lines.push('Server: ' + esc(signalData.server));
+      }
       if (dvr && dvr.request_headers) {
         lines.push('');
         lines.push('<b>Request Headers</b>');
@@ -3260,44 +3355,125 @@
       });
     } catch {}
 
+    const epgData = await epgCache.getAll().catch(() => []);
+
+    // Match in priority order: exact tvg_id → exact name → stripped name (prefer same HD/SD suffix)
     let matchedEpg = null;
     if (tvgId) {
-      const epgData = await epgCache.getAll().catch(() => []);
-      matchedEpg = epgData.find(e => e.channel_id === tvgId);
+      matchedEpg = epgData.find(e => e.channel_id === tvgId) || null;
     }
     if (!matchedEpg) {
-      const epgData = await epgCache.getAll().catch(() => []);
-      const norm = streamName.toLowerCase().replace(/\s*(hd|sd|fhd|uhd|\+1|_hd|_sd)\s*$/i, '').trim();
-      for (let i = 0; i < epgData.length; i++) {
-        const en = (epgData[i].name || '').toLowerCase().replace(/\s*(hd|sd|fhd|uhd|\+1|_hd|_sd)\s*$/i, '').trim();
-        if (en === norm) { matchedEpg = epgData[i]; break; }
+      const nameLc = streamName.toLowerCase();
+      matchedEpg = epgData.find(e => (e.name || '').toLowerCase() === nameLc) || null;
+    }
+    if (!matchedEpg) {
+      const stripSuffix = s => s.toLowerCase().replace(/[\s_-]*(hd|sd|fhd|uhd|\+1)$/i, '').trim();
+      const norm = stripSuffix(streamName);
+      const isHD = /[\s_-]hd$/i.test(streamName);
+      let fallback = null;
+      for (const e of epgData) {
+        if (stripSuffix(e.name || '') === norm) {
+          const eHD = /[\s_-]hd$/i.test(e.name || '');
+          if (eHD === isHD) { matchedEpg = e; break; }
+          if (!fallback) fallback = e;
+        }
       }
+      if (!matchedEpg) matchedEpg = fallback;
     }
 
-    const tvgInp = h('input', { type: 'text', value: matchedEpg ? matchedEpg.channel_id : (tvgId || '') });
+    // Build EPG autocomplete widget
+    let selectedEpg = matchedEpg;
+    const acWrapper = h('div', { className: 'autocomplete-wrapper' });
+    const tvgInp = h('input', {
+      type: 'text',
+      placeholder: 'Search EPG channels...',
+      value: matchedEpg ? (matchedEpg._display_name || matchedEpg.name) : (tvgId || ''),
+    });
+    tvgInp._selectedValue = matchedEpg ? matchedEpg.channel_id : (tvgId || '');
+    const acDropdown = h('div', { className: 'autocomplete-dropdown' });
+    acDropdown.style.display = 'none';
+
+    function renderAcDropdown(query) {
+      acDropdown.innerHTML = '';
+      const matches = epgCache.search(query, 50);
+      if (!matches.length) { acDropdown.style.display = 'none'; return; }
+      let selIdx = -1;
+      matches.forEach((opt, i) => {
+        const row = h('div', { className: 'autocomplete-item' });
+        if (opt.icon) row.appendChild(h('img', { src: opt.icon, className: 'autocomplete-icon' }));
+        const text = h('div', { className: 'autocomplete-text' });
+        text.appendChild(h('div', { className: 'autocomplete-name' }, opt._display_name || opt.name || ''));
+        text.appendChild(h('div', { className: 'autocomplete-id' }, opt.channel_id || ''));
+        row.appendChild(text);
+        row.addEventListener('click', () => {
+          selectedEpg = opt;
+          tvgInp.value = opt._display_name || opt.name || '';
+          tvgInp._selectedValue = opt.channel_id || '';
+          acDropdown.style.display = 'none';
+        });
+        acDropdown.appendChild(row);
+      });
+      acDropdown.style.display = 'block';
+    }
+
+    tvgInp.addEventListener('input', () => {
+      selectedEpg = null;
+      tvgInp._selectedValue = '';
+      renderAcDropdown(tvgInp.value);
+    });
+    tvgInp.addEventListener('focus', () => { if (tvgInp.value) renderAcDropdown(tvgInp.value); });
+    tvgInp.addEventListener('keydown', e => {
+      const items = acDropdown.querySelectorAll('.autocomplete-item');
+      if (!items.length) return;
+      let selIdx = Array.from(items).findIndex(el => el.classList.contains('selected'));
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        selIdx = Math.min(selIdx + 1, items.length - 1);
+        items.forEach((el, i) => el.classList.toggle('selected', i === selIdx));
+        items[selIdx].scrollIntoView({ block: 'nearest' });
+      } else if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        selIdx = Math.max(selIdx - 1, 0);
+        items.forEach((el, i) => el.classList.toggle('selected', i === selIdx));
+        items[selIdx].scrollIntoView({ block: 'nearest' });
+      } else if (e.key === 'Enter' && selIdx >= 0) {
+        e.preventDefault(); items[selIdx].click();
+      } else if (e.key === 'Escape') {
+        acDropdown.style.display = 'none';
+      }
+    });
+    setTimeout(() => {
+      document.addEventListener('click', function acClose(e) {
+        if (!acWrapper.contains(e.target)) acDropdown.style.display = 'none';
+      });
+    }, 0);
+
     const statusEl = matchedEpg
       ? h('small', { style: 'color:var(--success)' }, 'Auto-matched: ' + (matchedEpg._display_name || matchedEpg.name))
-      : h('small', { style: 'color:var(--text-muted)' }, tvgId ? 'Using stream tvg-id' : 'No EPG match found');
+      : h('small', { style: 'color:var(--text-muted)' }, tvgId ? 'No EPG match — using stream tvg-id' : 'No EPG match found');
+
+    acWrapper.appendChild(tvgInp);
+    acWrapper.appendChild(acDropdown);
 
     const bodyEl = h('div', null,
       h('div', { className: 'form-group' }, h('label', null, 'Channel Name'), nameInp),
-      h('div', { className: 'form-group' }, h('label', null, 'EPG Channel ID'), tvgInp, statusEl),
+      h('div', { className: 'form-group' }, h('label', null, 'EPG Channel ID'), acWrapper, statusEl),
       h('div', { className: 'form-group' }, h('label', null, 'Channel Group'), groupSelect),
     );
 
     showModal('Quick Add Channel', bodyEl, async () => {
       if (!nameInp.value.trim()) throw new Error('Channel name is required');
 
+      const resolvedTvgId = tvgInp._selectedValue || tvgInp.value.trim();
       const channelData = {
         name: nameInp.value.trim(),
-        tvg_id: tvgInp.value.trim(),
+        tvg_id: resolvedTvgId,
         channel_group_id: groupSelect.value || null,
         is_enabled: true,
       };
 
-      if (logoUrl || (matchedEpg && matchedEpg.icon)) {
-        channelData.logo = logoUrl || matchedEpg.icon;
-      }
+      const icon = logoUrl || (selectedEpg && selectedEpg.icon) || '';
+      if (icon) channelData.logo = icon;
 
       const channel = await api.post('/api/channels', channelData);
       await api.post('/api/channels/' + channel.id + '/streams', { stream_ids: [streamId] });
@@ -3385,7 +3561,7 @@
           return wrap;
         }},
         { key: 'host', label: 'Host' },
-        { key: 'http_port', label: 'HTTP Port' },
+        { key: 'transmitter_file', label: 'Transmitter', render: item => item.transmitter_file ? item.transmitter_file.split('/').pop() : '—' },
         { key: 'is_enabled', label: 'Enabled', render: item => item.is_enabled ? '\u2714' : '\u2718' },
         { key: 'stream_count', label: 'Streams' },
         { key: 'last_scanned', label: 'Last Scanned', render: item => item.last_scanned ? new Date(item.last_scanned).toLocaleString() : 'Never' },
@@ -3395,28 +3571,105 @@
         { key: 'host', label: 'Host / IP Address', placeholder: '192.168.1.100' },
         { key: 'http_port', label: 'HTTP Port', type: 'number', default: 8875, help: 'SAT>IP HTTP port (default 8875)' },
         { key: 'is_enabled', label: 'Enabled', type: 'checkbox', default: true },
+        {
+          key: '_delivery_system',
+          label: 'Delivery System',
+          type: 'select',
+          exclude: true,
+          options: [
+            { value: '', label: '— select —' },
+            { value: 'dvb-t', label: 'DVB-T / DVB-T2 (Terrestrial)' },
+            { value: 'dvb-s', label: 'DVB-S / DVB-S2 (Satellite)' },
+            { value: 'dvb-c', label: 'DVB-C (Cable)' },
+          ],
+        },
+        {
+          key: 'transmitter_file',
+          label: 'Transmitter',
+          type: 'select',
+          options: [{ value: '', label: '— select delivery system first —' }],
+        },
       ],
+      postFormSetup: (inputs, isEdit, item) => {
+        var sysSel = inputs['_delivery_system'];
+        var txSel = inputs['transmitter_file'];
+        async function loadTransmitters(system, selectValue) {
+          txSel.innerHTML = '';
+          if (!system) {
+            txSel.appendChild(h('option', { value: '' }, '— select delivery system first —'));
+            return;
+          }
+          txSel.appendChild(h('option', { value: '' }, 'Loading...'));
+          try {
+            var list = await api.get('/api/satip/transmitters?system=' + system);
+            txSel.innerHTML = '';
+            txSel.appendChild(h('option', { value: '' }, '— select transmitter —'));
+            list.forEach(function(t) {
+              var opt = h('option', { value: t.file }, t.name);
+              if (selectValue && t.file === selectValue) opt.selected = true;
+              txSel.appendChild(opt);
+            });
+          } catch(e) {
+            txSel.innerHTML = '';
+            txSel.appendChild(h('option', { value: '' }, '— failed to load —'));
+          }
+        }
+        if (isEdit && item.transmitter_file) {
+          var prefix = item.transmitter_file.split('/')[0];
+          sysSel.value = prefix;
+          loadTransmitters(prefix, item.transmitter_file);
+        }
+        sysSel.addEventListener('change', function() {
+          loadTransmitters(sysSel.value, null);
+        });
+      },
       rowActions: (item, reload) => [
         {
           label: 'Scan',
           icon: '\u21BB',
-          handler: async () => {
+          handler: async (e) => {
+            const scanBtn = e.currentTarget;
+            const cell = scanBtn.parentElement;
             try {
               await api.post('/api/satip/sources/' + item.id + '/scan');
-              toast.success('Scan started for ' + item.name);
+              scanBtn.disabled = true;
+              scanBtn.style.display = 'none';
+              const progressWrap = document.createElement('div');
+              progressWrap.style.cssText = 'display:flex;flex-direction:column;gap:2px;min-width:80px;';
+              const progressBar = document.createElement('div');
+              progressBar.style.cssText = 'height:6px;background:var(--bg-hover);border-radius:3px;overflow:hidden;';
+              const progressFill = document.createElement('div');
+              progressFill.style.cssText = 'height:100%;width:0%;background:var(--accent);border-radius:3px;transition:width 0.3s;';
+              progressBar.appendChild(progressFill);
+              const progressLabel = document.createElement('div');
+              progressLabel.style.cssText = 'font-size:10px;color:var(--text-muted);text-align:center;';
+              progressLabel.textContent = 'Starting...';
+              progressWrap.appendChild(progressBar);
+              progressWrap.appendChild(progressLabel);
+              cell.appendChild(progressWrap);
               var pollCount = 0;
               var pollTimer = setInterval(async () => {
                 try {
                   var status = await api.get('/api/satip/sources/' + item.id + '/status');
+                  if (status.total > 0) {
+                    var pct = Math.round((status.progress / status.total) * 100);
+                    progressFill.style.width = pct + '%';
+                    progressLabel.textContent = status.progress + '/' + status.total + ' (' + pct + '%)';
+                  } else {
+                    progressLabel.textContent = status.message || 'Scanning...';
+                  }
                   if (status.state === 'done' || status.state === 'error') {
                     clearInterval(pollTimer);
+                    progressWrap.remove();
+                    scanBtn.disabled = false;
+                    scanBtn.style.display = '';
                     reload();
                     if (status.state === 'done') toast.success(item.name + ': ' + status.message);
                     else toast.error(item.name + ': ' + status.message);
                   }
                 } catch (e) {}
                 if (++pollCount > 120) clearInterval(pollTimer);
-              }, 2000);
+              }, 1000);
             } catch (err) {
               toast.error(err.message);
             }
@@ -3771,8 +4024,9 @@
           { value: 'auto', label: 'Auto (variable)' },
           { value: 'cfr', label: 'CFR (constant frame rate)' },
         ], default: 'auto', showWhen: form => (form.stream_mode || 'ffmpeg') === 'ffmpeg' && (form.video_codec || 'default') !== 'copy' },
-        { key: 'use_custom_args', label: 'Use Custom Args', type: 'checkbox', default: false, help: 'When checked, the FFmpeg Args field below is used as the complete command (dropdowns are ignored).', showWhen: form => (form.stream_mode || 'ffmpeg') === 'ffmpeg' },
-        { key: 'custom_args', label: 'FFmpeg Args', type: 'textarea', placeholder: '-b:v 4M -maxrate 5M', help: 'Extra flags appended to the composed command. When "Use Custom Args" is checked, this is the full command.', showWhen: form => (form.stream_mode || 'ffmpeg') === 'ffmpeg' },
+        { key: 'auto_detect', label: 'Auto-Detect', type: 'checkbox', default: false, help: 'Probe the stream on first play and automatically choose codec/filter settings. Probe result is cached and reused. Works for both M3U and SAT>IP streams.', showWhen: form => (form.stream_mode || 'ffmpeg') === 'ffmpeg' },
+        { key: 'use_custom_args', label: 'Use Custom Args', type: 'checkbox', default: false, help: 'When checked, the FFmpeg Args field below is used as the complete command (dropdowns are ignored).', showWhen: form => (form.stream_mode || 'ffmpeg') === 'ffmpeg' && !form.auto_detect },
+        { key: 'custom_args', label: 'FFmpeg Args', type: 'textarea', placeholder: '-b:v 4M -maxrate 5M', help: 'Extra flags appended to the composed command. When "Use Custom Args" is checked, this is the full command.', showWhen: form => (form.stream_mode || 'ffmpeg') === 'ffmpeg' && !form.auto_detect },
       ],
     }),
 

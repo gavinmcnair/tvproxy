@@ -28,6 +28,7 @@ type StreamWriter interface {
 	DeleteByAccountID(ctx context.Context, accountID string) error
 	DeleteStaleBySatIPSourceID(ctx context.Context, sourceID string, keepIDs []string) ([]string, error)
 	DeleteBySatIPSourceID(ctx context.Context, sourceID string) error
+	DeleteOrphanedM3UStreams(ctx context.Context, knownAccountIDs []string) ([]string, error)
 	Delete(ctx context.Context, id string) error
 	Clear() error
 }
@@ -47,6 +48,7 @@ type EPGReader interface {
 	ListEPGData(ctx context.Context) ([]models.EPGData, error)
 	ListBySourceID(ctx context.Context, sourceID string) ([]models.EPGData, error)
 	GetNowByChannelID(ctx context.Context, channelID string, now time.Time) (*models.ProgramData, error)
+	GetIconByChannelID(ctx context.Context, channelID string) string
 	ListNowPlaying(ctx context.Context, now time.Time) (map[string]string, error)
 	ListForGuide(ctx context.Context, start, end time.Time) ([]models.GuideProgram, error)
 	ListPrograms(ctx context.Context, epgDataID string) ([]models.ProgramData, error)
@@ -57,6 +59,7 @@ type EPGWriter interface {
 	BulkCreateEPGData(ctx context.Context, data []models.EPGData) error
 	BulkCreatePrograms(ctx context.Context, programs []models.ProgramData) error
 	DeleteBySourceID(ctx context.Context, sourceID string) error
+	DeleteOrphanedEPGData(ctx context.Context, knownSourceIDs []string) (int, error)
 	DeleteProgramsByEPGDataID(ctx context.Context, epgDataID string) error
 	Clear() error
 }
@@ -73,8 +76,9 @@ type EPGStore interface {
 }
 
 type ProbeCache interface {
-	GetProbe(streamID string) (*ffmpeg.ProbeResult, error)
-	SaveProbe(streamID string, result *ffmpeg.ProbeResult) error
+	GetProbe(streamHash string) (*ffmpeg.ProbeResult, error)
+	SaveProbe(streamHash string, result *ffmpeg.ProbeResult) error
+	InvalidateProbe(streamHash string) error
 }
 
 type RecordingReader interface {

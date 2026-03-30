@@ -31,32 +31,43 @@ type M3UAccount struct {
 }
 
 type SatIPSource struct {
-	ID          string     `json:"id"`
-	Name        string     `json:"name"`
-	Host        string     `json:"host"`
-	HTTPPort    int        `json:"http_port"`
-	IsEnabled   bool       `json:"is_enabled"`
-	LastScanned *time.Time `json:"last_scanned,omitempty"`
-	StreamCount int        `json:"stream_count"`
-	LastError   string     `json:"last_error"`
-	CreatedAt   time.Time  `json:"created_at"`
-	UpdatedAt   time.Time  `json:"updated_at"`
+	ID               string     `json:"id"`
+	Name             string     `json:"name"`
+	Host             string     `json:"host"`
+	HTTPPort         int        `json:"http_port"`
+	IsEnabled        bool       `json:"is_enabled"`
+	TransmitterFile  string     `json:"transmitter_file"`
+	LastScanned      *time.Time `json:"last_scanned,omitempty"`
+	StreamCount      int        `json:"stream_count"`
+	LastError        string     `json:"last_error"`
+	CreatedAt        time.Time  `json:"created_at"`
+	UpdatedAt        time.Time  `json:"updated_at"`
+}
+
+type StreamTrack struct {
+	PID       uint16 `json:"pid"`
+	Type      string `json:"type"`
+	Category  string `json:"category,omitempty"`  // video, audio, subtitle, teletext
+	Language  string `json:"language,omitempty"`
+	AudioType uint8  `json:"audio_type,omitempty"` // 0=normal, 1=clean, 2=hearing impaired, 3=audio description
+	Label     string `json:"label,omitempty"`      // component descriptor text e.g. "English AD"
 }
 
 type Stream struct {
-	ID            string    `json:"id"`
-	M3UAccountID  string    `json:"m3u_account_id"`
-	SatIPSourceID string    `json:"satip_source_id,omitempty"`
-	Name          string    `json:"name"`
-	URL          string    `json:"url"`
-	Group        string    `json:"group"`
-	Logo         string    `json:"logo,omitempty"`
-	TvgID        string    `json:"tvg_id,omitempty"`
-	TvgName      string    `json:"tvg_name,omitempty"`
-	ContentHash  string    `json:"content_hash"`
-	IsActive     bool      `json:"is_active"`
-	CreatedAt    time.Time `json:"created_at"`
-	UpdatedAt    time.Time `json:"updated_at"`
+	ID            string        `json:"id"`
+	M3UAccountID  string        `json:"m3u_account_id"`
+	SatIPSourceID string        `json:"satip_source_id,omitempty"`
+	Name          string        `json:"name"`
+	URL           string        `json:"url"`
+	Group         string        `json:"group"`
+	Logo          string        `json:"logo,omitempty"`
+	TvgID         string        `json:"tvg_id,omitempty"`
+	TvgName       string        `json:"tvg_name,omitempty"`
+	ContentHash   string        `json:"content_hash"`
+	IsActive      bool          `json:"is_active"`
+	Tracks        []StreamTrack `json:"tracks,omitempty"`
+	CreatedAt     time.Time     `json:"created_at"`
+	UpdatedAt     time.Time     `json:"updated_at"`
 }
 
 type Channel struct {
@@ -109,6 +120,7 @@ type StreamProfile struct {
 	Deinterlace   bool      `json:"deinterlace"`
 	FPSMode       string    `json:"fps_mode"`
 	UseCustomArgs bool      `json:"use_custom_args"`
+	AutoDetect    bool      `json:"auto_detect"`
 	CustomArgs    string    `json:"custom_args,omitempty"`
 	Command       string    `json:"command,omitempty"`
 	Args          string    `json:"args,omitempty"`

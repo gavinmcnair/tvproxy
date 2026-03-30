@@ -9,7 +9,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
 	"sync"
 	"time"
 
@@ -90,18 +89,18 @@ func NewVODService(
 	}
 }
 
-func (s *VODService) resolveStreamForChannel(ctx context.Context, channelID string) (streamURL, streamName, channelName, streamID string, err error) {
+func (s *VODService) resolveStreamForChannel(ctx context.Context, channelID string) (streamURL, streamName, channelName, streamID, sourceType string, err error) {
 	channel, err := s.channelStore.GetByID(ctx, channelID)
 	if err != nil {
-		return "", "", "", "", fmt.Errorf("channel not found: %w", err)
+		return "", "", "", "", "", fmt.Errorf("channel not found: %w", err)
 	}
 	if !channel.IsEnabled {
-		return "", "", "", "", fmt.Errorf("channel %s is disabled", channelID)
+		return "", "", "", "", "", fmt.Errorf("channel %s is disabled", channelID)
 	}
 
 	channelStreams, err := s.channelStore.GetStreams(ctx, channelID)
 	if err != nil {
-		return "", "", "", "", fmt.Errorf("getting channel streams: %w", err)
+		return "", "", "", "", "", fmt.Errorf("getting channel streams: %w", err)
 	}
 
 	for _, cs := range channelStreams {
@@ -109,31 +108,58 @@ func (s *VODService) resolveStreamForChannel(ctx context.Context, channelID stri
 		if err != nil || !stream.IsActive {
 			continue
 		}
-		return stream.URL, stream.Name, channel.Name, cs.StreamID, nil
+		st := "m3u"
+		if stream.SatIPSourceID != "" {
+			st = "satip"
+		}
+		return stream.URL, stream.Name, channel.Name, cs.StreamID, st, nil
 	}
 
-	return "", "", "", "", fmt.Errorf("no active streams for channel %s", channelID)
+	return "", "", "", "", "", fmt.Errorf("no active streams for channel %s", channelID)
 }
 
-func (s *VODService) composeSessionArgs(ctx context.Context, profileName string) (string, string, string) {
-	command := "ffmpeg"
+func (s *VODService) composeSessionArgs(ctx context.Context, profileName, streamURL string) (string, string, string) {
 	if profileName == "" {
-		return command, "", "mp4"
+		return "ffmpeg", "", "mp4"
 	}
 	sp, err := s.streamProfileRepo.GetByName(ctx, profileName)
-	if err != nil || sp.Args == "" {
-		return command, "", "mp4"
+	if err != nil {
+		return "ffmpeg", "", "mp4"
 	}
-	return sp.Command, sp.Args, sp.Container
+
+	globalHW, globalCodec := s.settingsService.ResolveGlobalDefaults(ctx)
+	hwaccel := sp.HWAccel
+	if hwaccel == "default" || hwaccel == "" {
+		hwaccel = globalHW
+	}
+	videoCodec := sp.VideoCodec
+	if videoCodec == "default" || videoCodec == "" {
+		videoCodec = globalCodec
+	}
+
+	var probe *ffmpeg.ProbeResult
+	if streamURL != "" {
+		probe, _ = s.recordingStore.GetProbe(ffmpeg.StreamHash(streamURL))
+	}
+
+	command, args := ffmpeg.Build(ffmpeg.BuildOptions{
+		StreamURL:     streamURL,
+		Probe:         probe,
+		Container:     sp.Container,
+		HWAccel:       hwaccel,
+		VideoCodec:    videoCodec,
+		CustomCommand: sp.Args,
+	})
+	return command, args, sp.Container
 }
 
 func (s *VODService) StartWatching(ctx context.Context, channelID string, profileName string, userAgent string, remoteAddr string) (string, string, string, error) {
-	streamURL, streamName, channelName, streamID, err := s.resolveStreamForChannel(ctx, channelID)
+	streamURL, streamName, channelName, streamID, _, err := s.resolveStreamForChannel(ctx, channelID)
 	if err != nil {
 		return "", "", "", err
 	}
 
-	command, args, container := s.composeSessionArgs(ctx, profileName)
+	command, args, container := s.composeSessionArgs(ctx, profileName, streamURL)
 
 	_, consumerID, err := s.sessionMgr.GetOrCreateWithConsumer(ctx, session.StartOpts{
 		ChannelID:   channelID,
@@ -176,7 +202,7 @@ func (s *VODService) StartWatchingStream(ctx context.Context, streamID string, p
 		return "", "", "", fmt.Errorf("stream %s is inactive", streamID)
 	}
 
-	command, args, container := s.composeSessionArgs(ctx, profileName)
+	command, args, container := s.composeSessionArgs(ctx, profileName, stream.URL)
 
 	_, consumerID, err := s.sessionMgr.GetOrCreateWithConsumer(ctx, session.StartOpts{
 		ChannelID:   streamID,
@@ -239,7 +265,7 @@ func (s *VODService) startRecordingInternal(ctx context.Context, channelID, titl
 		return ErrAlreadyRecording
 	}
 
-	streamURL, streamName, resolvedChannelName, streamID, err := s.resolveStreamForChannel(ctx, channelID)
+	streamURL, streamName, resolvedChannelName, streamID, _, err := s.resolveStreamForChannel(ctx, channelID)
 	if err != nil {
 		return err
 	}
@@ -247,33 +273,20 @@ func (s *VODService) startRecordingInternal(ctx context.Context, channelID, titl
 		channelName = resolvedChannelName
 	}
 
-	command, args, _ := s.composeSessionArgs(ctx, "")
-	defaultCodec := "copy"
-	if val, err := s.settingsService.Get(ctx, "default_video_codec"); err == nil && val != "" {
-		defaultCodec = val
-	}
-	defaultHWAccel := "none"
-	if val, err := s.settingsService.Get(ctx, "default_hwaccel"); err == nil && val != "" {
-		defaultHWAccel = val
-	}
-	if defaultCodec != "copy" || defaultHWAccel != "none" {
-		args = ffmpeg.ComposeStreamProfileArgs(ffmpeg.ComposeOptions{
-			SourceType: "m3u",
-			HWAccel:    defaultHWAccel,
-			VideoCodec: defaultCodec,
-			Container:  "mp4",
-		})
-		command = "ffmpeg"
+	defaultHWAccel, defaultCodec := s.settingsService.ResolveGlobalDefaults(ctx)
+
+	var probe *ffmpeg.ProbeResult
+	if streamURL != "" {
+		probe, _ = s.recordingStore.GetProbe(ffmpeg.StreamHash(streamURL))
 	}
 
-	for i, a := range ffmpeg.ShellSplit(args) {
-		if a == "pipe:1" {
-			split := ffmpeg.ShellSplit(args)
-			split[i] = "{output}"
-			args = strings.Join(split, " ")
-			break
-		}
-	}
+	command, args := ffmpeg.Build(ffmpeg.BuildOptions{
+		StreamURL:  streamURL,
+		Probe:      probe,
+		Container:  "mp4",
+		HWAccel:    defaultHWAccel,
+		VideoCodec: defaultCodec,
+	})
 
 	sess, consumerID, err := s.sessionMgr.GetOrCreateWithConsumer(ctx, session.StartOpts{
 		ChannelID:   channelID,
@@ -442,9 +455,9 @@ func (s *VODService) GetProbeInfo(channelID string) (*ffmpeg.VideoInfo, []ffmpeg
 	return sess.GetProbeInfo()
 }
 
-func (s *VODService) ProbeFile(ctx context.Context, streamID, filePath string) (*ffmpeg.ProbeResult, error) {
-	if streamID != "" {
-		cached, _ := s.recordingStore.GetProbe(streamID)
+func (s *VODService) ProbeFile(ctx context.Context, streamURL, filePath string) (*ffmpeg.ProbeResult, error) {
+	if streamURL != "" {
+		cached, _ := s.recordingStore.GetProbe(ffmpeg.StreamHash(streamURL))
 		if cached != nil {
 			return cached, nil
 		}
@@ -453,8 +466,8 @@ func (s *VODService) ProbeFile(ctx context.Context, streamID, filePath string) (
 	if err != nil {
 		return nil, err
 	}
-	if streamID != "" && result != nil {
-		s.recordingStore.SaveProbe(streamID, result)
+	if streamURL != "" && result != nil {
+		s.recordingStore.SaveProbe(ffmpeg.StreamHash(streamURL), result)
 	}
 	return result, nil
 }

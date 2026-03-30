@@ -22,6 +22,7 @@ import (
 	"github.com/gavinmcnair/tvproxy/pkg/ffmpeg"
 	"github.com/gavinmcnair/tvproxy/pkg/httputil"
 	"github.com/gavinmcnair/tvproxy/pkg/store"
+	"github.com/gavinmcnair/tvproxy/pkg/tvsatipscan"
 )
 
 const maxBufferedSecs = 172800.0
@@ -117,8 +118,8 @@ func (m *Manager) GetOrCreate(ctx context.Context, opts StartOpts) (*Session, er
 		done:        make(chan struct{}),
 	}
 
-	if m.probeCache != nil && opts.StreamID != "" {
-		if cached, err := m.probeCache.GetProbe(opts.StreamID); err == nil && cached != nil {
+	if m.probeCache != nil && opts.StreamURL != "" {
+		if cached, err := m.probeCache.GetProbe(ffmpeg.StreamHash(opts.StreamURL)); err == nil && cached != nil {
 			s.setProbeInfo(cached.Video, cached.AudioTracks, cached.Duration)
 		}
 	}
@@ -134,6 +135,9 @@ func (m *Manager) GetOrCreate(ctx context.Context, opts StartOpts) (*Session, er
 
 	go m.run(sessionCtx, s, command, args, opts.StreamURL)
 	go m.probeAsync(s, opts.StreamURL)
+	if strings.HasPrefix(opts.StreamURL, "rtsp://") || strings.HasPrefix(opts.StreamURL, "rtsps://") {
+		go m.logSignalAsync(s.ID, opts.ChannelID, opts.StreamURL)
+	}
 
 	m.log.Info().
 		Str("session_id", s.ID).
@@ -169,24 +173,6 @@ func (m *Manager) buildArgs(argsStr string, inputURL string, outputPath string) 
 	}
 
 	args = append([]string{"-y"}, args...)
-
-	if !httpInput {
-		args = ffmpeg.InjectUserAgent(args, m.config.UserAgent)
-		delayMax, rwTimeout := 30, 30000000
-		if m.config.Settings != nil {
-			delayMax = m.config.Settings.Network.ReconnectDelayMax
-			rwTimeout = m.config.Settings.Network.ReconnectRWTimeout
-		}
-		args = ffmpeg.InjectReconnect(args, inputURL, delayMax, rwTimeout)
-		if ffmpeg.IsRTSPURL(inputURL) {
-			args = ffmpeg.InjectRTSPTransport(args)
-			args = ffmpeg.InjectRTSPProbe(args)
-			args = ffmpeg.SoftenMaps(args)
-			args = ffmpeg.InjectAudioResync(args)
-			args = ffmpeg.InjectFPSMode(args)
-		}
-	}
-
 	args = append(args, "-progress", "pipe:2")
 
 	return args
@@ -432,8 +418,8 @@ func (m *Manager) GetOrCreateWithConsumer(ctx context.Context, opts StartOpts, c
 	}
 	s.addConsumer(c)
 
-	if m.probeCache != nil && opts.StreamID != "" {
-		if cached, err := m.probeCache.GetProbe(opts.StreamID); err == nil && cached != nil {
+	if m.probeCache != nil && opts.StreamURL != "" {
+		if cached, err := m.probeCache.GetProbe(ffmpeg.StreamHash(opts.StreamURL)); err == nil && cached != nil {
 			s.setProbeInfo(cached.Video, cached.AudioTracks, cached.Duration)
 		}
 	}
@@ -449,6 +435,9 @@ func (m *Manager) GetOrCreateWithConsumer(ctx context.Context, opts StartOpts, c
 
 	go m.run(sessionCtx, s, command, args, opts.StreamURL)
 	go m.probeAsync(s, opts.StreamURL)
+	if strings.HasPrefix(opts.StreamURL, "rtsp://") || strings.HasPrefix(opts.StreamURL, "rtsps://") {
+		go m.logSignalAsync(s.ID, opts.ChannelID, opts.StreamURL)
+	}
 
 	m.log.Info().
 		Str("session_id", s.ID).
@@ -500,11 +489,11 @@ func (m *Manager) ProbeURL(ctx context.Context, url string) (*ffmpeg.ProbeResult
 }
 
 func (m *Manager) probeAsync(s *Session, streamURL string) {
-	if m.probeCache != nil && s.StreamID != "" {
-		cached, err := m.probeCache.GetProbe(s.StreamID)
+	if m.probeCache != nil && streamURL != "" {
+		cached, err := m.probeCache.GetProbe(ffmpeg.StreamHash(streamURL))
 		if err == nil && cached != nil {
 			s.setProbeInfo(cached.Video, cached.AudioTracks, cached.Duration)
-			m.log.Debug().Str("session_id", s.ID).Str("stream_id", s.StreamID).Msg("probe cache hit")
+			m.log.Debug().Str("session_id", s.ID).Str("stream_url", streamURL).Msg("probe cache hit")
 			return
 		}
 	}
@@ -532,9 +521,9 @@ func (m *Manager) probeAsync(s *Session, streamURL string) {
 
 	s.setProbeInfo(result.Video, result.AudioTracks, result.Duration)
 
-	if m.probeCache != nil && s.StreamID != "" {
-		if saveErr := m.probeCache.SaveProbe(s.StreamID, result); saveErr != nil {
-			m.log.Warn().Err(saveErr).Str("stream_id", s.StreamID).Msg("failed to save probe to cache")
+	if m.probeCache != nil && streamURL != "" {
+		if saveErr := m.probeCache.SaveProbe(ffmpeg.StreamHash(streamURL), result); saveErr != nil {
+			m.log.Warn().Err(saveErr).Str("stream_url", streamURL).Msg("failed to save probe to cache")
 		}
 	}
 
@@ -566,6 +555,38 @@ func (m *Manager) probeOutputFile(s *Session) *ffmpeg.ProbeResult {
 		return nil
 	}
 	return result
+}
+
+func (m *Manager) logSignalAsync(sessionID, channelID, streamURL string) {
+	info, err := tvsatipscan.QuerySignal(streamURL, 5*time.Second)
+	if err != nil {
+		m.log.Warn().Err(err).Str("session_id", sessionID).Str("channel_id", channelID).Msg("satip signal query failed")
+		return
+	}
+	if info == nil {
+		m.log.Warn().Str("session_id", sessionID).Str("channel_id", channelID).Msg("satip signal query returned no data")
+		return
+	}
+	m.log.Info().
+		Str("session_id", sessionID).
+		Str("channel_id", channelID).
+		Bool("lock", info.Lock).
+		Int("level", info.Level).
+		Int("level_pct", info.LevelPct()).
+		Int("quality", info.Quality).
+		Int("quality_pct", info.QualityPct()).
+		Int("ber", info.BER).
+		Int("fe_id", info.FeID).
+		Float64("freq_mhz", info.FreqMHz).
+		Int("bw_mhz", info.BwMHz).
+		Str("msys", info.Msys).
+		Str("mtype", info.Mtype).
+		Str("plp_id", info.PLPID).
+		Str("t2_id", info.T2ID).
+		Int("bitrate_kbps", info.BitratKbps).
+		Bool("active", info.Active).
+		Str("server", info.Server).
+		Msg("satip tuner signal at session start")
 }
 
 func (m *Manager) run(ctx context.Context, s *Session, command string, args []string, inputURL string) {
@@ -642,6 +663,9 @@ func (m *Manager) run(ctx context.Context, s *Session, command string, args []st
 
 	if waitErr != nil && ctx.Err() == nil {
 		s.setError(fmt.Errorf("ffmpeg failed: %w", waitErr))
+		if m.probeCache != nil && inputURL != "" {
+			_ = m.probeCache.InvalidateProbe(ffmpeg.StreamHash(inputURL))
+		}
 	}
 }
 

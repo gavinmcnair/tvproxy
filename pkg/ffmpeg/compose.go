@@ -1,26 +1,13 @@
 package ffmpeg
 
 import (
-	"strconv"
-	"strings"
-
 	"github.com/gavinmcnair/tvproxy/pkg/defaults"
 )
-
-type ComposeOptions struct {
-	SourceType  string
-	HWAccel     string
-	VideoCodec  string
-	Container   string
-	Deinterlace bool
-	FPSMode     string
-}
 
 var defaultFFmpegSettings = &defaults.FFmpegSettings{
 	LogLevel:           "warning",
 	AnalyzeDuration:    1000000,
 	ProbeSize:          1000000,
-	SatIPRWTimeout:     5000000,
 	AudioBitrate:       "192k",
 	AudioChannels:      2,
 	WebMAudioCodec:     "libopus",
@@ -58,132 +45,59 @@ func SetSettings(s *defaults.FFmpegSettings) {
 }
 
 func settings() *defaults.FFmpegSettings {
-	if cfgSettings != nil {
-		return cfgSettings
+	if cfgSettings == nil {
+		return defaultFFmpegSettings
 	}
-	return defaultFFmpegSettings
-}
-
-func ComposeStreamProfileArgs(opts ComposeOptions) string {
-	s := settings()
-	var parts []string
-
-	parts = append(parts, "-hide_banner", "-loglevel", s.LogLevel, "-nostdin")
-
-	switch opts.HWAccel {
-	case "qsv":
-		parts = append(parts, "-init_hw_device", "vaapi=va:/dev/dri/renderD128", "-init_hw_device", "qsv=qs@va", "-hwaccel", "qsv", "-hwaccel_output_format", "qsv")
-	case "nvenc":
-		parts = append(parts, "-hwaccel", "cuda", "-hwaccel_output_format", "cuda")
-	case "vaapi":
-		if opts.VideoCodec == "av1" {
-			parts = append(parts, "-hwaccel", "vaapi", "-hwaccel_output_format", "vaapi", "-vaapi_device", "/dev/dri/renderD128")
-		} else {
-			parts = append(parts, "-init_hw_device", "vaapi=va:/dev/dri/renderD128", "-filter_hw_device", "va")
-		}
-	case "videotoolbox":
-		parts = append(parts, "-hwaccel", "videotoolbox", "-hwaccel_output_format", "videotoolbox_vld")
+	merged := *defaultFFmpegSettings
+	if cfgSettings.LogLevel != "" {
+		merged.LogLevel = cfgSettings.LogLevel
 	}
-
-	if opts.SourceType == "m3u" {
-		parts = append(parts, "-analyzeduration", strconv.Itoa(s.AnalyzeDuration), "-probesize", strconv.Itoa(s.ProbeSize))
+	if cfgSettings.AnalyzeDuration != 0 {
+		merged.AnalyzeDuration = cfgSettings.AnalyzeDuration
 	}
-
-	if opts.SourceType == "satip" {
-		parts = append(parts, "-rw_timeout", strconv.Itoa(s.SatIPRWTimeout))
+	if cfgSettings.ProbeSize != 0 {
+		merged.ProbeSize = cfgSettings.ProbeSize
 	}
-
-	parts = append(parts, "-err_detect", "ignore_err")
-
-	parts = append(parts, "-i", "{input}")
-
-	if opts.SourceType == "m3u" {
-		if opts.VideoCodec == "copy" {
-			parts = append(parts, "-map", "0:v", "-map", "0:a:0")
-		} else {
-			parts = append(parts, "-map", "0:v:0", "-map", "0:a:0")
-		}
+	if cfgSettings.AudioBitrate != "" {
+		merged.AudioBitrate = cfgSettings.AudioBitrate
 	}
-
-	parts = append(parts, "-max_muxing_queue_size", strconv.Itoa(s.MaxMuxingQueueSize))
-
-	if opts.FPSMode == "cfr" && opts.VideoCodec != "copy" {
-		parts = append(parts, "-fps_mode", "cfr")
+	if cfgSettings.AudioChannels != 0 {
+		merged.AudioChannels = cfgSettings.AudioChannels
 	}
-
-	vfFilters := buildVFChain(opts)
-	if len(vfFilters) > 0 {
-		parts = append(parts, "-vf", strings.Join(vfFilters, ","))
+	if cfgSettings.WebMAudioCodec != "" {
+		merged.WebMAudioCodec = cfgSettings.WebMAudioCodec
 	}
-
-	parts = append(parts, encoderFlags(opts.HWAccel, opts.VideoCodec, s)...)
-
-	audioBitrate := s.AudioBitrate
-	audioChannels := strconv.Itoa(s.AudioChannels)
-
-	switch opts.SourceType {
-	case "satip":
-		parts = append(parts, "-c:a", "copy")
-		if opts.Container == "mpegts" {
-			parts = append(parts, "-bsf:v", "dump_extra")
-		}
-	case "m3u":
-		if opts.Container == "webm" {
-			parts = append(parts, "-c:a", s.WebMAudioCodec, "-b:a", audioBitrate, "-ac", audioChannels)
-		} else {
-			parts = append(parts, "-c:a", "aac", "-b:a", audioBitrate, "-ac", audioChannels)
-		}
-		parts = append(parts, "-c:s", "copy")
+	if cfgSettings.MP4Movflags != "" {
+		merged.MP4Movflags = cfgSettings.MP4Movflags
 	}
-
-	switch opts.Container {
-	case "mp4", "hls":
-		parts = append(parts, "-f", "mp4", "-movflags", s.MP4Movflags)
-	default:
-		parts = append(parts, "-f", opts.Container)
+	if cfgSettings.MaxMuxingQueueSize != 0 {
+		merged.MaxMuxingQueueSize = cfgSettings.MaxMuxingQueueSize
 	}
-
-	if opts.SourceType == "m3u" {
-		parts = append(parts, "-fflags", s.FFlags)
-		if opts.Container == "mpegts" || opts.Container == "matroska" {
-			parts = append(parts, "-copyts")
-		}
+	if cfgSettings.FFlags != "" {
+		merged.FFlags = cfgSettings.FFlags
 	}
-
-	parts = append(parts, "pipe:1")
-
-	return strings.Join(parts, " ")
-}
-
-func buildVFChain(opts ComposeOptions) []string {
-	if opts.VideoCodec == "copy" {
-		return nil
+	if cfgSettings.ProbeTimeoutStr != "" {
+		merged.ProbeTimeoutStr = cfgSettings.ProbeTimeoutStr
 	}
-
-	var filters []string
-
-	needsDeinterlace := opts.Deinterlace
-	needsHWUpload := opts.HWAccel == "vaapi" && opts.VideoCodec != "av1"
-	needsHWDownload := opts.HWAccel == "videotoolbox" && !isVideoToolboxEncoder(opts.VideoCodec)
-
-	switch {
-	case opts.HWAccel == "qsv" && needsDeinterlace:
-		filters = append(filters, "vpp_qsv=deinterlace_mode=advanced")
-	case opts.HWAccel == "nvenc" && needsDeinterlace:
-		filters = append(filters, "yadif_cuda")
-	case needsHWDownload && needsDeinterlace:
-		filters = append(filters, "hwdownload", "format=nv12", "yadif")
-	case needsHWDownload:
-		filters = append(filters, "hwdownload", "format=nv12")
-	case needsHWUpload && needsDeinterlace:
-		filters = append(filters, "yadif", "format=nv12", "hwupload")
-	case needsHWUpload:
-		filters = append(filters, "format=nv12", "hwupload")
-	case needsDeinterlace:
-		filters = append(filters, "yadif")
+	if cfgSettings.WaitDelayStr != "" {
+		merged.WaitDelayStr = cfgSettings.WaitDelayStr
 	}
-
-	return filters
+	if cfgSettings.StartupTimeoutStr != "" {
+		merged.StartupTimeoutStr = cfgSettings.StartupTimeoutStr
+	}
+	if cfgSettings.ProbeTimeout != 0 {
+		merged.ProbeTimeout = cfgSettings.ProbeTimeout
+	}
+	if cfgSettings.WaitDelay != 0 {
+		merged.WaitDelay = cfgSettings.WaitDelay
+	}
+	if cfgSettings.StartupTimeout != 0 {
+		merged.StartupTimeout = cfgSettings.StartupTimeout
+	}
+	if len(cfgSettings.Encoders) > 0 {
+		merged.Encoders = cfgSettings.Encoders
+	}
+	return &merged
 }
 
 func DefaultContainer(videoCodec string) string {
@@ -195,9 +109,31 @@ func DefaultContainer(videoCodec string) string {
 	}
 }
 
-func isVideoToolboxEncoder(videoCodec string) bool {
-	return videoCodec == "h264" || videoCodec == "h265"
+func buildVFChain(hwaccel, videoCodec string, deinterlace bool) []string {
+	if videoCodec == "copy" {
+		return nil
+	}
+
+	var filters []string
+
+	needsHWUpload := hwaccel == "vaapi"
+
+	switch {
+	case hwaccel == "qsv" && deinterlace:
+		filters = append(filters, "vpp_qsv=deinterlace_mode=advanced")
+	case hwaccel == "nvenc" && deinterlace:
+		filters = append(filters, "yadif_cuda")
+	case needsHWUpload && deinterlace:
+		filters = append(filters, "yadif", "format=nv12", "hwupload")
+	case needsHWUpload:
+		filters = append(filters, "format=nv12", "hwupload")
+	case deinterlace:
+		filters = append(filters, "yadif")
+	}
+
+	return filters
 }
+
 
 func encoderFlags(hwaccel, videoCodec string, s *defaults.FFmpegSettings) []string {
 	switch videoCodec {
@@ -281,3 +217,4 @@ func av1Flags(hwaccel string, s *defaults.FFmpegSettings) []string {
 		return append([]string{"-c:v", "libsvtav1"}, sw.Flags()...)
 	}
 }
+

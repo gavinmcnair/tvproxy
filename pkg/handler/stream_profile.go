@@ -7,18 +7,16 @@ import (
 
 	"github.com/gavinmcnair/tvproxy/pkg/ffmpeg"
 	"github.com/gavinmcnair/tvproxy/pkg/models"
-	"github.com/gavinmcnair/tvproxy/pkg/service"
 	"github.com/gavinmcnair/tvproxy/pkg/store"
 )
 
 type StreamProfileHandler struct {
-	repo     store.ProfileStore
-	settings *service.SettingsService
-	rev      *store.Revision
+	repo store.ProfileStore
+	rev  *store.Revision
 }
 
-func NewStreamProfileHandler(repo store.ProfileStore, settings *service.SettingsService) *StreamProfileHandler {
-	return &StreamProfileHandler{repo: repo, settings: settings, rev: store.NewRevision()}
+func NewStreamProfileHandler(repo store.ProfileStore) *StreamProfileHandler {
+	return &StreamProfileHandler{repo: repo, rev: store.NewRevision()}
 }
 
 var (
@@ -64,40 +62,11 @@ func validateProfileFields(f profileFields) string {
 	return ""
 }
 
-func (h *StreamProfileHandler) resolveDefaults(r *http.Request, hwaccel, videoCodec string) (string, string) {
-	if hwaccel == "default" {
-		if val, err := h.settings.Get(r.Context(), "default_hwaccel"); err == nil && val != "" {
-			hwaccel = val
-		} else {
-			hwaccel = "none"
-		}
-	}
-	if videoCodec == "default" {
-		if val, err := h.settings.Get(r.Context(), "default_video_codec"); err == nil && val != "" {
-			videoCodec = val
-		} else {
-			videoCodec = "copy"
-		}
-	}
-	return hwaccel, videoCodec
-}
-
-func composeArgs(f profileFields, resolvedHW, resolvedCodec string) string {
+func composeArgs(f profileFields) string {
 	if f.UseCustomArgs {
 		return f.CustomArgs
 	}
-	composed := ffmpeg.ComposeStreamProfileArgs(ffmpeg.ComposeOptions{
-		SourceType:  f.SourceType,
-		HWAccel:     resolvedHW,
-		VideoCodec:  resolvedCodec,
-		Container:   f.Container,
-		Deinterlace: f.Deinterlace,
-		FPSMode:     f.FPSMode,
-	})
-	if f.CustomArgs != "" && composed != "" {
-		return composed + " " + f.CustomArgs
-	}
-	return composed
+	return ""
 }
 
 func (h *StreamProfileHandler) List(w http.ResponseWriter, r *http.Request) {
@@ -175,8 +144,6 @@ func (h *StreamProfileHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	resolvedHW, resolvedCodec := h.resolveDefaults(r, req.HWAccel, req.VideoCodec)
-
 	profile := &models.StreamProfile{
 		Name:          req.Name,
 		StreamMode:    req.StreamMode,
@@ -189,7 +156,7 @@ func (h *StreamProfileHandler) Create(w http.ResponseWriter, r *http.Request) {
 		UseCustomArgs: req.UseCustomArgs,
 		CustomArgs:    req.CustomArgs,
 		Command:       "ffmpeg",
-		Args:          composeArgs(f, resolvedHW, resolvedCodec),
+		Args:          composeArgs(f),
 		IsDefault:     req.IsDefault,
 	}
 
@@ -261,20 +228,38 @@ func (h *StreamProfileHandler) Update(w http.ResponseWriter, r *http.Request) {
 	if req.StreamMode == "" {
 		req.StreamMode = profile.StreamMode
 	}
+	if req.StreamMode == "" {
+		req.StreamMode = "ffmpeg"
+	}
 	if req.SourceType == "" {
 		req.SourceType = profile.SourceType
+	}
+	if req.SourceType == "" {
+		req.SourceType = "m3u"
 	}
 	if req.HWAccel == "" {
 		req.HWAccel = profile.HWAccel
 	}
+	if req.HWAccel == "" {
+		req.HWAccel = "none"
+	}
 	if req.VideoCodec == "" {
 		req.VideoCodec = profile.VideoCodec
+	}
+	if req.VideoCodec == "" {
+		req.VideoCodec = "copy"
 	}
 	if req.Container == "" {
 		req.Container = profile.Container
 	}
+	if req.Container == "" {
+		req.Container = ffmpeg.DefaultContainer(req.VideoCodec)
+	}
 	if req.FPSMode == "" {
 		req.FPSMode = profile.FPSMode
+	}
+	if req.FPSMode == "" {
+		req.FPSMode = "auto"
 	}
 
 	f := profileFields{
@@ -299,8 +284,7 @@ func (h *StreamProfileHandler) Update(w http.ResponseWriter, r *http.Request) {
 	profile.CustomArgs = req.CustomArgs
 	profile.Command = "ffmpeg"
 
-	resolvedHW, resolvedCodec := h.resolveDefaults(r, req.HWAccel, req.VideoCodec)
-	profile.Args = composeArgs(f, resolvedHW, resolvedCodec)
+	profile.Args = composeArgs(f)
 
 	if err := h.repo.Update(r.Context(), profile); err != nil {
 		respondError(w, http.StatusInternalServerError, "failed to update stream profile")

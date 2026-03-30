@@ -255,6 +255,35 @@ func (s *M3UService) upsertAndFinalize(ctx context.Context, account *models.M3UA
 	return nil
 }
 
+func (s *M3UService) CleanupOrphanedStreams(ctx context.Context) {
+	accounts, err := s.m3uAccountStore.List(ctx)
+	if err != nil {
+		s.log.Error().Err(err).Msg("orphan cleanup: failed to list accounts")
+		return
+	}
+	ids := make([]string, len(accounts))
+	for i, a := range accounts {
+		ids[i] = a.ID
+	}
+	deletedIDs, err := s.streamStore.DeleteOrphanedM3UStreams(ctx, ids)
+	if err != nil {
+		s.log.Error().Err(err).Msg("orphan cleanup: failed to delete orphaned streams")
+		return
+	}
+	if len(deletedIDs) == 0 {
+		return
+	}
+	s.log.Info().Int("deleted", len(deletedIDs)).Msg("cleaned up orphaned M3U streams")
+	if err := s.streamStore.Save(); err != nil {
+		s.log.Error().Err(err).Msg("orphan cleanup: failed to save stream store")
+	}
+	if s.channelStore != nil {
+		if err := s.channelStore.RemoveStreamMappings(ctx, deletedIDs); err != nil {
+			s.log.Error().Err(err).Msg("orphan cleanup: failed to remove stream mappings from channels")
+		}
+	}
+}
+
 func (s *M3UService) RefreshAllAccounts(ctx context.Context) error {
 	accounts, err := s.m3uAccountStore.List(ctx)
 	if err != nil {

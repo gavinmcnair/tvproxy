@@ -80,6 +80,19 @@ func (s *EPGStoreImpl) ListBySourceID(_ context.Context, sourceID string) ([]mod
 	return result, nil
 }
 
+func (s *EPGStoreImpl) GetIconByChannelID(_ context.Context, channelID string) string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	epgDataID, ok := s.epgByChannelID[channelID]
+	if !ok {
+		return ""
+	}
+	if d, ok := s.epgData[epgDataID]; ok {
+		return d.Icon
+	}
+	return ""
+}
+
 func (s *EPGStoreImpl) GetNowByChannelID(_ context.Context, channelID string, now time.Time) (*models.ProgramData, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -253,6 +266,32 @@ func (s *EPGStoreImpl) BulkCreatePrograms(_ context.Context, programs []models.P
 	}
 	s.rev.Bump()
 	return nil
+}
+
+func (s *EPGStoreImpl) DeleteOrphanedEPGData(ctx context.Context, knownSourceIDs []string) (int, error) {
+	known := make(map[string]struct{}, len(knownSourceIDs))
+	for _, id := range knownSourceIDs {
+		known[id] = struct{}{}
+	}
+
+	s.mu.RLock()
+	var orphaned []string
+	for sourceID := range s.bySourceID {
+		if _, ok := known[sourceID]; !ok {
+			orphaned = append(orphaned, sourceID)
+		}
+	}
+	s.mu.RUnlock()
+
+	deleted := 0
+	for _, sourceID := range orphaned {
+		count := len(s.bySourceID[sourceID])
+		if err := s.DeleteBySourceID(ctx, sourceID); err != nil {
+			return deleted, err
+		}
+		deleted += count
+	}
+	return deleted, nil
 }
 
 func (s *EPGStoreImpl) DeleteBySourceID(_ context.Context, sourceID string) error {
