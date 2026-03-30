@@ -1,11 +1,10 @@
 # Crystal Palace Verified Channel List
 
 **Total: 173 channels across 7 muxes**
-**Verified: 6 consecutive scans match (scans 5-9, 2026-03-30)**
+**Verified: 17 consecutive scans match (2026-03-30)**
 
-No-signal muxes (aerial limitation, require wideband/Group T aerial):
-- 746 MHz COM7 HD (DVB-T2)
-- 754 MHz COM8 HD (DVB-T2)
+COM7 (746 MHz) and COM8 (754 MHz) were permanently closed June 2022 for 5G.
+This is the complete Crystal Palace channel set.
 
 ## 482 MHz dvbt (26 channels)
 
