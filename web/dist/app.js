@@ -2552,7 +2552,6 @@
     const MAX_RETRIES = 3;
     let retryTimeout = null;
     let statsInterval = null;
-    let vjsPlayer = null;
     const audioOnly = isAudioOnly(streamTracks, streamGroup);
 
 
@@ -2564,9 +2563,10 @@
       if (progInterval) { clearInterval(progInterval); progInterval = null; }
       if (signalInterval) { clearInterval(signalInterval); signalInterval = null; }
       if (statsInterval) { clearInterval(statsInterval); statsInterval = null; }
-      if (vjsPlayer) {
-        vjsPlayer.dispose();
-        vjsPlayer = null;
+      if (videoEl) {
+        videoEl.pause();
+        videoEl.removeAttribute('src');
+        videoEl.load();
       }
       if (dvr && !isRecording) {
         api.del('/vod/' + dvr.id + (dvr.consumer_id ? '?consumer_id=' + dvr.consumer_id : '')).catch(function() {});
@@ -2644,13 +2644,14 @@
     modal.appendChild(header);
 
     var playerWrap = document.createElement('div');
-    playerWrap.style.cssText = 'position:relative;background:#000;border-radius:4px;overflow:hidden;';
+    playerWrap.style.cssText = 'position:relative;border-radius:12px;overflow:hidden;' + (audioOnly ? 'max-height:80px;' : '');
+
+    var skin = document.createElement('video-skin');
     var videoEl = document.createElement('video');
-    videoEl.id = 'tvproxy-vjs-' + Date.now();
-    videoEl.className = 'video-js vjs-big-play-centered vjs-fluid';
-    if (audioOnly) videoEl.classList.add('vjs-audio');
     videoEl.setAttribute('playsinline', '');
-    playerWrap.appendChild(videoEl);
+    videoEl.slot = 'media';
+    skin.appendChild(videoEl);
+    playerWrap.appendChild(skin);
 
     var statsOverlay = document.createElement('div');
     statsOverlay.style.cssText = 'display:none;position:absolute;top:8px;left:8px;background:rgba(0,0,0,0.8);color:#fff;padding:10px 12px;border-radius:6px;font-size:11px;font-family:monospace;line-height:1.6;z-index:100;max-height:80%;overflow-y:auto;pointer-events:none;';
@@ -2670,38 +2671,22 @@
     var streamSrc = dvr ? '/vod/' + dvr.id + '/dash/manifest.mpd' : url;
 
     var savedVol = parseFloat(localStorage.getItem('tvproxy_volume') || '0.5');
-    vjsPlayer = videojs(videoEl.id, {
-      controls: true,
-      autoplay: false,
-      preload: 'auto',
-      fluid: !audioOnly,
-      aspectRatio: audioOnly ? undefined : '16:9',
-      audioOnlyMode: audioOnly,
-      liveui: isLive,
-      controlBar: {
-        volumePanel: { inline: true },
-        pictureInPictureToggle: false
-      }
-    });
-    vjsPlayer.volume(savedVol);
-    vjsPlayer.on('volumechange', function() { localStorage.setItem('tvproxy_volume', String(vjsPlayer.volume())); });
+    videoEl.volume = savedVol;
+    videoEl.src = streamSrc;
+    videoEl.addEventListener('volumechange', function() { localStorage.setItem('tvproxy_volume', String(videoEl.volume)); });
+    videoEl.play().catch(function() {});
 
-    vjsPlayer.src({ src: streamSrc, type: 'application/dash+xml' });
-    vjsPlayer.ready(function() {
-      vjsPlayer.play().catch(function() {});
-    });
-
-    vjsPlayer.on('playing', function() {
+    videoEl.addEventListener('playing', function() {
       retryCount = 0;
       statusEl.style.color = '#4caf50';
       updateStatusText();
       if (channelID) api.del('/api/channels/' + channelID + '/fail').catch(function() {});
     });
-    vjsPlayer.on('waiting', function() {
+    videoEl.addEventListener('waiting', function() {
       statusEl.style.color = '#ffa726';
       statusEl.textContent = 'Buffering...';
     });
-    vjsPlayer.on('error', function() {
+    videoEl.addEventListener('error', function() {
       if (channelID) api.post('/api/channels/' + channelID + '/fail').catch(function() {});
       handleRetry();
     });
@@ -2743,9 +2728,9 @@
 
     function restartPlayback() {
       if (retryTimeout) { clearTimeout(retryTimeout); retryTimeout = null; }
-      if (vjsPlayer) {
-        vjsPlayer.src({ src: streamSrc, type: 'application/dash+xml' });
-        vjsPlayer.play().catch(function() {});
+      if (videoEl) {
+        videoEl.src = streamSrc;
+        videoEl.play().catch(function() {});
       }
     }
 
@@ -2841,9 +2826,8 @@
       var vi = probeData && probeData.video ? probeData.video : null;
       var at = probeData && probeData.audio_tracks ? probeData.audio_tracks : [];
       var activeAudio = at.length > 0 ? at[currentAudioIndex] || at[0] : null;
-      var videoEl = vjsPlayer ? vjsPlayer.tech({ IWillNotUseThisInPlugins: true }).el() : null;
       var res = videoEl && videoEl.videoWidth ? videoEl.videoWidth + 'x' + videoEl.videoHeight : null;
-      var buf = vjsPlayer && vjsPlayer.bufferedEnd() > 0 ? (vjsPlayer.bufferedEnd() - vjsPlayer.currentTime()).toFixed(1) + 's' : '0s';
+      var buf = videoEl && videoEl.buffered.length > 0 ? (videoEl.buffered.end(0) - videoEl.currentTime).toFixed(1) + 's' : '0s';
 
       var left = [];
       if (res) left.push(res);
