@@ -80,22 +80,21 @@ func (r *Remuxer) Start(ctx context.Context) error {
 	rctx, cancel := context.WithCancel(ctx)
 	r.cancel = cancel
 
-	// MP4Box reads the growing fMP4 file directly — no pipe needed.
-	// -dash 2000: 2-second segments
-	// -frag 2000: 2-second fragments
-	// -rap: start segments on random access points (keyframes)
-	// -profile dashavc264:live: live DASH profile
-	// -segment-name: segment filename pattern
-	// -out: manifest output path
+	// Use MP4Box -ddbg-live (debug live, no time regulation) which reads
+	// the growing fMP4 and produces segments as fast as data arrives.
+	// Separate video/audio inputs to avoid multiplexed representations.
 	r.cmd = exec.CommandContext(rctx, "MP4Box",
-		"-dash", "2000",
-		"-frag", "2000",
+		"-ddbg-live", "2000",
 		"-rap",
-		"-profile", "dashavc264:live",
-		"-bs-switching", "no",
-		"-segment-name", "seg-$RepresentationID$-",
+		"-profile", "live",
+		"-segment-name", "seg-",
+		"-segment-timeline",
+		"-time-shift", "30",
+		"-min-buffer", "2000",
+		"-ast-offset", "-800",
 		"-out", r.manifestPath,
-		r.inputPath,
+		r.inputPath+"#video",
+		r.inputPath+"#audio",
 	)
 	r.cmd.Cancel = func() error {
 		return r.cmd.Process.Signal(syscall.SIGTERM)
