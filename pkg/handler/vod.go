@@ -446,6 +446,9 @@ func (h *VODHandler) DASHManifest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	for i := 0; i < 50 && sess.LivePipe == nil; i++ {
+		time.Sleep(100 * time.Millisecond)
+	}
 	if sess.LivePipe == nil {
 		respondError(w, http.StatusServiceUnavailable, "session not ready")
 		return
@@ -466,10 +469,15 @@ func (h *VODHandler) DASHManifest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	data, err := os.ReadFile(remuxer.ManifestPath())
+	if err != nil {
+		respondError(w, http.StatusServiceUnavailable, "manifest not readable")
+		return
+	}
 	w.Header().Set("Content-Type", "application/dash+xml")
 	w.Header().Set("Cache-Control", "no-cache, no-store")
 	w.Header().Set("Access-Control-Allow-Origin", "*")
-	http.ServeFile(w, r, remuxer.ManifestPath())
+	w.Write(data)
 }
 
 func (h *VODHandler) DASHSegment(w http.ResponseWriter, r *http.Request) {
