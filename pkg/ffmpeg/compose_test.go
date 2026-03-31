@@ -60,17 +60,17 @@ func TestBuild(t *testing.T) {
 		{
 			name: "HTTP copy nil probe mpegts",
 			opts: BuildOptions{StreamURL: "http://example.com/stream", VideoCodec: "copy", Container: "mpegts"},
-			want: "-hide_banner -loglevel warning -nostdin -reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5 -analyzeduration 1000000 -probesize 1000000 -err_detect ignore_err -fflags +genpts+discardcorrupt -i {input} -map 0:v:0? -map 0:a:0? -max_muxing_queue_size 4096 -c:v copy -c:a aac -b:a 192k -output_ts_offset 0 -f mpegts pipe:1",
+			want: "-hide_banner -loglevel warning -nostdin -analyzeduration 1000000 -probesize 1000000 -err_detect ignore_err -fflags +genpts+discardcorrupt -i {input} -map 0:v:0? -map 0:a:0? -max_muxing_queue_size 4096 -c:v copy -c:a aac -b:a 192k -output_ts_offset 0 -f mpegts pipe:1",
 		},
 		{
 			name: "HTTP explicit h264 software nil probe",
 			opts: BuildOptions{StreamURL: "http://example.com/stream", VideoCodec: "h264", Container: "mpegts"},
-			want: "-hide_banner -loglevel warning -nostdin -reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5 -analyzeduration 1000000 -probesize 1000000 -err_detect ignore_err -fflags +genpts+discardcorrupt -i {input} -map 0:v:0? -map 0:a:0? -max_muxing_queue_size 4096 -c:v libx264 -preset fast -c:a aac -b:a 192k -output_ts_offset 0 -f mpegts pipe:1",
+			want: "-hide_banner -loglevel warning -nostdin -analyzeduration 1000000 -probesize 1000000 -err_detect ignore_err -fflags +genpts+discardcorrupt -i {input} -map 0:v:0? -map 0:a:0? -max_muxing_queue_size 4096 -c:v libx264 -preset fast -c:a aac -b:a 192k -output_ts_offset 0 -f mpegts pipe:1",
 		},
 		{
 			name: "HTTP explicit h265 software nil probe",
 			opts: BuildOptions{StreamURL: "http://example.com/stream", VideoCodec: "h265", Container: "mpegts"},
-			want: "-hide_banner -loglevel warning -nostdin -reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5 -analyzeduration 1000000 -probesize 1000000 -err_detect ignore_err -fflags +genpts+discardcorrupt -i {input} -map 0:v:0? -map 0:a:0? -max_muxing_queue_size 4096 -c:v libx265 -preset fast -c:a aac -b:a 192k -output_ts_offset 0 -f mpegts pipe:1",
+			want: "-hide_banner -loglevel warning -nostdin -analyzeduration 1000000 -probesize 1000000 -err_detect ignore_err -fflags +genpts+discardcorrupt -i {input} -map 0:v:0? -map 0:a:0? -max_muxing_queue_size 4096 -c:v libx265 -preset fast -c:a aac -b:a 192k -output_ts_offset 0 -f mpegts pipe:1",
 		},
 		{
 			name: "RTSP explicit h265 software nil probe",
@@ -80,17 +80,17 @@ func TestBuild(t *testing.T) {
 		{
 			name: "probe mpeg2video forces h264 transcode",
 			opts: BuildOptions{StreamURL: "http://example.com/stream", Probe: probeMpeg2, VideoCodec: "copy", Container: "mpegts"},
-			want: "-hide_banner -loglevel warning -nostdin -reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5 -analyzeduration 1000000 -probesize 1000000 -err_detect ignore_err -fflags +genpts+discardcorrupt -i {input} -map 0:v:0? -map 0:a:0? -max_muxing_queue_size 4096 -c:v libx264 -preset fast -c:a aac -b:a 192k -output_ts_offset 0 -f mpegts pipe:1",
+			want: "-hide_banner -loglevel warning -nostdin -analyzeduration 1000000 -probesize 1000000 -err_detect ignore_err -fflags +genpts+discardcorrupt -i {input} -map 0:v:0? -map 0:a:0? -max_muxing_queue_size 4096 -c:v libx264 -preset fast -c:a aac -b:a 192k -output_ts_offset 0 -f mpegts pipe:1",
 		},
 		{
 			name: "probe h264 progressive stays copy",
 			opts: BuildOptions{StreamURL: "http://example.com/stream", Probe: probeH264Progressive, VideoCodec: "copy", Container: "mpegts"},
-			want: "-hide_banner -loglevel warning -nostdin -reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5 -analyzeduration 1000000 -probesize 1000000 -err_detect ignore_err -fflags +genpts+discardcorrupt -i {input} -map 0:v:0? -map 0:a:0? -max_muxing_queue_size 4096 -c:v copy -c:a copy -output_ts_offset 0 -f mpegts pipe:1",
+			want: "-hide_banner -loglevel warning -nostdin -analyzeduration 1000000 -probesize 1000000 -err_detect ignore_err -fflags +genpts+discardcorrupt -i {input} -map 0:v:0? -map 0:a:0? -max_muxing_queue_size 4096 -c:v copy -c:a copy -output_ts_offset 0 -f mpegts pipe:1",
 		},
 		{
 			name: "probe h264 interlaced forces h264 plus yadif",
 			opts: BuildOptions{StreamURL: "http://example.com/stream", Probe: probeH264Interlaced, VideoCodec: "copy", Container: "mpegts"},
-			want: "-hide_banner -loglevel warning -nostdin -reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5 -analyzeduration 1000000 -probesize 1000000 -err_detect ignore_err -fflags +genpts+discardcorrupt -i {input} -map 0:v:0? -map 0:a:0? -max_muxing_queue_size 4096 -vf yadif -c:v libx264 -preset fast -c:a copy -output_ts_offset 0 -f mpegts pipe:1",
+			want: "-hide_banner -loglevel warning -nostdin -analyzeduration 1000000 -probesize 1000000 -err_detect ignore_err -fflags +genpts+discardcorrupt -i {input} -map 0:v:0? -map 0:a:0? -max_muxing_queue_size 4096 -vf yadif -c:v libx264 -preset fast -c:a copy -output_ts_offset 0 -f mpegts pipe:1",
 		},
 		{
 			name: "probe hevc progressive stays copy",
@@ -105,27 +105,27 @@ func TestBuild(t *testing.T) {
 		{
 			name: "radio stream omits video map",
 			opts: BuildOptions{StreamURL: "http://example.com/stream", Probe: probeRadio, VideoCodec: "copy", Container: "mpegts"},
-			want: "-hide_banner -loglevel warning -nostdin -reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5 -analyzeduration 1000000 -probesize 1000000 -err_detect ignore_err -fflags +genpts+discardcorrupt -i {input} -map 0:a:0? -max_muxing_queue_size 4096 -c:a aac -b:a 192k -output_ts_offset 0 -f adts pipe:1",
+			want: "-hide_banner -loglevel warning -nostdin -analyzeduration 1000000 -probesize 1000000 -err_detect ignore_err -fflags +genpts+discardcorrupt -i {input} -map 0:a:0? -max_muxing_queue_size 4096 -c:a aac -b:a 192k -output_ts_offset 0 -f adts pipe:1",
 		},
 		{
 			name: "webm container uses opus audio",
 			opts: BuildOptions{StreamURL: "http://example.com/stream", VideoCodec: "h264", Container: "webm"},
-			want: "-hide_banner -loglevel warning -nostdin -reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5 -analyzeduration 1000000 -probesize 1000000 -err_detect ignore_err -fflags +genpts+discardcorrupt -i {input} -map 0:v:0? -map 0:a:0? -max_muxing_queue_size 4096 -c:v libx264 -preset fast -c:a libopus -b:a 192k -output_ts_offset 0 -f webm pipe:1",
+			want: "-hide_banner -loglevel warning -nostdin -analyzeduration 1000000 -probesize 1000000 -err_detect ignore_err -fflags +genpts+discardcorrupt -i {input} -map 0:v:0? -map 0:a:0? -max_muxing_queue_size 4096 -c:v libx264 -preset fast -c:a libopus -b:a 192k -output_ts_offset 0 -f webm pipe:1",
 		},
 		{
 			name: "mp4 container uses fragmented movflags",
 			opts: BuildOptions{StreamURL: "http://example.com/stream", VideoCodec: "copy", Container: "mp4"},
-			want: "-hide_banner -loglevel warning -nostdin -reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5 -analyzeduration 1000000 -probesize 1000000 -err_detect ignore_err -fflags +genpts+discardcorrupt -i {input} -map 0:v:0? -map 0:a:0? -max_muxing_queue_size 4096 -c:v copy -c:a aac -b:a 192k -output_ts_offset 0 -f mp4 -movflags frag_keyframe+empty_moov+default_base_moof pipe:1",
+			want: "-hide_banner -loglevel warning -nostdin -analyzeduration 1000000 -probesize 1000000 -err_detect ignore_err -fflags +genpts+discardcorrupt -i {input} -map 0:v:0? -map 0:a:0? -max_muxing_queue_size 4096 -c:v copy -c:a aac -b:a 192k -output_ts_offset 0 -f mp4 -movflags frag_keyframe+empty_moov+default_base_moof pipe:1",
 		},
 		{
 			name: "matroska container",
 			opts: BuildOptions{StreamURL: "http://example.com/stream", VideoCodec: "copy", Container: "matroska"},
-			want: "-hide_banner -loglevel warning -nostdin -reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5 -analyzeduration 1000000 -probesize 1000000 -err_detect ignore_err -fflags +genpts+discardcorrupt -i {input} -map 0:v:0? -map 0:a:0? -max_muxing_queue_size 4096 -c:v copy -c:a aac -b:a 192k -output_ts_offset 0 -f matroska pipe:1",
+			want: "-hide_banner -loglevel warning -nostdin -analyzeduration 1000000 -probesize 1000000 -err_detect ignore_err -fflags +genpts+discardcorrupt -i {input} -map 0:v:0? -map 0:a:0? -max_muxing_queue_size 4096 -c:v copy -c:a aac -b:a 192k -output_ts_offset 0 -f matroska pipe:1",
 		},
 		{
 			name: "user agent included before input",
 			opts: BuildOptions{StreamURL: "http://example.com/stream", UserAgent: "TestAgent/1.0", VideoCodec: "copy", Container: "mpegts"},
-			want: "-hide_banner -loglevel warning -nostdin -reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5 -analyzeduration 1000000 -probesize 1000000 -user_agent TestAgent/1.0 -err_detect ignore_err -fflags +genpts+discardcorrupt -i {input} -map 0:v:0? -map 0:a:0? -max_muxing_queue_size 4096 -c:v copy -c:a aac -b:a 192k -output_ts_offset 0 -f mpegts pipe:1",
+			want: "-hide_banner -loglevel warning -nostdin -analyzeduration 1000000 -probesize 1000000 -user_agent TestAgent/1.0 -err_detect ignore_err -fflags +genpts+discardcorrupt -i {input} -map 0:v:0? -map 0:a:0? -max_muxing_queue_size 4096 -c:v copy -c:a aac -b:a 192k -output_ts_offset 0 -f mpegts pipe:1",
 		},
 		{
 			name: "no URL no transport flags",
@@ -140,7 +140,7 @@ func TestBuild(t *testing.T) {
 		{
 			name: "QSV h264 HTTP",
 			opts: BuildOptions{StreamURL: "http://example.com/stream", HWAccel: "qsv", VideoCodec: "h264", Container: "mpegts"},
-			want: "-hide_banner -loglevel warning -nostdin -init_hw_device vaapi=va:/dev/dri/renderD128 -init_hw_device qsv=qs@va -hwaccel qsv -hwaccel_output_format qsv -reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5 -analyzeduration 1000000 -probesize 1000000 -err_detect ignore_err -fflags +genpts+discardcorrupt -i {input} -map 0:v:0? -map 0:a:0? -max_muxing_queue_size 4096 -c:v h264_qsv -preset veryslow -global_quality 20 -c:a aac -b:a 192k -output_ts_offset 0 -f mpegts pipe:1",
+			want: "-hide_banner -loglevel warning -nostdin -init_hw_device vaapi=va:/dev/dri/renderD128 -init_hw_device qsv=qs@va -hwaccel qsv -hwaccel_output_format qsv -analyzeduration 1000000 -probesize 1000000 -err_detect ignore_err -fflags +genpts+discardcorrupt -i {input} -map 0:v:0? -map 0:a:0? -max_muxing_queue_size 4096 -c:v h264_qsv -preset veryslow -global_quality 20 -c:a aac -b:a 192k -output_ts_offset 0 -f mpegts pipe:1",
 		},
 		{
 			name: "QSV h265 RTSP",
@@ -170,12 +170,12 @@ func TestBuild(t *testing.T) {
 		{
 			name: "VAAPI h264 HTTP with hwupload filter",
 			opts: BuildOptions{StreamURL: "http://example.com/stream", HWAccel: "vaapi", VideoCodec: "h264", Container: "mpegts"},
-			want: "-hide_banner -loglevel warning -nostdin -init_hw_device vaapi=va:/dev/dri/renderD128 -filter_hw_device va -reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5 -analyzeduration 1000000 -probesize 1000000 -err_detect ignore_err -fflags +genpts+discardcorrupt -i {input} -map 0:v:0? -map 0:a:0? -max_muxing_queue_size 4096 -vf format=nv12,hwupload -c:v h264_vaapi -c:a aac -b:a 192k -output_ts_offset 0 -f mpegts pipe:1",
+			want: "-hide_banner -loglevel warning -nostdin -init_hw_device vaapi=va:/dev/dri/renderD128 -filter_hw_device va -analyzeduration 1000000 -probesize 1000000 -err_detect ignore_err -fflags +genpts+discardcorrupt -i {input} -map 0:v:0? -map 0:a:0? -max_muxing_queue_size 4096 -vf format=nv12,hwupload -c:v h264_vaapi -c:a aac -b:a 192k -output_ts_offset 0 -f mpegts pipe:1",
 		},
 		{
 			name: "VAAPI h265 HTTP with hwupload filter",
 			opts: BuildOptions{StreamURL: "http://example.com/stream", HWAccel: "vaapi", VideoCodec: "h265", Container: "mpegts"},
-			want: "-hide_banner -loglevel warning -nostdin -init_hw_device vaapi=va:/dev/dri/renderD128 -filter_hw_device va -reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5 -analyzeduration 1000000 -probesize 1000000 -err_detect ignore_err -fflags +genpts+discardcorrupt -i {input} -map 0:v:0? -map 0:a:0? -max_muxing_queue_size 4096 -vf format=nv12,hwupload -c:v hevc_vaapi -c:a aac -b:a 192k -output_ts_offset 0 -f mpegts pipe:1",
+			want: "-hide_banner -loglevel warning -nostdin -init_hw_device vaapi=va:/dev/dri/renderD128 -filter_hw_device va -analyzeduration 1000000 -probesize 1000000 -err_detect ignore_err -fflags +genpts+discardcorrupt -i {input} -map 0:v:0? -map 0:a:0? -max_muxing_queue_size 4096 -vf format=nv12,hwupload -c:v hevc_vaapi -c:a aac -b:a 192k -output_ts_offset 0 -f mpegts pipe:1",
 		},
 		{
 			name: "VAAPI av1 matroska uses software decode with hwupload filter",
@@ -200,12 +200,12 @@ func TestBuild(t *testing.T) {
 		{
 			name: "VAAPI h264 auto-detect interlaced adds yadif before hwupload",
 			opts: BuildOptions{StreamURL: "http://example.com/stream", HWAccel: "vaapi", Probe: probeH264Interlaced, VideoCodec: "copy", Container: "mpegts"},
-			want: "-hide_banner -loglevel warning -nostdin -init_hw_device vaapi=va:/dev/dri/renderD128 -filter_hw_device va -reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5 -analyzeduration 1000000 -probesize 1000000 -err_detect ignore_err -fflags +genpts+discardcorrupt -i {input} -map 0:v:0? -map 0:a:0? -max_muxing_queue_size 4096 -vf yadif,format=nv12,hwupload -c:v h264_vaapi -c:a copy -output_ts_offset 0 -f mpegts pipe:1",
+			want: "-hide_banner -loglevel warning -nostdin -init_hw_device vaapi=va:/dev/dri/renderD128 -filter_hw_device va -analyzeduration 1000000 -probesize 1000000 -err_detect ignore_err -fflags +genpts+discardcorrupt -i {input} -map 0:v:0? -map 0:a:0? -max_muxing_queue_size 4096 -vf yadif,format=nv12,hwupload -c:v h264_vaapi -c:a copy -output_ts_offset 0 -f mpegts pipe:1",
 		},
 		{
 			name: "QSV hevc auto-detect interlaced uses vpp_qsv",
 			opts: BuildOptions{StreamURL: "http://example.com/stream", HWAccel: "qsv", Probe: probeHevcInterlaced, VideoCodec: "copy", Container: "mpegts"},
-			want: "-hide_banner -loglevel warning -nostdin -init_hw_device vaapi=va:/dev/dri/renderD128 -init_hw_device qsv=qs@va -hwaccel qsv -hwaccel_output_format qsv -reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5 -analyzeduration 1000000 -probesize 1000000 -err_detect ignore_err -fflags +genpts+discardcorrupt -i {input} -map 0:v:0? -map 0:a:0? -max_muxing_queue_size 4096 -vf vpp_qsv=deinterlace_mode=advanced -c:v hevc_qsv -preset veryslow -global_quality 22 -c:a copy -output_ts_offset 0 -f mpegts pipe:1",
+			want: "-hide_banner -loglevel warning -nostdin -init_hw_device vaapi=va:/dev/dri/renderD128 -init_hw_device qsv=qs@va -hwaccel qsv -hwaccel_output_format qsv -analyzeduration 1000000 -probesize 1000000 -err_detect ignore_err -fflags +genpts+discardcorrupt -i {input} -map 0:v:0? -map 0:a:0? -max_muxing_queue_size 4096 -vf vpp_qsv=deinterlace_mode=advanced -c:v hevc_qsv -preset veryslow -global_quality 22 -c:a copy -output_ts_offset 0 -f mpegts pipe:1",
 		},
 		{
 			name: "NVENC h264 auto-detect interlaced uses yadif_cuda",

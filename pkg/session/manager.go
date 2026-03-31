@@ -172,8 +172,8 @@ func (m *Manager) buildArgs(argsStr string, inputURL string, outputPath string) 
 			} else {
 				args[i] = inputURL
 			}
-		case "{output}":
-			args[i] = "pipe:1"
+		case "{output}", "pipe:1":
+			args[i] = outputPath
 		}
 	}
 
@@ -645,15 +645,6 @@ func (m *Manager) run(ctx context.Context, s *Session, command string, args []st
 		return
 	}
 
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		if httpResp != nil {
-			httpResp.Body.Close()
-		}
-		s.setError(fmt.Errorf("creating stdout pipe: %w", err))
-		return
-	}
-
 	if err := cmd.Start(); err != nil {
 		if httpResp != nil {
 			httpResp.Body.Close()
@@ -663,33 +654,6 @@ func (m *Manager) run(ctx context.Context, s *Session, command string, args []st
 	}
 
 	go m.parseProgress(s, stderr)
-
-	outFile, err := os.Create(s.FilePath)
-	if err != nil {
-		s.setError(fmt.Errorf("creating output file: %w", err))
-		s.cancel()
-		return
-	}
-
-	pipeReader, pipeWriter := io.Pipe()
-	s.LivePipe = pipeReader
-
-	go func() {
-		defer outFile.Close()
-		defer pipeWriter.CloseWithError(io.EOF)
-		io.Copy(io.MultiWriter(outFile, pipeWriter), stdout)
-	}()
-
-	// Drain the LivePipe if nobody consumes it within 20s
-	go func() {
-		time.Sleep(20 * time.Second)
-		s.mu.RLock()
-		consumed := s.livePipeConsumed
-		s.mu.RUnlock()
-		if !consumed {
-			io.Copy(io.Discard, pipeReader)
-		}
-	}()
 
 	startupDur := 30 * time.Second
 	if m.config.Settings != nil {

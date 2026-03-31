@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -35,6 +34,7 @@ func (w *logWriter) Write(p []byte) (int, error) {
 }
 
 type Remuxer struct {
+	inputPath    string
 	outputDir    string
 	manifestPath string
 	cmd          *exec.Cmd
@@ -46,8 +46,9 @@ type Remuxer struct {
 	log          zerolog.Logger
 }
 
-func NewRemuxer(outputDir string, log zerolog.Logger) *Remuxer {
+func NewRemuxer(inputPath, outputDir string, log zerolog.Logger) *Remuxer {
 	return &Remuxer{
+		inputPath:    inputPath,
 		outputDir:    outputDir,
 		manifestPath: filepath.Join(outputDir, "manifest.mpd"),
 		done:         make(chan struct{}),
@@ -56,9 +57,24 @@ func NewRemuxer(outputDir string, log zerolog.Logger) *Remuxer {
 	}
 }
 
-func (r *Remuxer) Start(ctx context.Context, input io.Reader) error {
+func (r *Remuxer) Start(ctx context.Context) error {
 	if err := os.MkdirAll(r.outputDir, 0755); err != nil {
 		return fmt.Errorf("creating dash output dir: %w", err)
+	}
+
+	// Wait for the file to have enough data for Shaka to parse
+	waitCtx, waitCancel := context.WithTimeout(ctx, 30*time.Second)
+	defer waitCancel()
+	for {
+		info, err := os.Stat(r.inputPath)
+		if err == nil && info.Size() > 4096 {
+			break
+		}
+		select {
+		case <-waitCtx.Done():
+			return fmt.Errorf("input file not ready: %w", waitCtx.Err())
+		case <-time.After(500 * time.Millisecond):
+		}
 	}
 
 	rctx, cancel := context.WithCancel(ctx)
@@ -70,16 +86,17 @@ func (r *Remuxer) Start(ctx context.Context, input io.Reader) error {
 	}
 
 	args := []string{
-		fmt.Sprintf("in=/dev/stdin,stream=video,init_segment=%s,segment_template=%s",
+		fmt.Sprintf("in=%s,stream=video,init_segment=%s,segment_template=%s",
+			r.inputPath,
 			filepath.Join(r.outputDir, "init_v.mp4"),
 			filepath.Join(r.outputDir, "seg_v_$Number$.m4s")),
-		fmt.Sprintf("in=/dev/stdin,stream=audio,init_segment=%s,segment_template=%s",
+		fmt.Sprintf("in=%s,stream=audio,init_segment=%s,segment_template=%s",
+			r.inputPath,
 			filepath.Join(r.outputDir, "init_a.mp4"),
 			filepath.Join(r.outputDir, "seg_a_$Number$.m4s")),
 		"--mpd_output", r.manifestPath, "--segment_duration", "2", "--io_block_size", "65536",
 	}
 	r.cmd = exec.CommandContext(rctx, packagerBin, args...)
-	r.cmd.Stdin = input
 	r.cmd.Cancel = func() error {
 		return r.cmd.Process.Signal(syscall.SIGTERM)
 	}

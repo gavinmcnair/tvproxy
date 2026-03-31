@@ -56,9 +56,6 @@ func composeBuildArgs(opts BuildOptions) string {
 		}
 	} else if isHTTPURL(opts.StreamURL) {
 		parts = append(parts,
-			"-reconnect", "1",
-			"-reconnect_streamed", "1",
-			"-reconnect_delay_max", "5",
 			"-analyzeduration", strconv.Itoa(s.AnalyzeDuration),
 			"-probesize", strconv.Itoa(s.ProbeSize))
 	}

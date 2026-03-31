@@ -1005,7 +1005,7 @@
           }
           var ch = e.target.closest('.epg-channel');
           if (ch) {
-            playChannelWithDVR(ch.dataset.chid, ch.dataset.chname, ch.dataset.tvgid || undefined);
+            play({ channelID: ch.dataset.chid, name: ch.dataset.chname, tvgId: ch.dataset.tvgid || undefined });
             return;
           }
           var prog = e.target.closest('.epg-program');
@@ -1014,7 +1014,7 @@
             if (!row) return;
             ch = row.querySelector('.epg-channel');
             if (!ch) return;
-            playChannelWithDVR(ch.dataset.chid, ch.dataset.chname, ch.dataset.tvgid || undefined);
+            play({ channelID: ch.dataset.chid, name: ch.dataset.chname, tvgId: ch.dataset.tvgid || undefined });
           }
         });
 
@@ -1137,7 +1137,7 @@
         if (btn.dataset.radioRec) {
           return;
         }
-        playStreamWithVODDetection(btn.dataset.sid, btn.dataset.sname, btn.dataset.tvgid || undefined);
+        play({ streamID: btn.dataset.sid, name: btn.dataset.sname, tvgId: btn.dataset.tvgid || undefined });
       });
 
       var activeRadio = null;
@@ -2547,7 +2547,7 @@
     return !streamTracks.some(function(t) { return t.category === 'video'; });
   }
 
-  async function playStreamWithVODDetection(streamID, name, tvgId) {
+  async function play(opts) {
     if (playInProgress) return;
     playInProgress = true;
     document.body.style.cursor = 'wait';
@@ -2555,29 +2555,41 @@
       if (activePlayerCleanup) { activePlayerCleanup(); activePlayerCleanup = null; }
       var streamTracks = null;
       var streamGroup = null;
-      if (streamsCache._data) {
+      var streamID = opts.streamID;
+      var channelID = opts.channelID;
+      var name = opts.name || '';
+      var tvgId = opts.tvgId;
+
+      if (streamID && streamsCache._data) {
         var s = streamsCache._data.find(function(s) { return s.id === streamID; });
         if (s) {
           if (s.tracks) streamTracks = s.tracks;
           if (s.group) streamGroup = s.group;
         }
       }
+
+      if (isAudioOnly(streamTracks, streamGroup)) {
+        return;
+      }
+
       var defaultAudio = defaultAudioIndex(streamTracks);
       var audioParam = defaultAudio > 0 ? '&audio=' + defaultAudio : '';
+      var vodPath = streamID ? '/stream/' + streamID + '/vod' : '/channel/' + channelID + '/vod';
       let session = null;
       try {
-        const resp = await fetch('/stream/' + streamID + '/vod?profile=Browser' + audioParam, { method: 'POST' }).then(r => r.json());
+        const resp = await fetch(vodPath + '?profile=Browser' + audioParam, { method: 'POST' }).then(function(r) {
+          if (!r.ok) throw new Error('VOD session failed: ' + r.status);
+          return r.json();
+        });
         if (resp.session_id) {
           session = { id: resp.session_id, consumer_id: resp.consumer_id, duration: resp.duration, container: resp.container, request_headers: resp.request_headers };
         }
-      } catch(e) {}
-      if (isAudioOnly(streamTracks, streamGroup)) {
-        if (session) {
-          api.del('/vod/' + session.id + (session.consumer_id ? '?consumer_id=' + session.consumer_id : '')).catch(function() {});
-        }
-      } else {
-        openVideoPlayer(name, '/stream/' + streamID + '?profile=Browser', tvgId, session, undefined, undefined, streamTracks, streamGroup);
+      } catch(e) {
+        playInProgress = false;
+        document.body.style.cursor = '';
+        return;
       }
+      openVideoPlayer(name, vodPath.replace('/vod', '') + '?profile=Browser', tvgId, session, channelID || streamID, undefined, streamTracks, streamGroup);
     } finally {
       playInProgress = false;
       document.body.style.cursor = '';
@@ -2593,25 +2605,6 @@
     return 0;
   }
 
-  async function playChannelWithDVR(channelID, name, tvgId) {
-    if (playInProgress) return;
-    playInProgress = true;
-    document.body.style.cursor = 'wait';
-    try {
-      if (activePlayerCleanup) { activePlayerCleanup(); activePlayerCleanup = null; }
-      let session = null;
-      try {
-        const resp = await fetch('/channel/' + channelID + '/vod?profile=Browser', { method: 'POST' }).then(r => r.json());
-        if (resp.session_id) {
-          session = { id: resp.session_id, consumer_id: resp.consumer_id, duration: resp.duration, container: resp.container, request_headers: resp.request_headers };
-        }
-      } catch(e) {}
-      openVideoPlayer(name, '/channel/' + channelID + '?profile=Browser', tvgId, session, channelID);
-    } finally {
-      playInProgress = false;
-      document.body.style.cursor = '';
-    }
-  }
 
   function openVideoPlayer(title, url, tvgId, dvr, channelID, probeUrl, streamTracks, streamGroup) {
     if (activePlayerCleanup) { activePlayerCleanup(); activePlayerCleanup = null; }
@@ -3482,7 +3475,7 @@
         { key: 'is_enabled', label: 'Enabled', type: 'checkbox', default: true },
       ],
       rowActions: (item, reload, openFormFn) => [
-        { label: 'Play', icon: '\u25B6', handler: () => playChannelWithDVR(item.id, item.name, item.tvg_id || undefined) },
+        { label: 'Play', icon: '\u25B6', handler: () => play({ channelID: item.id, name: item.name, tvgId: item.tvg_id || undefined }) },
         { label: 'Record', icon: '\u23FA', handler: async () => {
           try {
             await api.post('/channel/' + item.id + '/record', { program_title: item.name, channel_name: item.name });

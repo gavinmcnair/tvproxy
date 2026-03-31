@@ -2,7 +2,6 @@ package dash
 
 import (
 	"context"
-	"io"
 	"os"
 	"sync"
 
@@ -26,7 +25,7 @@ func NewManager(log zerolog.Logger) *Manager {
 	}
 }
 
-func (m *Manager) GetOrStart(ctx context.Context, channelID, outputDir string, input io.Reader) (*Remuxer, error) {
+func (m *Manager) GetOrStart(ctx context.Context, channelID, inputPath, outputDir string) (*Remuxer, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -37,8 +36,8 @@ func (m *Manager) GetOrStart(ctx context.Context, channelID, outputDir string, i
 		delete(m.remuxings, channelID)
 	}
 
-	r := NewRemuxer(outputDir, m.log)
-	if err := r.Start(ctx, input); err != nil {
+	r := NewRemuxer(inputPath, outputDir, m.log)
+	if err := r.Start(ctx); err != nil {
 		return nil, err
 	}
 
