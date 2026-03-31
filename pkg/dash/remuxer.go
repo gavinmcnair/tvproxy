@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -34,7 +35,6 @@ func (w *logWriter) Write(p []byte) (int, error) {
 }
 
 type Remuxer struct {
-	inputPath    string
 	outputDir    string
 	manifestPath string
 	cmd          *exec.Cmd
@@ -46,9 +46,8 @@ type Remuxer struct {
 	log          zerolog.Logger
 }
 
-func NewRemuxer(inputPath, outputDir string, log zerolog.Logger) *Remuxer {
+func NewRemuxer(outputDir string, log zerolog.Logger) *Remuxer {
 	return &Remuxer{
-		inputPath:    inputPath,
 		outputDir:    outputDir,
 		manifestPath: filepath.Join(outputDir, "manifest.mpd"),
 		done:         make(chan struct{}),
@@ -57,55 +56,41 @@ func NewRemuxer(inputPath, outputDir string, log zerolog.Logger) *Remuxer {
 	}
 }
 
-func (r *Remuxer) Start(ctx context.Context) error {
+func (r *Remuxer) Start(ctx context.Context, input io.Reader) error {
 	if err := os.MkdirAll(r.outputDir, 0755); err != nil {
 		return fmt.Errorf("creating dash output dir: %w", err)
-	}
-
-	// Wait for the upstream to write enough fMP4 data for MP4Box to read.
-	waitCtx, waitCancel := context.WithTimeout(ctx, 30*time.Second)
-	defer waitCancel()
-	for {
-		info, err := os.Stat(r.inputPath)
-		if err == nil && info.Size() > 4096 {
-			break
-		}
-		select {
-		case <-waitCtx.Done():
-			return fmt.Errorf("upstream file not ready: %w", waitCtx.Err())
-		case <-time.After(500 * time.Millisecond):
-		}
 	}
 
 	rctx, cancel := context.WithCancel(ctx)
 	r.cancel = cancel
 
-	// Use MP4Box -ddbg-live (debug live, no time regulation) which reads
-	// the growing fMP4 and produces segments as fast as data arrives.
-	// Separate video/audio inputs to avoid multiplexed representations.
-	r.cmd = exec.CommandContext(rctx, "MP4Box",
-		"-ddbg-live", "2000",
-		"-rap",
-		"-profile", "live",
-		"-segment-name", "seg-",
-		"-segment-timeline",
-		"-time-shift", "30",
-		"-min-buffer", "2000",
-		"-ast-offset", "-800",
-		"-out", r.manifestPath,
-		r.inputPath+"#video",
-		r.inputPath+"#audio",
+	packagerBin := "packager"
+	if _, err := exec.LookPath(packagerBin); err != nil {
+		packagerBin = "/usr/local/bin/packager"
+	}
+
+	r.cmd = exec.CommandContext(rctx, packagerBin,
+		fmt.Sprintf("in=/dev/stdin,stream=video,init_segment=%s,segment_template=%s",
+			filepath.Join(r.outputDir, "init_v.mp4"),
+			filepath.Join(r.outputDir, "seg_v_$Number$.m4s")),
+		fmt.Sprintf("in=/dev/stdin,stream=audio,init_segment=%s,segment_template=%s",
+			filepath.Join(r.outputDir, "init_a.mp4"),
+			filepath.Join(r.outputDir, "seg_a_$Number$.m4s")),
+		"--mpd_output", r.manifestPath,
+		"--segment_duration", "2",
+		"--io_block_size", "65536",
 	)
+	r.cmd.Stdin = input
 	r.cmd.Cancel = func() error {
 		return r.cmd.Process.Signal(syscall.SIGTERM)
 	}
 	r.cmd.WaitDelay = 5 * time.Second
-	r.cmd.Stderr = &logWriter{log: r.log, prefix: "mp4box"}
-	r.cmd.Stdout = &logWriter{log: r.log, prefix: "mp4box"}
+	r.cmd.Stderr = &logWriter{log: r.log, prefix: "shaka-packager"}
+	r.cmd.Stdout = &logWriter{log: r.log, prefix: "shaka-packager"}
 
 	if err := r.cmd.Start(); err != nil {
 		cancel()
-		return fmt.Errorf("starting MP4Box: %w", err)
+		return fmt.Errorf("starting shaka packager: %w", err)
 	}
 
 	go r.run()
@@ -151,7 +136,7 @@ func (r *Remuxer) WaitReady(ctx context.Context) error {
 		if r.err != nil {
 			return r.err
 		}
-		return fmt.Errorf("MP4Box exited before manifest was ready")
+		return fmt.Errorf("packager exited before manifest was ready")
 	}
 }
 

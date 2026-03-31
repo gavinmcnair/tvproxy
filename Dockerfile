@@ -7,15 +7,6 @@ COPY . .
 ARG VERSION=dev
 RUN CGO_ENABLED=0 go build -ldflags="-s -w -X main.buildVersion=$VERSION" -o /tvproxy ./cmd/tvproxy/
 
-FROM ubuntu:24.04 AS gpac-builder
-
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    git build-essential pkg-config zlib1g-dev \
-    && rm -rf /var/lib/apt/lists/*
-RUN git clone --depth 1 https://github.com/gpac/gpac.git /gpac
-WORKDIR /gpac
-RUN ./configure --static-bin --use-zlib=no && make -j$(nproc)
-
 FROM linuxserver/ffmpeg:latest
 
 ENV DEBIAN_FRONTEND=noninteractive
@@ -23,10 +14,13 @@ ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gosu \
     dtv-scan-tables \
+    curl \
+    && curl -sL https://github.com/shaka-project/shaka-packager/releases/download/v3.7.0/packager-linux-x64 -o /usr/local/bin/packager \
+    && chmod +x /usr/local/bin/packager \
+    && apt-get remove -y curl \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /tvproxy /usr/local/bin/tvproxy
-COPY --from=gpac-builder /gpac/bin/gcc/MP4Box /usr/local/bin/MP4Box
 COPY pkg/defaults/clients.json /defaults/clients.json
 COPY pkg/defaults/settings.json /defaults/settings.json
 

@@ -71,6 +71,8 @@ func composeBuildArgs(opts BuildOptions) string {
 	parts = append(parts, encoderFlags(opts.HWAccel, outputCodec, s)...)
 	parts = append(parts, buildAudioFlags(opts.Probe, opts.Container, s)...)
 
+	parts = append(parts, "-output_ts_offset", "0")
+
 	switch opts.Container {
 	case "mp4", "":
 		parts = append(parts, "-f", "mp4", "-movflags", s.MP4Movflags)
