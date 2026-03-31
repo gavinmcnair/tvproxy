@@ -453,6 +453,7 @@ func (h *VODHandler) DASHManifest(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusServiceUnavailable, "session not ready")
 		return
 	}
+	sess.MarkLivePipeConsumed()
 	dashDir := filepath.Join(os.TempDir(), "tvproxy-dash", channelID)
 	remuxer, err := h.dashManager.GetOrStart(context.Background(), channelID, dashDir, sess.LivePipe)
 	if err != nil {

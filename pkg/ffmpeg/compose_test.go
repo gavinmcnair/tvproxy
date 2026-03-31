@@ -105,7 +105,7 @@ func TestBuild(t *testing.T) {
 		{
 			name: "radio stream omits video map",
 			opts: BuildOptions{StreamURL: "http://example.com/stream", Probe: probeRadio, VideoCodec: "copy", Container: "mpegts"},
-			want: "-hide_banner -loglevel warning -nostdin -reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5 -analyzeduration 1000000 -probesize 1000000 -err_detect ignore_err -fflags +genpts+discardcorrupt -i {input} -map 0:a:0? -max_muxing_queue_size 4096 -c:v copy -c:a copy -output_ts_offset 0 -f mpegts pipe:1",
+			want: "-hide_banner -loglevel warning -nostdin -reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5 -analyzeduration 1000000 -probesize 1000000 -err_detect ignore_err -fflags +genpts+discardcorrupt -i {input} -map 0:a:0? -max_muxing_queue_size 4096 -c:a aac -b:a 192k -output_ts_offset 0 -f adts pipe:1",
 		},
 		{
 			name: "webm container uses opus audio",

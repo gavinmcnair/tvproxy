@@ -34,7 +34,8 @@ func composeBuildArgs(opts BuildOptions) string {
 	var parts []string
 	parts = append(parts, "-hide_banner", "-loglevel", s.LogLevel, "-nostdin")
 
-	if outputCodec != "copy" {
+	hasProbeVideo := opts.Probe == nil || opts.Probe.HasVideo
+	if outputCodec != "copy" && hasProbeVideo {
 		parts = append(parts, hwInitFlags(opts.HWAccel, outputCodec)...)
 	}
 
@@ -59,17 +60,23 @@ func composeBuildArgs(opts BuildOptions) string {
 
 	parts = append(parts, "-err_detect", "ignore_err", "-fflags", s.FFlags, "-i", "{input}")
 
-	if opts.Probe == nil || opts.Probe.HasVideo {
+	hasVideo := opts.Probe == nil || opts.Probe.HasVideo
+	if hasVideo {
 		parts = append(parts, "-map", "0:v:0?")
 	}
 	parts = append(parts, "-map", "0:a:0?")
 
 	parts = append(parts, "-max_muxing_queue_size", strconv.Itoa(s.MaxMuxingQueueSize))
 
+	if !hasVideo {
+		parts = append(parts, "-c:a", "aac", "-b:a", s.AudioBitrate)
+		parts = append(parts, "-output_ts_offset", "0", "-f", "adts", "pipe:1")
+		return strings.Join(parts, " ")
+	}
+
 	if vf := buildVFChain(opts.HWAccel, outputCodec, interlaced); len(vf) > 0 {
 		parts = append(parts, "-vf", strings.Join(vf, ","))
 	}
-
 	parts = append(parts, encoderFlags(opts.HWAccel, outputCodec, s)...)
 	parts = append(parts, buildAudioFlags(opts.Probe, opts.Container, opts.Delivery, opts.AudioCodec, s)...)
 

@@ -664,9 +664,6 @@ func (m *Manager) run(ctx context.Context, s *Session, command string, args []st
 
 	go m.parseProgress(s, stderr)
 
-	pipeReader, pipeWriter := io.Pipe()
-	s.LivePipe = pipeReader
-
 	outFile, err := os.Create(s.FilePath)
 	if err != nil {
 		s.setError(fmt.Errorf("creating output file: %w", err))
@@ -674,10 +671,24 @@ func (m *Manager) run(ctx context.Context, s *Session, command string, args []st
 		return
 	}
 
+	pipeReader, pipeWriter := io.Pipe()
+	s.LivePipe = pipeReader
+
 	go func() {
 		defer outFile.Close()
-		defer pipeWriter.Close()
+		defer pipeWriter.CloseWithError(io.EOF)
 		io.Copy(io.MultiWriter(outFile, pipeWriter), stdout)
+	}()
+
+	// Drain the LivePipe if nobody consumes it within 5s
+	go func() {
+		time.Sleep(5 * time.Second)
+		s.mu.RLock()
+		consumed := s.livePipeConsumed
+		s.mu.RUnlock()
+		if !consumed {
+			io.Copy(io.Discard, pipeReader)
+		}
 	}()
 
 	startupDur := 30 * time.Second

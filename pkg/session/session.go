@@ -22,7 +22,8 @@ type Session struct {
 	Duration     float64
 	Video        *ffmpeg.VideoInfo
 	AudioTracks  []ffmpeg.AudioTrack
-	LivePipe     io.ReadCloser
+	LivePipe         io.ReadCloser
+	livePipeConsumed bool
 	consumers    map[string]*Consumer
 	cancel       func()
 	done         chan struct{}
@@ -134,6 +135,12 @@ func (s *Session) HasRecordingConsumer() bool {
 		}
 	}
 	return false
+}
+
+func (s *Session) MarkLivePipeConsumed() {
+	s.mu.Lock()
+	s.livePipeConsumed = true
+	s.mu.Unlock()
 }
 
 func (s *Session) RecordingConsumerID() string {
