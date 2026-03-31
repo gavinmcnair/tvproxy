@@ -155,7 +155,7 @@ func buildAudioFlags(probe *ProbeResult, container, delivery, audioCodec string,
 			return []string{"-c:a", "libopus", "-b:a", s.AudioBitrate}
 		}
 		if delivery == "dash" {
-			return []string{"-c:a", "libopus", "-b:a", s.AudioBitrate}
+			return []string{"-c:a", "aac", "-b:a", s.AudioBitrate}
 		}
 		return audioEncoder(probe)
 	}
