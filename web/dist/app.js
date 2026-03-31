@@ -2762,8 +2762,10 @@
         streaming: {
           bufferingGoal: 10,
           rebufferingGoal: 2,
-          bufferBehind: 30,
-          retryParameters: { maxAttempts: 5, baseDelay: 500 }
+          bufferBehind: 30
+        },
+        manifest: {
+          retryParameters: { maxAttempts: 10, baseDelay: 2000, timeout: 30000 }
         }
       });
       shakaPlayer.attach(videoEl).then(function() {

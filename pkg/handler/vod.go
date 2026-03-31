@@ -462,7 +462,7 @@ func (h *VODHandler) DASHManifest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	waitCtx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+	waitCtx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
 	if err := remuxer.WaitReady(waitCtx); err != nil {
 		h.log.Error().Err(err).Str("channel_id", channelID).Msg("dash manifest not ready")

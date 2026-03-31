@@ -113,14 +113,15 @@ func (r *Remuxer) waitForManifest() {
 		case <-r.done:
 			return
 		default:
-			if _, err := os.Stat(r.manifestPath); err == nil {
+			data, err := os.ReadFile(r.manifestPath)
+			if err == nil && bytes.Contains(data, []byte("SegmentTemplate")) {
 				r.readyOnce.Do(func() {
-					r.log.Info().Str("manifest", r.manifestPath).Msg("dash manifest ready")
+					r.log.Info().Str("manifest", r.manifestPath).Msg("dash manifest ready with segments")
 					close(r.ready)
 				})
 				return
 			}
-			time.Sleep(200 * time.Millisecond)
+			time.Sleep(500 * time.Millisecond)
 		}
 	}
 }

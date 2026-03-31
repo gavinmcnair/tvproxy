@@ -680,9 +680,9 @@ func (m *Manager) run(ctx context.Context, s *Session, command string, args []st
 		io.Copy(io.MultiWriter(outFile, pipeWriter), stdout)
 	}()
 
-	// Drain the LivePipe if nobody consumes it within 5s
+	// Drain the LivePipe if nobody consumes it within 20s
 	go func() {
-		time.Sleep(5 * time.Second)
+		time.Sleep(20 * time.Second)
 		s.mu.RLock()
 		consumed := s.livePipeConsumed
 		s.mu.RUnlock()
