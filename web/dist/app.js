@@ -2567,8 +2567,29 @@
   let playInProgress = false;
 
   var globalRadio = null;
-  function playGlobalRadio(id, name, tvgId, isChannel) {
+  function playGlobalRadio(id, name, tvgId, isChannel, directUrl) {
     stopGlobalRadio();
+    if (directUrl) {
+      var audio = new Audio(directUrl);
+      audio.volume = parseFloat(localStorage.getItem('tvproxy_volume') || '0.5');
+      var bar = document.createElement('div');
+      bar.style.cssText = 'position:fixed;bottom:0;left:0;right:0;background:var(--bg-card);border-top:1px solid var(--border);padding:8px 16px;display:flex;align-items:center;gap:12px;z-index:9999;';
+      var nameEl = document.createElement('span');
+      nameEl.style.cssText = 'color:#e0e0e0;font-size:14px;flex:1;';
+      nameEl.textContent = name;
+      var stopBtn = document.createElement('button');
+      stopBtn.className = 'btn btn-sm';
+      stopBtn.textContent = '\u23F9 Stop';
+      stopBtn.onclick = stopGlobalRadio;
+      bar.appendChild(nameEl);
+      bar.appendChild(stopBtn);
+      document.body.appendChild(bar);
+      audio.onplaying = function() { nameEl.textContent = '\u25B6 ' + name; };
+      audio.onerror = function() { stopGlobalRadio(); };
+      audio.play().catch(function() {});
+      globalRadio = { audio: audio, bar: bar, sessionID: null, consumerID: null };
+      return;
+    }
     var vodPath = isChannel ? '/channel/' + id + '/vod' : '/stream/' + id + '/vod';
     fetch(vodPath + '?profile=Browser', { method: 'POST' })
       .then(function(r) { return r.json(); })
@@ -2646,9 +2667,18 @@
         }
       }
 
-      if (isAudioOnly(streamTracks, streamGroup)) {
+      if (isAudioOnly(streamTracks, streamGroup) && !opts.fileUrl) {
         var radioID = streamID || (channelID ? channelID : null);
         if (radioID) playGlobalRadio(radioID, name, tvgId, !!channelID);
+        return;
+      }
+
+      if (opts.fileUrl) {
+        if (isAudioOnly(streamTracks, streamGroup)) {
+          playGlobalRadio(null, name, tvgId, false, opts.fileUrl);
+        } else {
+          openVideoPlayer(name, opts.fileUrl, tvgId, null, null);
+        }
         return;
       }
 
@@ -4114,8 +4144,7 @@
             var actions = h('td', { style: 'display:flex;gap:4px;' });
             var playBtn = h('button', { className: 'btn btn-primary btn-sm', onClick: function() {
               var fileUrl = basePath + '/stream?profile=Browser&token=' + encodeURIComponent(state.accessToken || '');
-              var probeUrl = basePath + '/probe';
-              openVideoPlayer(title, fileUrl, null, null, null, probeUrl);
+              play({ streamID: rec.stream_id, name: title, fileUrl: fileUrl });
             }}, '\u25B6 Play');
             var deleteBtn = h('button', { className: 'btn btn-danger btn-sm', onClick: async function() {
               if (!confirm('Delete ' + title + '?')) return;
@@ -4932,9 +4961,7 @@
 
       async function fetchAndRender() {
         var activity = await api.get('/api/activity');
-        var viewers = activity.filter(function(a) { return a.type !== 'recording'; });
-        var recordings = activity.filter(function(a) { return a.type === 'recording'; });
-        renderViewers(viewers, recordings);
+        renderViewers(activity, []);
       }
 
       try {
