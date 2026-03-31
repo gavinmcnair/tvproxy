@@ -113,7 +113,6 @@ type StreamProfile struct {
 	ID            string    `json:"id"`
 	Name          string    `json:"name"`
 	StreamMode    string    `json:"stream_mode"`
-	SourceType    string    `json:"source_type"`
 	HWAccel       string    `json:"hwaccel"`
 	VideoCodec    string    `json:"video_codec"`
 	Container     string    `json:"container"`

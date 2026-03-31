@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -35,6 +34,7 @@ func (w *logWriter) Write(p []byte) (int, error) {
 }
 
 type Remuxer struct {
+	inputPath    string
 	outputDir    string
 	manifestPath string
 	cmd          *exec.Cmd
@@ -46,8 +46,9 @@ type Remuxer struct {
 	log          zerolog.Logger
 }
 
-func NewRemuxer(outputDir string, log zerolog.Logger) *Remuxer {
+func NewRemuxer(inputPath, outputDir string, log zerolog.Logger) *Remuxer {
 	return &Remuxer{
+		inputPath:    inputPath,
 		outputDir:    outputDir,
 		manifestPath: filepath.Join(outputDir, "manifest.mpd"),
 		done:         make(chan struct{}),
@@ -56,41 +57,56 @@ func NewRemuxer(outputDir string, log zerolog.Logger) *Remuxer {
 	}
 }
 
-func (r *Remuxer) Start(ctx context.Context, input io.Reader) error {
+func (r *Remuxer) Start(ctx context.Context) error {
 	if err := os.MkdirAll(r.outputDir, 0755); err != nil {
 		return fmt.Errorf("creating dash output dir: %w", err)
+	}
+
+	// Wait for the upstream to write enough fMP4 data for MP4Box to read.
+	waitCtx, waitCancel := context.WithTimeout(ctx, 30*time.Second)
+	defer waitCancel()
+	for {
+		info, err := os.Stat(r.inputPath)
+		if err == nil && info.Size() > 4096 {
+			break
+		}
+		select {
+		case <-waitCtx.Done():
+			return fmt.Errorf("upstream file not ready: %w", waitCtx.Err())
+		case <-time.After(500 * time.Millisecond):
+		}
 	}
 
 	rctx, cancel := context.WithCancel(ctx)
 	r.cancel = cancel
 
-	r.cmd = exec.CommandContext(rctx, "ffmpeg",
-		"-y", "-hide_banner", "-loglevel", "warning",
-		"-f", "mp4",
-		"-i", "pipe:0",
-		"-c", "copy",
-		"-f", "dash",
-		"-streaming", "1",
-		"-ldash", "1",
-		"-seg_duration", "2",
-		"-window_size", "5",
-		"-extra_window_size", "10",
-		"-use_timeline", "1",
-		"-use_template", "1",
-		"-init_seg_name", "init-stream$RepresentationID$.$ext$",
-		"-media_seg_name", "chunk-stream$RepresentationID$-$Number%05d$.$ext$",
-		r.manifestPath,
+	// MP4Box reads the growing fMP4 file directly — no pipe needed.
+	// -dash 2000: 2-second segments
+	// -frag 2000: 2-second fragments
+	// -rap: start segments on random access points (keyframes)
+	// -profile dashavc264:live: live DASH profile
+	// -segment-name: segment filename pattern
+	// -out: manifest output path
+	r.cmd = exec.CommandContext(rctx, "MP4Box",
+		"-dash", "2000",
+		"-frag", "2000",
+		"-rap",
+		"-profile", "dashavc264:live",
+		"-bs-switching", "no",
+		"-segment-name", "seg-$RepresentationID$-",
+		"-out", r.manifestPath,
+		r.inputPath,
 	)
-	r.cmd.Stdin = input
 	r.cmd.Cancel = func() error {
 		return r.cmd.Process.Signal(syscall.SIGTERM)
 	}
 	r.cmd.WaitDelay = 5 * time.Second
-	r.cmd.Stderr = &logWriter{log: r.log, prefix: "dash-remuxer"}
+	r.cmd.Stderr = &logWriter{log: r.log, prefix: "mp4box"}
+	r.cmd.Stdout = &logWriter{log: r.log, prefix: "mp4box"}
 
 	if err := r.cmd.Start(); err != nil {
 		cancel()
-		return fmt.Errorf("starting dash remuxer: %w", err)
+		return fmt.Errorf("starting MP4Box: %w", err)
 	}
 
 	go r.run()
@@ -136,7 +152,7 @@ func (r *Remuxer) WaitReady(ctx context.Context) error {
 		if r.err != nil {
 			return r.err
 		}
-		return fmt.Errorf("remuxer exited before manifest was ready")
+		return fmt.Errorf("MP4Box exited before manifest was ready")
 	}
 }
 

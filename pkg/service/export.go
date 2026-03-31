@@ -198,7 +198,7 @@ func (s *ExportService) Import(ctx context.Context, data *ExportData) (int, erro
 				continue
 			}
 			np := &models.StreamProfile{
-				Name: p.Name, StreamMode: p.StreamMode, SourceType: p.SourceType,
+				Name: p.Name, StreamMode: p.StreamMode,
 				HWAccel: p.HWAccel, VideoCodec: p.VideoCodec, Container: p.Container,
 				Deinterlace: p.Deinterlace, FPSMode: p.FPSMode,
 				UseCustomArgs: p.UseCustomArgs, CustomArgs: p.CustomArgs,

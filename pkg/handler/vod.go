@@ -446,12 +446,8 @@ func (h *VODHandler) DASHManifest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if sess.LivePipe == nil {
-		respondError(w, http.StatusServiceUnavailable, "session not ready for dash")
-		return
-	}
 	dashDir := filepath.Join(os.TempDir(), "tvproxy-dash", channelID)
-	remuxer, err := h.dashManager.GetOrStart(context.Background(), channelID, dashDir, sess.LivePipe)
+	remuxer, err := h.dashManager.GetOrStart(context.Background(), channelID, sess.FilePath, dashDir)
 	if err != nil {
 		h.log.Error().Err(err).Str("channel_id", channelID).Msg("failed to start dash remuxer")
 		respondError(w, http.StatusInternalServerError, "dash remuxer failed")

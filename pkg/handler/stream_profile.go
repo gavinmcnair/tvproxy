@@ -21,16 +21,14 @@ func NewStreamProfileHandler(repo store.ProfileStore) *StreamProfileHandler {
 
 var (
 	validStreamModes = map[string]bool{"direct": true, "proxy": true, "ffmpeg": true}
-	validSourceTypes = map[string]bool{"satip": true, "m3u": true}
 	validHWAccels    = map[string]bool{"default": true, "none": true, "qsv": true, "nvenc": true, "vaapi": true, "videotoolbox": true}
 	validVideoCodecs = map[string]bool{"default": true, "copy": true, "h264": true, "h265": true, "av1": true}
-	validContainers  = map[string]bool{"mpegts": true, "matroska": true, "mp4": true, "webm": true}
+	validContainers  = map[string]bool{"mpegts": true, "matroska": true, "mp4": true, "webm": true, "dash": true}
 	validFPSModes    = map[string]bool{"auto": true, "cfr": true}
 )
 
 type profileFields struct {
 	StreamMode    string
-	SourceType    string
 	HWAccel       string
 	VideoCodec    string
 	Container     string
@@ -43,9 +41,6 @@ type profileFields struct {
 func validateProfileFields(f profileFields) string {
 	if !validStreamModes[f.StreamMode] {
 		return "invalid stream_mode"
-	}
-	if !validSourceTypes[f.SourceType] {
-		return "invalid source_type"
 	}
 	if !validHWAccels[f.HWAccel] {
 		return "invalid hwaccel"
@@ -90,7 +85,6 @@ func (h *StreamProfileHandler) Create(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Name          string `json:"name"`
 		StreamMode    string `json:"stream_mode"`
-		SourceType    string `json:"source_type"`
 		HWAccel       string `json:"hwaccel"`
 		VideoCodec    string `json:"video_codec"`
 		Container     string `json:"container"`
@@ -118,9 +112,6 @@ func (h *StreamProfileHandler) Create(w http.ResponseWriter, r *http.Request) {
 	if req.StreamMode == "" {
 		req.StreamMode = "ffmpeg"
 	}
-	if req.SourceType == "" {
-		req.SourceType = "m3u"
-	}
 	if req.HWAccel == "" {
 		req.HWAccel = "none"
 	}
@@ -135,7 +126,7 @@ func (h *StreamProfileHandler) Create(w http.ResponseWriter, r *http.Request) {
 	}
 
 	f := profileFields{
-		StreamMode: req.StreamMode, SourceType: req.SourceType, HWAccel: req.HWAccel,
+		StreamMode: req.StreamMode, HWAccel: req.HWAccel,
 		VideoCodec: req.VideoCodec, Container: req.Container, FPSMode: req.FPSMode,
 		Deinterlace: req.Deinterlace, UseCustomArgs: req.UseCustomArgs, CustomArgs: req.CustomArgs,
 	}
@@ -147,7 +138,6 @@ func (h *StreamProfileHandler) Create(w http.ResponseWriter, r *http.Request) {
 	profile := &models.StreamProfile{
 		Name:          req.Name,
 		StreamMode:    req.StreamMode,
-		SourceType:    req.SourceType,
 		HWAccel:       req.HWAccel,
 		VideoCodec:    req.VideoCodec,
 		Container:     req.Container,
@@ -198,7 +188,6 @@ func (h *StreamProfileHandler) Update(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Name          string `json:"name"`
 		StreamMode    string `json:"stream_mode"`
-		SourceType    string `json:"source_type"`
 		HWAccel       string `json:"hwaccel"`
 		VideoCodec    string `json:"video_codec"`
 		Container     string `json:"container"`
@@ -231,12 +220,6 @@ func (h *StreamProfileHandler) Update(w http.ResponseWriter, r *http.Request) {
 	if req.StreamMode == "" {
 		req.StreamMode = "ffmpeg"
 	}
-	if req.SourceType == "" {
-		req.SourceType = profile.SourceType
-	}
-	if req.SourceType == "" {
-		req.SourceType = "m3u"
-	}
 	if req.HWAccel == "" {
 		req.HWAccel = profile.HWAccel
 	}
@@ -263,7 +246,7 @@ func (h *StreamProfileHandler) Update(w http.ResponseWriter, r *http.Request) {
 	}
 
 	f := profileFields{
-		StreamMode: req.StreamMode, SourceType: req.SourceType, HWAccel: req.HWAccel,
+		StreamMode: req.StreamMode, HWAccel: req.HWAccel,
 		VideoCodec: req.VideoCodec, Container: req.Container, FPSMode: req.FPSMode,
 		Deinterlace: req.Deinterlace, UseCustomArgs: req.UseCustomArgs, CustomArgs: req.CustomArgs,
 	}
@@ -273,7 +256,6 @@ func (h *StreamProfileHandler) Update(w http.ResponseWriter, r *http.Request) {
 	}
 
 	profile.StreamMode = req.StreamMode
-	profile.SourceType = req.SourceType
 	profile.HWAccel = req.HWAccel
 	profile.VideoCodec = req.VideoCodec
 	profile.Container = req.Container

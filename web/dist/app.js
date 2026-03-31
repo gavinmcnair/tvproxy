@@ -3543,10 +3543,9 @@
       columns: [
         { key: 'name', label: 'Name' },
         { key: 'stream_mode', label: 'Mode', render: item => ({direct:'Direct',proxy:'Proxy',ffmpeg:'FFmpeg'})[item.stream_mode] || item.stream_mode },
-        { key: 'source_type', label: 'Source', render: item => ({direct:'Direct',satip:'SAT>IP',m3u:'M3U'})[item.source_type] || item.source_type },
         { key: 'hwaccel', label: 'HW Accel', render: item => ({'default':'Global Default',none:'None (Software)',qsv:'Intel QSV',nvenc:'NVIDIA NVENC',vaapi:'VAAPI (AMD/Intel)',videotoolbox:'VideoToolbox (macOS)'})[item.hwaccel] || item.hwaccel },
         { key: 'video_codec', label: 'Codec', render: item => ({'default':'Global Default',copy:'Copy',h264:'H.264',h265:'H.265',av1:'AV1'})[item.video_codec] || item.video_codec },
-        { key: 'container', label: 'Container/Delivery', render: item => ({mpegts:'MPEG-TS',matroska:'Matroska',mp4:'MP4',webm:'WebM'})[item.container] || item.container },
+        { key: 'container', label: 'Container/Delivery', render: item => ({mpegts:'MPEG-TS',matroska:'Matroska',mp4:'MP4',dash:'DASH',webm:'WebM'})[item.container] || item.container },
         { key: 'is_default', label: 'Default', render: item => {
           const badges = [];
           if (item.is_system) badges.push(h('span', { className: 'badge badge-info', style: 'margin-right:4px' }, 'System'));
@@ -3565,10 +3564,6 @@
           { value: 'proxy', label: 'Proxy (HTTP relay)' },
           { value: 'ffmpeg', label: 'FFmpeg (transcode/copy)' },
         ], default: 'ffmpeg', help: 'How the stream reaches the client.' },
-        { key: 'source_type', label: 'Source Type', type: 'select', options: [
-          { value: 'satip', label: 'SAT>IP' },
-          { value: 'm3u', label: 'M3U' },
-        ], showWhen: form => (form.stream_mode || 'ffmpeg') === 'ffmpeg' },
         { key: 'hwaccel', label: 'Hardware Acceleration', type: 'select', options: [
           { value: 'default', label: 'Global Default' },
           { value: 'none', label: 'None (Software)' },
@@ -3587,8 +3582,9 @@
         { key: 'container', label: 'Container/Delivery', type: 'select', options: [
           { value: 'mpegts', label: 'MPEG-TS (HDHR/Plex)' },
           { value: 'matroska', label: 'Matroska (VLC)' },
-          { value: 'mp4', label: 'MP4 (Browser)' },
-          { value: 'webm', label: 'WebM (Browser, requires Opus audio)' },
+          { value: 'mp4', label: 'MP4' },
+          { value: 'dash', label: 'DASH (Browser)' },
+          { value: 'webm', label: 'WebM' },
         ], showWhen: form => (form.stream_mode || 'ffmpeg') === 'ffmpeg' },
         { key: 'deinterlace', label: 'Deinterlace', type: 'checkbox', default: false, help: 'Apply yadif deinterlace filter (only when transcoding, not copy).', showWhen: form => (form.stream_mode || 'ffmpeg') === 'ffmpeg' && (form.video_codec || 'default') !== 'copy' },
         { key: 'fps_mode', label: 'FPS Mode', type: 'select', options: [

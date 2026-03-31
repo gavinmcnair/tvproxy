@@ -674,14 +674,13 @@ func TestIntegration_StreamProfileCRUD(t *testing.T) {
 
 	t.Run("create with dropdowns", func(t *testing.T) {
 		rec := doRequest(t, env, "POST", "/api/stream-profiles/", map[string]any{
-			"name": "SAT>IP QSV H264", "stream_mode": "ffmpeg", "source_type": "satip", "hwaccel": "qsv", "video_codec": "h264", "is_default": false,
+			"name": "SAT>IP QSV H264", "stream_mode": "ffmpeg", "hwaccel": "qsv", "video_codec": "h264", "is_default": false,
 		}, env.adminToken)
 		assert.Equal(t, http.StatusCreated, rec.Code)
 		var profile map[string]any
 		decodeResponse(t, rec, &profile)
 		assert.Equal(t, "SAT>IP QSV H264", profile["name"])
 		assert.Equal(t, "ffmpeg", profile["stream_mode"])
-		assert.Equal(t, "satip", profile["source_type"])
 		assert.Equal(t, "qsv", profile["hwaccel"])
 		assert.Equal(t, "h264", profile["video_codec"])
 		assert.Equal(t, "ffmpeg", profile["command"])
@@ -691,7 +690,7 @@ func TestIntegration_StreamProfileCRUD(t *testing.T) {
 
 	t.Run("create with custom args", func(t *testing.T) {
 		rec := doRequest(t, env, "POST", "/api/stream-profiles/", map[string]any{
-			"name": "Custom", "source_type": "m3u", "hwaccel": "none", "video_codec": "copy",
+			"name": "Custom", "hwaccel": "none", "video_codec": "copy",
 			"custom_args": "-b:v 4M", "is_default": false,
 		}, env.adminToken)
 		assert.Equal(t, http.StatusCreated, rec.Code)
@@ -705,7 +704,7 @@ func TestIntegration_StreamProfileCRUD(t *testing.T) {
 
 	t.Run("create with use_custom_args", func(t *testing.T) {
 		rec := doRequest(t, env, "POST", "/api/stream-profiles/", map[string]any{
-			"name": "Full Custom", "source_type": "m3u", "hwaccel": "none", "video_codec": "copy",
+			"name": "Full Custom", "hwaccel": "none", "video_codec": "copy",
 			"use_custom_args": true,
 			"custom_args":     "-i {input} -c:v copy -c:a copy -f mpegts pipe:1",
 		}, env.adminToken)
@@ -719,7 +718,7 @@ func TestIntegration_StreamProfileCRUD(t *testing.T) {
 
 	t.Run("create duplicate name returns 409", func(t *testing.T) {
 		rec := doRequest(t, env, "POST", "/api/stream-profiles/", map[string]any{
-			"name": "Direct", "source_type": "m3u", "hwaccel": "none", "video_codec": "copy",
+			"name": "Direct", "hwaccel": "none", "video_codec": "copy",
 		}, env.adminToken)
 		assert.Equal(t, http.StatusConflict, rec.Code)
 	})
@@ -743,7 +742,7 @@ func TestIntegration_StreamProfileCRUD(t *testing.T) {
 
 	t.Run("update", func(t *testing.T) {
 		rec := doRequest(t, env, "PUT", "/api/stream-profiles/"+createdProfileID1, map[string]any{
-			"name": "SAT>IP NVENC AV1", "source_type": "satip", "hwaccel": "nvenc", "video_codec": "av1", "is_default": false,
+			"name": "SAT>IP NVENC AV1", "hwaccel": "nvenc", "video_codec": "av1", "is_default": false,
 		}, env.adminToken)
 		assert.Equal(t, http.StatusOK, rec.Code)
 		var profile map[string]any
@@ -844,7 +843,7 @@ func TestIntegration_StreamProfileCRUD(t *testing.T) {
 		require.NotEmpty(t, plexClientProfileID)
 
 		rec = doRequest(t, env, "PUT", "/api/stream-profiles/"+plexClientProfileID, map[string]any{
-			"name": "Plex Custom", "source_type": "m3u", "hwaccel": "qsv", "video_codec": "h264",
+			"name": "Plex Custom", "hwaccel": "qsv", "video_codec": "h264",
 		}, env.adminToken)
 		assert.Equal(t, http.StatusForbidden, rec.Code)
 	})
@@ -854,7 +853,7 @@ func TestIntegration_StreamProfileCRUD(t *testing.T) {
 		plexClientProfileID := plexProfile["id"].(string)
 
 		rec := doRequest(t, env, "PUT", "/api/stream-profiles/"+plexClientProfileID, map[string]any{
-			"name": "Plex", "source_type": "m3u", "hwaccel": "qsv", "video_codec": "h264",
+			"name": "Plex", "hwaccel": "qsv", "video_codec": "h264",
 		}, env.adminToken)
 		assert.Equal(t, http.StatusOK, rec.Code)
 		var profile map[string]any
@@ -887,15 +886,7 @@ func TestIntegration_StreamProfileCRUD(t *testing.T) {
 
 	t.Run("create missing name", func(t *testing.T) {
 		rec := doRequest(t, env, "POST", "/api/stream-profiles/", map[string]any{
-			"source_type": "m3u",
-		}, env.adminToken)
-		assert.Equal(t, http.StatusBadRequest, rec.Code)
-	})
-
-	t.Run("create invalid source_type", func(t *testing.T) {
-		rec := doRequest(t, env, "POST", "/api/stream-profiles/", map[string]any{
-			"name": "Bad", "source_type": "invalid",
-		}, env.adminToken)
+					}, env.adminToken)
 		assert.Equal(t, http.StatusBadRequest, rec.Code)
 	})
 
@@ -918,7 +909,7 @@ func TestIntegration_StreamProfileCRUD(t *testing.T) {
 
 	t.Run("default stream_mode is ffmpeg", func(t *testing.T) {
 		rec := doRequest(t, env, "POST", "/api/stream-profiles/", map[string]any{
-			"name": "No Mode Specified", "source_type": "m3u", "is_default": false,
+			"name": "No Mode Specified", "is_default": false,
 		}, env.adminToken)
 		assert.Equal(t, http.StatusCreated, rec.Code)
 		var profile map[string]any
@@ -1979,7 +1970,7 @@ func TestIntegration_NonAdminAccess(t *testing.T) {
 
 	t.Run("non-admin cannot create stream profiles", func(t *testing.T) {
 		rec := doRequest(t, env, "POST", "/api/stream-profiles/", map[string]any{
-			"name": "Hacker Profile", "source_type": "m3u",
+			"name": "Hacker Profile",
 		}, env.userToken)
 		assert.Equal(t, http.StatusForbidden, rec.Code)
 	})
@@ -2894,7 +2885,7 @@ func TestIntegration_ClientSyncSurvival(t *testing.T) {
 
 	t.Run("user profiles survive client sync", func(t *testing.T) {
 		rec := doRequest(t, env, "POST", "/api/stream-profiles/", map[string]any{
-			"name": "My Custom Profile", "source_type": "m3u", "hwaccel": "none", "video_codec": "copy",
+			"name": "My Custom Profile", "hwaccel": "none", "video_codec": "copy",
 		}, env.adminToken)
 		require.Equal(t, http.StatusCreated, rec.Code)
 
