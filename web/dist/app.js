@@ -2652,6 +2652,7 @@
     var skin = document.createElement('video-skin');
     var videoEl = document.createElement('video');
     videoEl.setAttribute('playsinline', '');
+    videoEl.setAttribute('controls', '');
     videoEl.slot = 'media';
     skin.appendChild(videoEl);
     playerWrap.appendChild(skin);
