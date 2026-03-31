@@ -33,7 +33,6 @@ func (m *Manager) GetOrStart(ctx context.Context, channelID, outputDir string, r
 
 	if rx, ok := m.remuxings[channelID]; ok {
 		if !rx.remuxer.IsDone() {
-			reader.Close()
 			return rx.remuxer, nil
 		}
 		delete(m.remuxings, channelID)
@@ -41,7 +40,6 @@ func (m *Manager) GetOrStart(ctx context.Context, channelID, outputDir string, r
 
 	r := NewRemuxer(outputDir, m.log)
 	if err := r.Start(ctx, reader); err != nil {
-		reader.Close()
 		return nil, err
 	}
 
@@ -60,7 +58,6 @@ func (m *Manager) Stop(channelID string) {
 
 	if ok {
 		rx.remuxer.Stop()
-		rx.reader.Close()
 		os.RemoveAll(rx.remuxer.OutputDir())
 		m.log.Info().Str("channel_id", channelID).Msg("dash remuxer stopped")
 	}
@@ -77,7 +74,6 @@ func (m *Manager) Shutdown() {
 
 	for _, rx := range all {
 		rx.remuxer.Stop()
-		rx.reader.Close()
 		os.RemoveAll(rx.remuxer.OutputDir())
 	}
 	m.log.Info().Int("count", len(all)).Msg("dash manager shutdown complete")

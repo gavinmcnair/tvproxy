@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
 
@@ -450,14 +449,12 @@ func (h *VODHandler) DASHManifest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	dashDir := filepath.Join(os.TempDir(), "tvproxy-dash", channelID)
-	reader, err := h.vodService.TailSession(r.Context(), channelID)
-	if err != nil {
-		h.log.Error().Err(err).Str("channel_id", channelID).Msg("failed to tail session for dash")
-		respondError(w, http.StatusServiceUnavailable, "session not ready")
+	if sess.LivePipe == nil {
+		respondError(w, http.StatusServiceUnavailable, "session not ready for dash")
 		return
 	}
-	remuxer, err := h.dashManager.GetOrStart(context.Background(), channelID, dashDir, reader)
+	dashDir := filepath.Join(os.TempDir(), "tvproxy-dash", channelID)
+	remuxer, err := h.dashManager.GetOrStart(context.Background(), channelID, dashDir, sess.LivePipe)
 	if err != nil {
 		h.log.Error().Err(err).Str("channel_id", channelID).Msg("failed to start dash remuxer")
 		respondError(w, http.StatusInternalServerError, "dash remuxer failed")
@@ -494,15 +491,12 @@ func (h *VODHandler) DASHSegment(w http.ResponseWriter, r *http.Request) {
 	}
 
 	segPath := filepath.Join(os.TempDir(), "tvproxy-dash", channelID, segment)
-	data, err := os.ReadFile(segPath)
-	if err != nil {
+	if _, err := os.Stat(segPath); err != nil {
 		w.WriteHeader(http.StatusNotFound)
 		return
 	}
 
 	w.Header().Set("Cache-Control", "no-cache, no-store")
 	w.Header().Set("Access-Control-Allow-Origin", "*")
-	w.Header().Set("Content-Type", "video/mp4")
-	w.Header().Set("Content-Length", strconv.Itoa(len(data)))
-	w.Write(data)
+	http.ServeFile(w, r, segPath)
 }

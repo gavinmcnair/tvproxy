@@ -1,6 +1,7 @@
 package session
 
 import (
+	"io"
 	"sync"
 	"time"
 
@@ -21,6 +22,7 @@ type Session struct {
 	Duration     float64
 	Video        *ffmpeg.VideoInfo
 	AudioTracks  []ffmpeg.AudioTrack
+	LivePipe     io.ReadCloser // live fMP4 stream teed from upstream stdout
 	consumers    map[string]*Consumer
 	cancel       func()
 	done         chan struct{}
