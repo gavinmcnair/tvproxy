@@ -235,9 +235,6 @@ func (h *VODHandler) DeleteSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.vodService.StopWatching(channelID, consumerID)
-	if h.vodService.ConsumerCount(channelID) == 0 && h.dashManager != nil {
-		h.dashManager.Stop(channelID)
-	}
 	w.WriteHeader(http.StatusNoContent)
 }
 
