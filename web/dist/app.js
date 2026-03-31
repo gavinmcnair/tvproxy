@@ -1131,7 +1131,7 @@
           return;
         }
         if (btn.dataset.radioPlay) {
-          playRadioInline(btn, btn.dataset.sid, btn.dataset.sname);
+          playRadioInline(btn, btn.dataset.sid, btn.dataset.sname, btn.dataset.tvgid || undefined);
           return;
         }
         if (btn.dataset.radioRec) {
@@ -1141,7 +1141,7 @@
       });
 
       var activeRadio = null;
-      function playRadioInline(btn, streamID, name) {
+      function playRadioInline(btn, streamID, name, tvgId) {
         if (activeRadio && activeRadio.streamID === streamID) {
           if (activeRadio.audio.paused) {
             activeRadio.audio.play();
@@ -1155,17 +1155,34 @@
         if (activeRadio) stopRadio();
         btn.textContent = '\u23F3';
         btn.title = 'Connecting...';
+        var row = btn.closest('tr');
+        var nameCell = row ? row.querySelectorAll('td')[1] : null;
+        var origName = nameCell ? nameCell.textContent : '';
         fetch('/stream/' + streamID + '/vod?profile=Browser', { method: 'POST', headers: { 'Authorization': 'Bearer ' + (state.accessToken || '') } })
           .then(function(r) { return r.json(); })
           .then(function(resp) {
             if (!resp.session_id) { btn.textContent = '\u25B6'; return; }
             var audio = new Audio('/vod/' + resp.session_id + '/stream');
             audio.volume = parseFloat(localStorage.getItem('tvproxy_volume') || '0.5');
-            audio.onplaying = function() { btn.textContent = '\u23F9'; btn.title = 'Stop'; };
+            audio.onplaying = function() {
+              btn.textContent = '\u23F9'; btn.title = 'Stop';
+              fetchRadioNowPlaying(tvgId, nameCell, origName);
+            };
             audio.onerror = function() { btn.textContent = '\u25B6'; btn.title = 'Play'; stopRadio(); };
             audio.play().catch(function() { btn.textContent = '\u25B6'; });
-            activeRadio = { streamID: streamID, sessionID: resp.session_id, consumerID: resp.consumer_id, audio: audio, btn: btn };
+            activeRadio = { streamID: streamID, sessionID: resp.session_id, consumerID: resp.consumer_id, audio: audio, btn: btn, nameCell: nameCell, origName: origName, tvgId: tvgId, nowInterval: null };
+            if (tvgId) {
+              activeRadio.nowInterval = setInterval(function() { fetchRadioNowPlaying(tvgId, nameCell, origName); }, 30000);
+            }
           }).catch(function() { btn.textContent = '\u25B6'; });
+      }
+      function fetchRadioNowPlaying(tvgId, nameCell, origName) {
+        if (!tvgId || !nameCell) return;
+        api.get('/api/epg/now?channel_id=' + encodeURIComponent(tvgId)).then(function(p) {
+          if (p && p.title) {
+            nameCell.innerHTML = esc(origName) + ' <span style="color:var(--text-muted);font-size:12px">\u2014 ' + esc(p.title) + '</span>';
+          }
+        }).catch(function() {});
       }
       function stopRadio() {
         if (!activeRadio) return;
@@ -1173,6 +1190,10 @@
         activeRadio.audio.removeAttribute('src');
         activeRadio.btn.textContent = '\u25B6';
         activeRadio.btn.title = 'Play';
+        if (activeRadio.nameCell && activeRadio.origName) {
+          activeRadio.nameCell.textContent = activeRadio.origName;
+        }
+        if (activeRadio.nowInterval) clearInterval(activeRadio.nowInterval);
         api.del('/vod/' + activeRadio.sessionID + (activeRadio.consumerID ? '?consumer_id=' + activeRadio.consumerID : '')).catch(function() {});
         activeRadio = null;
       }
@@ -1203,7 +1224,7 @@
           actionHtml += '<button class="btn btn-primary btn-sm btn-icon" title="Add as Channel" style="font-size:16px" data-qadd="1" data-sid="' + s.id + '" data-sname="' + esc(s.name) + '" data-tvgid="' + esc(s.tvg_id || '') + '" data-slogo="' + esc(s.logo || '') + '">+</button>';
           if (isRadio) {
             actionHtml += '<button class="btn btn-sm btn-icon" title="Record" data-radio-rec="1" data-sid="' + s.id + '" style="font-size:12px">\u23FA</button>';
-            actionHtml += '<button class="btn btn-secondary btn-sm btn-icon" title="Play" data-radio-play="1" data-sid="' + s.id + '" data-sname="' + esc(s.name) + '">\u25B6</button>';
+            actionHtml += '<button class="btn btn-secondary btn-sm btn-icon" title="Play" data-radio-play="1" data-sid="' + s.id + '" data-sname="' + esc(s.name) + '" data-tvgid="' + esc(s.tvg_id || '') + '">\u25B6</button>';
           } else {
             actionHtml += '<button class="btn btn-secondary btn-sm btn-icon" title="Play" data-sid="' + s.id + '" data-sname="' + esc(s.name) + '" data-tvgid="' + esc(s.tvg_id || '') + '">\u25B6</button>';
           }
@@ -2550,7 +2571,13 @@
           session = { id: resp.session_id, consumer_id: resp.consumer_id, duration: resp.duration, container: resp.container, request_headers: resp.request_headers };
         }
       } catch(e) {}
-      openVideoPlayer(name, '/stream/' + streamID + '?profile=Browser', tvgId, session, undefined, undefined, streamTracks, streamGroup);
+      if (isAudioOnly(streamTracks, streamGroup)) {
+        if (session) {
+          api.del('/vod/' + session.id + (session.consumer_id ? '?consumer_id=' + session.consumer_id : '')).catch(function() {});
+        }
+      } else {
+        openVideoPlayer(name, '/stream/' + streamID + '?profile=Browser', tvgId, session, undefined, undefined, streamTracks, streamGroup);
+      }
     } finally {
       playInProgress = false;
       document.body.style.cursor = '';
