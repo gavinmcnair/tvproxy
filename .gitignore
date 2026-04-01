@@ -40,3 +40,6 @@ dvbscan-bin
 *.bak
 TESTING.md
 .claude/worktrees/
+AGENT.md
+CHANNELS.md
+packager
