@@ -83,6 +83,7 @@ func composeBuildArgs(opts BuildOptions) string {
 		parts = append(parts, "-vf", strings.Join(vf, ","))
 	}
 	parts = append(parts, encoderFlags(opts.HWAccel, outputCodec, s)...)
+	parts = append(parts, "-g", "50", "-keyint_min", "50")
 	parts = append(parts, buildAudioFlags(opts.Probe, opts.Container, opts.Delivery, opts.AudioCodec, s)...)
 
 	parts = append(parts, "-output_ts_offset", "0")

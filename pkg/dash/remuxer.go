@@ -121,7 +121,11 @@ func (r *Remuxer) Start(ctx context.Context) error {
 		fmt.Sprintf("in=/dev/stdin,stream=audio,init_segment=%s,segment_template=%s",
 			filepath.Join(r.outputDir, "init_a.mp4"),
 			filepath.Join(r.outputDir, "seg_a_$Number$.m4s")),
-		"--mpd_output", r.manifestPath, "--segment_duration", "2", "--io_block_size", "65536",
+		"--mpd_output", r.manifestPath,
+		"--segment_duration", "2",
+		"--io_block_size", "65536",
+		"--suggested_presentation_delay", "3",
+		"--min_buffer_time", "2",
 	}
 	r.cmd = exec.CommandContext(rctx, packagerBin, args...)
 	r.cmd.Stdin = &tailReader{file: inputFile, ctx: rctx}
