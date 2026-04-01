@@ -2730,6 +2730,7 @@
     let signalData = null;
     let satipStreamUrl = null;
     let nowProgram = null;
+    let nowPlayingEl = null;
     let isRecording = false;
     let pollFailures = 0;
     let currentAudioIndex = 0;
@@ -2886,6 +2887,18 @@
         });
         return shakaPlayer.load(streamSrc).then(function() {
           videoEl.play().catch(function() {});
+          // Inject programme info into Shaka control bar
+          var controls = playerWrap.querySelector('.shaka-bottom-controls .shaka-controls-container');
+          if (controls) {
+            var progEl = document.createElement('span');
+            progEl.className = 'shaka-prog-info';
+            progEl.style.cssText = 'color:rgba(255,255,255,0.9);font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;padding:0 8px;';
+            var spacer = controls.querySelector('.shaka-spacer');
+            if (spacer) {
+              spacer.parentNode.insertBefore(progEl, spacer);
+            }
+            nowPlayingEl = progEl;
+          }
         });
       }).catch(function(e) {
         statusEl.style.color = '#ff6b6b';
@@ -2985,6 +2998,13 @@
         if (program && program.title) {
           nowProgram = program;
           updateStatusText();
+          if (nowPlayingEl) {
+            var info = program.title;
+            if (program.start && program.stop) {
+              info += ' \u2022 ' + formatTime(program.start) + ' - ' + formatTime(program.stop);
+            }
+            nowPlayingEl.textContent = info;
+          }
         }
       }).catch(function() {});
     }
