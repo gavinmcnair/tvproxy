@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -13,6 +14,28 @@ import (
 
 	"github.com/rs/zerolog"
 )
+
+type tailReader struct {
+	file *os.File
+	ctx  context.Context
+}
+
+func (r *tailReader) Read(p []byte) (int, error) {
+	for {
+		n, err := r.file.Read(p)
+		if n > 0 {
+			return n, nil
+		}
+		if err != io.EOF {
+			return 0, err
+		}
+		select {
+		case <-r.ctx.Done():
+			return 0, io.EOF
+		case <-time.After(100 * time.Millisecond):
+		}
+	}
+}
 
 type logWriter struct {
 	log    zerolog.Logger
@@ -85,18 +108,23 @@ func (r *Remuxer) Start(ctx context.Context) error {
 		packagerBin = "/usr/local/bin/packager"
 	}
 
+	inputFile, err := os.Open(r.inputPath)
+	if err != nil {
+		cancel()
+		return fmt.Errorf("opening input file: %w", err)
+	}
+
 	args := []string{
-		fmt.Sprintf("in=%s,stream=video,init_segment=%s,segment_template=%s",
-			r.inputPath,
+		fmt.Sprintf("in=/dev/stdin,stream=video,init_segment=%s,segment_template=%s",
 			filepath.Join(r.outputDir, "init_v.mp4"),
 			filepath.Join(r.outputDir, "seg_v_$Number$.m4s")),
-		fmt.Sprintf("in=%s,stream=audio,init_segment=%s,segment_template=%s",
-			r.inputPath,
+		fmt.Sprintf("in=/dev/stdin,stream=audio,init_segment=%s,segment_template=%s",
 			filepath.Join(r.outputDir, "init_a.mp4"),
 			filepath.Join(r.outputDir, "seg_a_$Number$.m4s")),
 		"--mpd_output", r.manifestPath, "--segment_duration", "2", "--io_block_size", "65536",
 	}
 	r.cmd = exec.CommandContext(rctx, packagerBin, args...)
+	r.cmd.Stdin = &tailReader{file: inputFile, ctx: rctx}
 	r.cmd.Cancel = func() error {
 		return r.cmd.Process.Signal(syscall.SIGTERM)
 	}
