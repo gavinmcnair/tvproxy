@@ -76,7 +76,7 @@ func (m *Manager) cleanupDoneSession(channelID string, s *Session) {
 	delete(m.sessions, channelID)
 	s.cancel()
 	<-s.done
-	os.RemoveAll(s.TempDir)
+	os.Remove(filepath.Join(s.TempDir, "video.mp4"))
 	m.log.Info().Str("channel_id", channelID).Str("session_id", s.ID).Msg("replaced dead session")
 }
 
@@ -264,7 +264,7 @@ func (m *Manager) stopAndCleanup(channelID string, s *Session) {
 	}
 
 	if !s.HasRecordingConsumer() {
-		os.RemoveAll(s.TempDir)
+		os.Remove(s.FilePath)
 	}
 
 	m.log.Info().
@@ -480,7 +480,7 @@ func (m *Manager) Shutdown() {
 		s.mu.Unlock()
 		s.cancel()
 		<-s.done
-		os.RemoveAll(s.TempDir)
+		os.Remove(s.FilePath)
 	}
 
 	m.log.Info().Int("sessions", len(sessions)).Msg("session manager shutdown complete")
