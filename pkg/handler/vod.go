@@ -3,7 +3,9 @@ package handler
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -137,13 +139,18 @@ func (h *VODHandler) CreateSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	respondJSON(w, http.StatusOK, map[string]any{
+	resp := map[string]any{
 		"session_id":      sessionID,
 		"consumer_id":     consumerID,
 		"channel_id":      streamID,
 		"container":       container,
 		"request_headers": clientHeaders(r),
-	})
+	}
+	_, _, duration := h.vodService.GetProbeInfo(sessionID)
+	if duration > 0 {
+		resp["duration"] = duration
+	}
+	respondJSON(w, http.StatusOK, resp)
 }
 
 func (h *VODHandler) CreateChannelSession(w http.ResponseWriter, r *http.Request) {
@@ -157,14 +164,19 @@ func (h *VODHandler) CreateChannelSession(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	respondJSON(w, http.StatusOK, map[string]any{
+	resp := map[string]any{
 		"session_id":      sessionID,
 		"consumer_id":     consumerID,
 		"channel_id":      channelID,
 		"container":       container,
 		"audio_only":      audioOnly,
 		"request_headers": clientHeaders(r),
-	})
+	}
+	_, _, duration := h.vodService.GetProbeInfo(sessionID)
+	if duration > 0 {
+		resp["duration"] = duration
+	}
+	respondJSON(w, http.StatusOK, resp)
 }
 
 func (h *VODHandler) Status(w http.ResponseWriter, r *http.Request) {
@@ -476,9 +488,7 @@ func (h *VODHandler) DASHManifest(w http.ResponseWriter, r *http.Request) {
 
 	dashDir := dash.ChannelDir(channelID)
 	_, _, duration := h.vodService.GetProbeInfo(channelID)
-	done := h.vodService.IsDone(channelID)
-	isVOD := duration > 0 || (done && h.vodService.GetError(channelID) == nil)
-	remuxer, err := h.dashManager.GetOrStart(context.Background(), channelID, sess.FilePath, dashDir, isVOD)
+	remuxer, err := h.dashManager.GetOrStart(context.Background(), channelID, sess.FilePath, dashDir, false, duration)
 	if err != nil {
 		h.log.Error().Err(err).Str("channel_id", channelID).Msg("failed to start dash remuxer")
 		respondError(w, http.StatusInternalServerError, "dash remuxer failed")
@@ -498,6 +508,17 @@ func (h *VODHandler) DASHManifest(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusServiceUnavailable, "manifest not readable")
 		return
 	}
+
+	_, _, duration = h.vodService.GetProbeInfo(channelID)
+	if duration > 0 {
+		durStr := formatISODuration(duration)
+		mpd := string(data)
+		if !strings.Contains(mpd, "mediaPresentationDuration") {
+			mpd = strings.Replace(mpd, `type="dynamic"`, `type="dynamic" mediaPresentationDuration="`+durStr+`"`, 1)
+			data = []byte(mpd)
+		}
+	}
+
 	w.Header().Set("Content-Type", "application/dash+xml")
 	w.Header().Set("Cache-Control", "no-cache, no-store")
 	w.Header().Set("Access-Control-Allow-Origin", "*")
@@ -528,4 +549,17 @@ func (h *VODHandler) DASHSegment(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-cache, no-store")
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 	http.ServeFile(w, r, segPath)
+}
+
+func formatISODuration(seconds float64) string {
+	h := int(math.Floor(seconds / 3600))
+	m := int(math.Floor(math.Mod(seconds, 3600) / 60))
+	s := math.Mod(seconds, 60)
+	if h > 0 {
+		return fmt.Sprintf("PT%dH%dM%.1fS", h, m, s)
+	}
+	if m > 0 {
+		return fmt.Sprintf("PT%dM%.1fS", m, s)
+	}
+	return fmt.Sprintf("PT%.1fS", s)
 }

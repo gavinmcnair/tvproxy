@@ -376,8 +376,15 @@ func (m *Manager) GetOrCreateWithConsumer(ctx context.Context, opts StartOpts, c
 	}
 	s.addConsumer(c)
 
-	if m.probeCache != nil && opts.StreamURL != "" {
-		if cached, err := m.probeCache.GetProbe(ffmpeg.StreamHash(opts.StreamURL)); err == nil && cached != nil {
+	if m.probeCache != nil {
+		var cached *ffmpeg.ProbeResult
+		if opts.StreamID != "" {
+			cached, _ = m.probeCache.GetProbeByStreamID(opts.StreamID)
+		}
+		if cached == nil && opts.StreamURL != "" {
+			cached, _ = m.probeCache.GetProbe(ffmpeg.StreamHash(opts.StreamURL))
+		}
+		if cached != nil {
 			s.SetProbeInfo(cached.Video, cached.AudioTracks, cached.Duration)
 		}
 	}
@@ -449,11 +456,17 @@ func (m *Manager) ProbeURL(ctx context.Context, url string) (*ffmpeg.ProbeResult
 }
 
 func (m *Manager) probeAsync(s *Session, streamURL string) {
-	if m.probeCache != nil && streamURL != "" {
-		cached, err := m.probeCache.GetProbe(ffmpeg.StreamHash(streamURL))
-		if err == nil && cached != nil {
+	if m.probeCache != nil {
+		var cached *ffmpeg.ProbeResult
+		if s.StreamID != "" {
+			cached, _ = m.probeCache.GetProbeByStreamID(s.StreamID)
+		}
+		if cached == nil && streamURL != "" {
+			cached, _ = m.probeCache.GetProbe(ffmpeg.StreamHash(streamURL))
+		}
+		if cached != nil && (cached.Duration > 0 || !ffmpeg.IsHTTPURL(streamURL)) {
 			s.SetProbeInfo(cached.Video, cached.AudioTracks, cached.Duration)
-			m.log.Debug().Str("session_id", s.ID).Str("stream_url", streamURL).Msg("probe cache hit")
+			m.log.Debug().Str("session_id", s.ID).Float64("duration", cached.Duration).Msg("probe cache hit")
 			return
 		}
 	}
@@ -487,9 +500,12 @@ func (m *Manager) probeAsync(s *Session, streamURL string) {
 
 	s.SetProbeInfo(result.Video, result.AudioTracks, result.Duration)
 
-	if m.probeCache != nil && streamURL != "" {
-		if saveErr := m.probeCache.SaveProbe(ffmpeg.StreamHash(streamURL), result); saveErr != nil {
-			m.log.Warn().Err(saveErr).Str("stream_url", streamURL).Msg("failed to save probe to cache")
+	if m.probeCache != nil {
+		if s.StreamID != "" {
+			m.probeCache.SaveProbeByStreamID(s.StreamID, result)
+		}
+		if streamURL != "" {
+			m.probeCache.SaveProbe(ffmpeg.StreamHash(streamURL), result)
 		}
 	}
 

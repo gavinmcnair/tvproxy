@@ -3001,11 +3001,16 @@
       shakaPlayer = new shaka.Player();
       shakaPlayer.configure({
         streaming: {
-          bufferingGoal: 10,
+          bufferingGoal: 15,
           rebufferingGoal: 2,
-          bufferBehind: 30
+          bufferBehind: 60,
+          segmentPrefetchLimit: 2
         },
         manifest: {
+          dash: {
+            ignoreMinBufferTime: true,
+            autoCorrectDrift: true
+          },
           retryParameters: { maxAttempts: 10, baseDelay: 2000, timeout: 30000 }
         }
       });
@@ -3017,35 +3022,8 @@
           controlPanelElements: ['play_pause', 'time_and_duration', 'spacer', 'mute', 'volume', 'fullscreen'],
           overflowMenuButtons: []
         });
-        function waitForStream() {
-          if (!dvr) return Promise.resolve();
-          statusEl.style.color = '#ffa726';
-          statusEl.textContent = 'Connecting...';
-          return new Promise(function(resolve, reject) {
-            var attempts = 0;
-            var maxAttempts = 60;
-            function poll() {
-              if (playerCtx.signal.aborted) { reject(new Error('cancelled')); return; }
-              fetch('/vod/' + dvr.id + '/status').then(function(r) { return r.json(); }).then(function(st) {
-                if (st.buffered > 0) { resolve(); return; }
-                if (st.error) { reject(new Error(st.error)); return; }
-                attempts++;
-                if (attempts >= maxAttempts) { reject(new Error('stream timeout')); return; }
-                setTimeout(poll, 500);
-              }).catch(function() {
-                attempts++;
-                if (attempts >= maxAttempts) { reject(new Error('poll failed')); return; }
-                setTimeout(poll, 500);
-              });
-            }
-            poll();
-          });
-        }
-        return waitForStream().then(function() {
-          statusEl.style.color = '#ffa726';
-          statusEl.textContent = 'Buffering...';
-          return shakaPlayer.load(streamSrc);
-        }).then(function() {
+        var startTime = (dvr && dvr.duration > 0) ? 0 : null;
+        return shakaPlayer.load(streamSrc, startTime).then(function() {
           videoEl.play().catch(function() {});
           var controls = playerWrap.querySelector('.shaka-bottom-controls .shaka-controls-container');
           if (controls) {
@@ -3205,10 +3183,12 @@
             return;
           }
           if (dvrTracker) dvrTracker.updateBuffered(st.buffered);
+          if (st.duration > 0 && dvr && !dvr.duration) {
+            dvr.duration = st.duration;
+          }
           if (isLive && st.duration > 0 && !channelID) {
             isLive = false;
             if (dvrTracker) dvrTracker.setDuration(st.duration);
-            dvr.duration = st.duration;
           }
           if (st.profile && st.profile !== currentProfile) {
             currentProfile = st.profile;

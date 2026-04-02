@@ -177,20 +177,22 @@ func probeArgs(s *defaults.FFmpegSettings, url string) []string {
 	analyzeDuration := s.AnalyzeDuration
 	probeSize := s.ProbeSize
 
-	args := []string{"-v", "quiet"}
+	args := []string{"-v", "error"}
 
 	if strings.HasPrefix(url, "rtsp://") || strings.HasPrefix(url, "rtsps://") {
 		args = append(args, "-rtsp_transport", "tcp")
 		analyzeDuration = 3000000
 		probeSize = 3000000
+	} else if IsHTTPURL(url) {
+		analyzeDuration = 0
+		probeSize = 32
 	}
 
 	args = append(args,
 		"-analyzeduration", strconv.Itoa(analyzeDuration),
 		"-probesize", strconv.Itoa(probeSize),
 		"-print_format", "json",
-		"-show_format",
-		"-show_streams",
+		"-show_entries", "stream=index,codec_name,codec_type,width,height,r_frame_rate,field_order,pix_fmt,color_space,color_transfer,color_primaries,profile,sample_rate,channels,bit_rate,disposition:stream_tags=language:format=duration,format_name",
 	)
 	return args
 }

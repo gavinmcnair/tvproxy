@@ -30,18 +30,26 @@ func NewManager(log zerolog.Logger) *Manager {
 	}
 }
 
-func (m *Manager) GetOrStart(ctx context.Context, channelID, inputPath, outputDir string, isVOD bool) (*Remuxer, error) {
+func (m *Manager) GetOrStart(ctx context.Context, channelID, inputPath, outputDir string, isVOD bool, duration float64) (*Remuxer, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	if r, ok := m.remuxers[channelID]; ok {
 		if !r.IsDone() {
-			return r, nil
+			if duration > 0 && r.duration == 0 {
+				m.log.Info().Str("channel_id", channelID).Float64("duration", duration).Msg("restarting dash remuxer with duration")
+				r.Stop()
+				os.RemoveAll(r.OutputDir())
+				delete(m.remuxers, channelID)
+			} else {
+				return r, nil
+			}
+		} else {
+			delete(m.remuxers, channelID)
 		}
-		delete(m.remuxers, channelID)
 	}
 
-	r := NewRemuxer(inputPath, outputDir, isVOD, m.log)
+	r := NewRemuxer(inputPath, outputDir, isVOD, duration, m.log)
 	if err := r.Start(ctx); err != nil {
 		return nil, err
 	}
