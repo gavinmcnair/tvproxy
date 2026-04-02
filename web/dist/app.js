@@ -2992,21 +2992,49 @@
         ui.configure({
           addBigPlayButton: false,
           fadeDelay: 2,
-          controlPanelElements: ['play_pause', 'time_and_duration', 'spacer', 'mute', 'volume', 'fullscreen'],
+          controlPanelElements: ['play_pause', 'spacer', 'mute', 'volume', 'fullscreen'],
           overflowMenuButtons: []
         });
         return shakaPlayer.load(streamSrc).then(function() {
           videoEl.play().catch(function() {});
           var controls = playerWrap.querySelector('.shaka-bottom-controls .shaka-controls-container');
           if (controls) {
+            var timeEl = document.createElement('span');
+            timeEl.style.cssText = 'color:#fff;font-size:12px;padding:0 8px;font-variant-numeric:tabular-nums;white-space:nowrap;';
             var progEl = document.createElement('span');
             progEl.className = 'shaka-prog-info';
-            progEl.style.cssText = 'color:rgba(255,255,255,0.9);font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;padding:0 8px;';
-            var spacer = controls.querySelector('.shaka-spacer');
-            if (spacer) {
-              spacer.parentNode.insertBefore(progEl, spacer);
+            progEl.style.cssText = 'color:rgba(255,255,255,0.7);font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;padding:0 8px;';
+            var playPause = controls.querySelector('.shaka-play-button');
+            if (playPause && playPause.nextSibling) {
+              controls.insertBefore(timeEl, playPause.nextSibling);
+              controls.insertBefore(progEl, timeEl.nextSibling);
+            } else {
+              var spacer = controls.querySelector('.shaka-spacer');
+              if (spacer) {
+                spacer.parentNode.insertBefore(timeEl, spacer);
+                spacer.parentNode.insertBefore(progEl, spacer);
+              }
             }
             nowPlayingEl = progEl;
+
+            var knownDuration = dvr && dvr.duration > 0 ? dvr.duration : 0;
+            setInterval(function() {
+              if (playerCtx.signal.aborted) return;
+              if (nowProgram && nowProgram.start && nowProgram.stop && isLive) {
+                var progStart = new Date(nowProgram.start).getTime();
+                var progStop = new Date(nowProgram.stop).getTime();
+                var elapsed = Date.now() - progStart;
+                var total = progStop - progStart;
+                timeEl.textContent = fmtTime(Math.max(0, elapsed / 1000)) + ' / ' + fmtTime(total / 1000);
+              } else if (!isLive && knownDuration > 0) {
+                timeEl.textContent = fmtTime(videoEl.currentTime) + ' / ' + fmtTime(knownDuration);
+              } else if (!isLive && videoEl.duration && isFinite(videoEl.duration)) {
+                timeEl.textContent = fmtTime(videoEl.currentTime) + ' / ' + fmtTime(videoEl.duration);
+              } else {
+                timeEl.textContent = fmtTime(videoEl.currentTime);
+              }
+              if (probeData && probeData.duration > 0 && knownDuration === 0) knownDuration = probeData.duration;
+            }, 500);
           }
         });
       }).catch(function(e) {
