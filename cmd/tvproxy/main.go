@@ -150,9 +150,8 @@ func main() {
 		streamStore.Save()
 	}
 
-	dashTmpDir := filepath.Join(os.TempDir(), "tvproxy-dash")
-	os.RemoveAll(dashTmpDir)
-	log.Debug().Str("path", dashTmpDir).Msg("cleaned stale dash segments")
+	os.RemoveAll(dash.TempDir())
+	log.Debug().Str("path", dash.TempDir()).Msg("cleaned stale dash segments")
 
 	authService := service.NewAuthService(userStore, cfg.JWTSecret, cfg.AccessTokenExpiry, cfg.RefreshTokenExpiry)
 	authService.SetInviteExpiry(cfg.Settings.Auth.InviteTokenExpiry)

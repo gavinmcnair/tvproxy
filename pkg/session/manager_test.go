@@ -39,12 +39,6 @@ func TestManager_IsDoneTrueForUnknown(t *testing.T) {
 	assert.True(t, m.IsDone("nonexistent"))
 }
 
-func TestManager_AddConsumerFailsNoSession(t *testing.T) {
-	m, _ := testManager(t)
-	_, err := m.AddConsumer("nonexistent", "viewer")
-	assert.Error(t, err)
-}
-
 func TestManager_TailFileFailsNoSession(t *testing.T) {
 	m, _ := testManager(t)
 	_, err := m.TailFile(context.Background(), "nonexistent")

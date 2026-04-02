@@ -2704,7 +2704,7 @@
         document.body.style.cursor = '';
         return;
       }
-      openVideoPlayer(name, vodPath.replace('/vod', '') + '?profile=Browser', tvgId, session, channelID || streamID, undefined, streamTracks, streamGroup);
+      openVideoPlayer(name, vodPath.replace('/vod', '') + '?profile=Browser', tvgId, session, channelID || streamID, streamTracks, streamGroup);
     } finally {
       playInProgress = false;
       document.body.style.cursor = '';
@@ -2721,7 +2721,7 @@
   }
 
 
-  function openVideoPlayer(title, url, tvgId, dvr, channelID, probeUrl, streamTracks, streamGroup) {
+  function openVideoPlayer(title, url, tvgId, dvr, channelID, streamTracks, streamGroup) {
     if (activePlayerCleanup) { activePlayerCleanup(); activePlayerCleanup = null; }
     const playerCtx = new AbortController();
     let pollInterval = null;
@@ -3128,11 +3128,6 @@
 
     statsInterval = setInterval(updateStats, 2000);
 
-    if (probeUrl) {
-      api.get(probeUrl).then(function(pd) {
-        if (pd) probeData = { video: pd.video || null, audio_tracks: pd.audio_tracks || [], duration: pd.duration || 0, profile: '' };
-      }).catch(function() {});
-    }
   }
   async function findOrCreateLogoByUrl(url, name, inputs) {
     const logos = await logosCache.getAll();

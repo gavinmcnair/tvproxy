@@ -3,25 +3,30 @@ package dash
 import (
 	"context"
 	"os"
+	"path/filepath"
 	"sync"
 
 	"github.com/rs/zerolog"
 )
 
-type Remuxing struct {
-	remuxer *Remuxer
+func TempDir() string {
+	return filepath.Join(os.TempDir(), "tvproxy-dash")
+}
+
+func ChannelDir(channelID string) string {
+	return filepath.Join(TempDir(), channelID)
 }
 
 type Manager struct {
-	remuxings map[string]*Remuxing
-	mu        sync.Mutex
-	log       zerolog.Logger
+	remuxers map[string]*Remuxer
+	mu       sync.Mutex
+	log      zerolog.Logger
 }
 
 func NewManager(log zerolog.Logger) *Manager {
 	return &Manager{
-		remuxings: make(map[string]*Remuxing),
-		log:       log.With().Str("component", "dash_manager").Logger(),
+		remuxers: make(map[string]*Remuxer),
+		log:      log.With().Str("component", "dash_manager").Logger(),
 	}
 }
 
@@ -29,11 +34,11 @@ func (m *Manager) GetOrStart(ctx context.Context, channelID, inputPath, outputDi
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	if rx, ok := m.remuxings[channelID]; ok {
-		if !rx.remuxer.IsDone() {
-			return rx.remuxer, nil
+	if r, ok := m.remuxers[channelID]; ok {
+		if !r.IsDone() {
+			return r, nil
 		}
-		delete(m.remuxings, channelID)
+		delete(m.remuxers, channelID)
 	}
 
 	r := NewRemuxer(inputPath, outputDir, m.log)
@@ -41,38 +46,38 @@ func (m *Manager) GetOrStart(ctx context.Context, channelID, inputPath, outputDi
 		return nil, err
 	}
 
-	m.remuxings[channelID] = &Remuxing{remuxer: r}
+	m.remuxers[channelID] = r
 	m.log.Info().Str("channel_id", channelID).Msg("dash remuxer started")
 	return r, nil
 }
 
 func (m *Manager) Stop(channelID string) {
 	m.mu.Lock()
-	rx, ok := m.remuxings[channelID]
+	r, ok := m.remuxers[channelID]
 	if ok {
-		delete(m.remuxings, channelID)
+		delete(m.remuxers, channelID)
 	}
 	m.mu.Unlock()
 
 	if ok {
-		rx.remuxer.Stop()
-		os.RemoveAll(rx.remuxer.OutputDir())
+		r.Stop()
+		os.RemoveAll(r.OutputDir())
 		m.log.Info().Str("channel_id", channelID).Msg("dash remuxer stopped")
 	}
 }
 
 func (m *Manager) Shutdown() {
 	m.mu.Lock()
-	all := make(map[string]*Remuxing, len(m.remuxings))
-	for k, v := range m.remuxings {
+	all := make(map[string]*Remuxer, len(m.remuxers))
+	for k, v := range m.remuxers {
 		all[k] = v
 	}
-	m.remuxings = make(map[string]*Remuxing)
+	m.remuxers = make(map[string]*Remuxer)
 	m.mu.Unlock()
 
-	for _, rx := range all {
-		rx.remuxer.Stop()
-		os.RemoveAll(rx.remuxer.OutputDir())
+	for _, r := range all {
+		r.Stop()
+		os.RemoveAll(r.OutputDir())
 	}
 	m.log.Info().Int("count", len(all)).Msg("dash manager shutdown complete")
 }

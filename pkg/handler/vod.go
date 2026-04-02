@@ -447,7 +447,7 @@ func (h *VODHandler) DASHManifest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	dashDir := filepath.Join(os.TempDir(), "tvproxy-dash", channelID)
+	dashDir := dash.ChannelDir(channelID)
 	remuxer, err := h.dashManager.GetOrStart(context.Background(), channelID, sess.FilePath, dashDir)
 	if err != nil {
 		h.log.Error().Err(err).Str("channel_id", channelID).Msg("failed to start dash remuxer")
@@ -489,7 +489,7 @@ func (h *VODHandler) DASHSegment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	segPath := filepath.Join(os.TempDir(), "tvproxy-dash", channelID, segment)
+	segPath := filepath.Join(dash.ChannelDir(channelID), segment)
 	if _, err := os.Stat(segPath); err != nil {
 		w.WriteHeader(http.StatusNotFound)
 		return

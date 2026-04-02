@@ -185,37 +185,6 @@ func (m *Manager) buildArgs(argsStr string, inputURL string, outputPath string) 
 
 const lingerDuration = 30 * time.Second
 
-func (m *Manager) AddConsumer(channelID string, consumerType string) (string, error) {
-	m.mu.RLock()
-	s, ok := m.sessions[channelID]
-	m.mu.RUnlock()
-	if !ok {
-		return "", fmt.Errorf("no session for channel %s", channelID)
-	}
-
-	s.mu.Lock()
-	if s.lingerTimer != nil {
-		s.lingerTimer.Stop()
-		s.lingerTimer = nil
-	}
-	s.mu.Unlock()
-
-	c := &Consumer{
-		ID:        uuid.New().String(),
-		Type:      consumerType,
-		CreatedAt: time.Now(),
-	}
-	s.addConsumer(c)
-
-	m.log.Info().
-		Str("channel_id", channelID).
-		Str("consumer_id", c.ID).
-		Str("type", consumerType).
-		Int("total", s.consumerCount()).
-		Msg("consumer added")
-
-	return c.ID, nil
-}
 
 func (m *Manager) RemoveConsumer(channelID string, consumerID string) {
 	m.mu.RLock()

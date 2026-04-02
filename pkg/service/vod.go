@@ -92,18 +92,18 @@ func NewVODService(
 	}
 }
 
-func (s *VODService) resolveStreamForChannel(ctx context.Context, channelID string) (streamURL, streamName, channelName, streamID, sourceType, streamGroup string, err error) {
+func (s *VODService) resolveStreamForChannel(ctx context.Context, channelID string) (streamURL, streamName, channelName, streamID, streamGroup string, err error) {
 	channel, err := s.channelStore.GetByID(ctx, channelID)
 	if err != nil {
-		return "", "", "", "", "", "", fmt.Errorf("channel not found: %w", err)
+		return "", "", "", "", "", fmt.Errorf("channel not found: %w", err)
 	}
 	if !channel.IsEnabled {
-		return "", "", "", "", "", "", fmt.Errorf("channel %s is disabled", channelID)
+		return "", "", "", "", "", fmt.Errorf("channel %s is disabled", channelID)
 	}
 
 	channelStreams, err := s.channelStore.GetStreams(ctx, channelID)
 	if err != nil {
-		return "", "", "", "", "", "", fmt.Errorf("getting channel streams: %w", err)
+		return "", "", "", "", "", fmt.Errorf("getting channel streams: %w", err)
 	}
 
 	for _, cs := range channelStreams {
@@ -111,14 +111,10 @@ func (s *VODService) resolveStreamForChannel(ctx context.Context, channelID stri
 		if err != nil || !stream.IsActive {
 			continue
 		}
-		st := "m3u"
-		if stream.SatIPSourceID != "" {
-			st = "satip"
-		}
-		return stream.URL, stream.Name, channel.Name, cs.StreamID, st, stream.Group, nil
+		return stream.URL, stream.Name, channel.Name, cs.StreamID, stream.Group, nil
 	}
 
-	return "", "", "", "", "", "", fmt.Errorf("no active streams for channel %s", channelID)
+	return "", "", "", "", "", fmt.Errorf("no active streams for channel %s", channelID)
 }
 
 func (s *VODService) composeSessionArgs(ctx context.Context, profileName, streamURL, streamGroup string) (string, string, string) {
@@ -161,7 +157,7 @@ func (s *VODService) composeSessionArgs(ctx context.Context, profileName, stream
 }
 
 func (s *VODService) StartWatching(ctx context.Context, channelID string, profileName string, userAgent string, remoteAddr string) (string, string, string, bool, error) {
-	streamURL, streamName, channelName, streamID, _, streamGroup, err := s.resolveStreamForChannel(ctx, channelID)
+	streamURL, streamName, channelName, streamID, streamGroup, err := s.resolveStreamForChannel(ctx, channelID)
 	if err != nil {
 		return "", "", "", false, err
 	}
@@ -278,7 +274,7 @@ func (s *VODService) startRecordingInternal(ctx context.Context, channelID, titl
 		return ErrAlreadyRecording
 	}
 
-	streamURL, streamName, resolvedChannelName, streamID, _, _, err := s.resolveStreamForChannel(ctx, channelID)
+	streamURL, streamName, resolvedChannelName, streamID, _, err := s.resolveStreamForChannel(ctx, channelID)
 	if err != nil {
 		return err
 	}
