@@ -3081,36 +3081,30 @@
           statusEl.title = e.error ? e.error.message : String(e);
           statusEl.onclick = function() { alert('Player error:\n\n' + JSON.stringify(e.error || e)); };
         });
-        var transcodeBar = null;
-        if (isVOD) {
-          transcodeBar = document.createElement('div');
-          transcodeBar.style.cssText = 'position:absolute;bottom:28px;left:12px;right:12px;height:3px;background:rgba(0,0,0,0.3);z-index:25;pointer-events:none;border-radius:1px;';
-          var transcodeFill = document.createElement('div');
-          transcodeFill.style.cssText = 'height:100%;background:rgba(79,195,247,0.6);width:0%;transition:width 2s linear;border-radius:1px;';
-          transcodeBar.appendChild(transcodeFill);
-          transcodeBar._fill = transcodeFill;
-          playerWrap.appendChild(transcodeBar);
-        }
-
         dashPlayer.on(dashjs.MediaPlayer.events.STREAM_INITIALIZED, function() {
           var dvrWin = dashPlayer.getDvrWindow();
-          console.log('DASH INIT. dvrWindow:', dvrWin, 'duration:', dashPlayer.duration());
+          var knownDuration = dvr.duration || epgDuration || 0;
+          console.log('DASH INIT. dvrWindow:', dvrWin, 'duration:', dashPlayer.duration(), 'known:', knownDuration);
           if (isVOD) {
             dashPlayer.seek(0);
-            transcodeTimer = setInterval(function() {
-              if (playerCtx.signal.aborted || !dashPlayer) { clearInterval(transcodeTimer); return; }
-              var win = dashPlayer.getDvrWindow();
-              var total = dvr.duration || 1;
-              var pct = Math.min(100, (win.end / total) * 100);
-              if (transcodeBar && transcodeBar._fill) transcodeBar._fill.style.width = pct + '%';
-              if (pct >= 99.5 && transcodeBar) {
-                transcodeBar.style.display = 'none';
-                clearInterval(transcodeTimer);
-              }
-            }, 2000);
           }
         });
-        dashPlayer.setXHRWithCredentialsForType('MPD', false);
+        dashPlayer.registerCustomCapabilitiesFilter(function() {});
+        dashPlayer.extend('RequestModifier', function() {
+          return {
+            modifyRequestURL: function(url) {
+              if (url.indexOf('manifest.mpd') >= 0 && epgDuration > 0) {
+                var remaining = nowProgram && nowProgram.stop ? Math.max(0, (new Date(nowProgram.stop).getTime() - Date.now()) / 1000) : epgDuration;
+                url = url.replace(/epg_duration=[^&]*/, 'epg_duration=' + remaining);
+                if (url.indexOf('epg_duration') < 0) {
+                  url += (url.indexOf('?') >= 0 ? '&' : '?') + 'epg_duration=' + remaining;
+                }
+              }
+              return url;
+            },
+            modifyRequestHeader: function(xhr) { return xhr; }
+          };
+        }, true);
         dashPlayer.initialize(videoEl, streamSrc, true);
       }).catch(function(e) {
         statusEl.style.color = '#ff6b6b';
