@@ -17,14 +17,13 @@ import (
 	"github.com/rs/zerolog"
 
 	"github.com/gavinmcnair/tvproxy/pkg/config"
+	"github.com/gavinmcnair/tvproxy/pkg/dash"
 	"github.com/gavinmcnair/tvproxy/pkg/database"
 	"github.com/gavinmcnair/tvproxy/pkg/defaults"
 	"github.com/gavinmcnair/tvproxy/pkg/ffmpeg"
 	"github.com/gavinmcnair/tvproxy/pkg/handler"
-	"github.com/gavinmcnair/tvproxy/pkg/dash"
 	"github.com/gavinmcnair/tvproxy/pkg/logocache"
 	"github.com/gavinmcnair/tvproxy/pkg/middleware"
-	"github.com/gavinmcnair/tvproxy/pkg/openapi"
 	"github.com/gavinmcnair/tvproxy/pkg/service"
 	"github.com/gavinmcnair/tvproxy/pkg/session"
 	"github.com/gavinmcnair/tvproxy/pkg/store"
@@ -139,7 +138,6 @@ func main() {
 		log.Fatal().Err(err).Msg("failed to load satip source store")
 	}
 
-	// Clean up orphaned streams from deleted SAT>IP sources
 	satipSources, _ := satipSourceStore.List(ctx)
 	satipIDs := make([]string, len(satipSources))
 	for i, s := range satipSources {
@@ -189,7 +187,6 @@ func main() {
 	logoCache := logocache.New(filepath.Join(dataDir, "static", "logocache"), cfg, logoTimeout)
 	logoService := service.NewLogoService(logoStore, epgStore, logoCache, log)
 
-	// satipService created below after recordingStore
 	m3uService := service.NewM3UService(m3uAccountStore, streamStore, channelStore, logoService, cfg, wgHTTPClient, log)
 	m3uService.CleanupOrphanedStreams(ctx)
 	channelService := service.NewChannelService(channelStore, channelGroupStore, streamStore, log)
@@ -210,26 +207,11 @@ func main() {
 
 	authMW := middleware.NewAuthMiddleware(authService, cfg.APIKey, adminUserID)
 
-	satipHandler := handler.NewSatIPHandler(satipService)
-	authHandler := handler.NewAuthHandler(authService)
-	userHandler := handler.NewUserHandler(authService)
-	m3uAccountHandler := handler.NewM3UAccountHandler(m3uService)
-	streamHandler := handler.NewStreamHandler(streamStore, streamStore, logoService)
-	channelHandler := handler.NewChannelHandler(channelService, logoService)
-	channelGroupHandler := handler.NewChannelGroupHandler(channelService)
-	logoHandler := handler.NewLogoHandler(logoService)
-	streamProfileHandler := handler.NewStreamProfileHandler(profileStore)
-	epgSourceHandler := handler.NewEPGSourceHandler(epgService)
-	epgDataHandler := handler.NewEPGDataHandler(epgStore, epgStore)
-	hdhrHandler := handler.NewHDHRHandler(hdhrService, proxyService, cfg)
-	outputHandler := handler.NewOutputHandler(outputService)
-	proxyHandler := handler.NewProxyHandler(proxyService, settingsService, log)
 	dashManager := dash.NewManager(log)
 	sessionMgr.SetOnCleanup(func(channelID string) {
 		dashManager.Stop(channelID)
 	})
-	vodHandler := handler.NewVODHandler(vodService, clientService, dashManager, log)
-	activityHandler := handler.NewActivityHandler(activityService)
+
 	exportService := service.NewExportService(channelStore, channelGroupStore, profileStore, clientStore, m3uAccountStore, epgSourceStore, settingsService, authService)
 	dataResetter := service.NewDataResetter(
 		profileStore, settingsStore, clientStore, logoStore, m3uAccountStore,
@@ -238,294 +220,44 @@ func main() {
 			service.SeedClientDefaults(ctx, clientDefs, profileStore, clientStore, settingsStore)
 		},
 	)
-	settingsHandler := handler.NewSettingsHandler(settingsService, exportService, dataResetter, authService, streamStore, epgStore)
-	clientHandler := handler.NewClientHandler(clientService)
-	schedulerHandler := handler.NewSchedulerHandler(schedulerService, log)
-	dlnaHandler := handler.NewDLNAHandler(dlnaService, authService, settingsService, cfg, log)
-	wgHandler := handler.NewWireGuardHandler(wgService, log)
 
-	r := chi.NewRouter()
-	r.Use(chimw.RequestID)
-	r.Use(chimw.RealIP)
-	r.Use(middleware.RequestLogger(log, settingsService.IsDebug))
-	r.Use(middleware.Recovery(log))
-	corsMiddleware := cors.Handler(cors.Options{
-		AllowedOrigins:   []string{"*"},
-		AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"},
-		AllowedHeaders:   []string{"Accept", "Authorization", "Content-Type", "X-API-Key"},
-		ExposedHeaders:   []string{"Link", "ETag"},
-		AllowCredentials: true,
-		MaxAge:           300,
-	})
-	r.Use(func(next http.Handler) http.Handler {
-		withCORS := corsMiddleware(next)
-		return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-			if strings.HasPrefix(req.URL.Path, "/api/") {
-				withCORS.ServeHTTP(w, req)
-				return
-			}
-			next.ServeHTTP(w, req)
-		})
-	})
-	bodyLimit := cfg.Settings.Server.RequestBodyLimitBytes
-	if bodyLimit <= 0 {
-		bodyLimit = 1 << 20
-	}
-	r.Use(func(next http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if r.Body != nil {
-				r.Body = http.MaxBytesReader(w, r.Body, bodyLimit)
-			}
-			next.ServeHTTP(w, r)
-		})
-	})
-
-	r.Get("/api/openapi.yaml", openapi.SpecHandler())
-	r.Get("/api/docs", openapi.SwaggerUIHandler("/api/openapi.yaml"))
-
-	r.Post("/api/auth/login", authHandler.Login)
-	r.Post("/api/auth/refresh", authHandler.Refresh)
-	r.Post("/api/auth/invite/{token}", authHandler.AcceptInvite)
-
-	r.Get("/discover.json", hdhrHandler.Discover)
-	r.Get("/lineup_status.json", hdhrHandler.LineupStatus)
-	r.Get("/lineup.json", hdhrHandler.Lineup)
-	r.Get("/device.xml", hdhrHandler.DeviceXML)
-	r.Get("/capability", hdhrHandler.DeviceXML)
-
-	r.Get("/output/m3u", outputHandler.M3U)
-	r.Get("/channels.m3u", outputHandler.M3U)
-	r.Get("/channels.m3u8", outputHandler.M3U8)
-	r.Get("/output/epg", outputHandler.EPG)
-
-	r.Get("/dlna/device.xml", dlnaHandler.DeviceDescription)
-	r.Get("/dlna/ContentDirectory.xml", dlnaHandler.ContentDirectorySCPD)
-	r.Get("/dlna/ConnectionManager.xml", dlnaHandler.ConnectionManagerSCPD)
-	r.Post("/dlna/control/ContentDirectory", dlnaHandler.ContentDirectoryControl)
-	r.Post("/dlna/control/ConnectionManager", dlnaHandler.ConnectionManagerControl)
-
-	r.Get("/channel/{channelID}", proxyHandler.Stream)
-	r.Head("/channel/{channelID}", proxyHandler.StreamHead)
-	r.Get("/stream/{streamID}", proxyHandler.RawStream)
-	r.Get("/recording/{streamID}/{filename}", vodHandler.StreamRecordingDLNA)
-
-	r.Get("/stream/{streamID}/probe", vodHandler.ProbeStream)
-	r.Post("/stream/{streamID}/vod", vodHandler.CreateSession)
-	r.Post("/channel/{channelID}/vod", vodHandler.CreateChannelSession)
-	r.Get("/vod/{sessionID}/status", vodHandler.Status)
-	r.Get("/vod/{sessionID}/stream", vodHandler.Stream)
-	r.Get("/vod/{sessionID}/dash/manifest.mpd", vodHandler.DASHManifest)
-	r.Get("/vod/{sessionID}/dash/{segment}", vodHandler.DASHSegment)
-
-	r.Group(func(r chi.Router) {
-		r.Use(authMW.Authenticate)
-
-		r.Delete("/vod/{sessionID}", vodHandler.DeleteSession)
-		r.Post("/api/vod/record/{channelID}", vodHandler.StartRecording)
-		r.Delete("/api/vod/record/{channelID}", vodHandler.StopRecording)
-
-		r.Post("/api/auth/logout", authHandler.Logout)
-		r.Get("/api/auth/me", authHandler.Me)
-
-		r.Route("/api/users", func(r chi.Router) {
-			r.Use(authMW.RequireAdmin)
-			r.Get("/", userHandler.List)
-			r.Post("/", userHandler.Create)
-			r.Post("/invite", userHandler.Invite)
-			r.Get("/{id}", userHandler.Get)
-			r.Put("/{id}", userHandler.Update)
-			r.Delete("/{id}", userHandler.Delete)
-		})
-
-		r.Route("/api/m3u/accounts", func(r chi.Router) {
-			r.Get("/", m3uAccountHandler.List)
-			r.Get("/{id}", m3uAccountHandler.Get)
-			r.Get("/{id}/status", m3uAccountHandler.RefreshStatus)
-			r.Group(func(r chi.Router) {
-				r.Use(authMW.RequireAdmin)
-				r.Post("/", m3uAccountHandler.Create)
-				r.Put("/{id}", m3uAccountHandler.Update)
-				r.Delete("/{id}", m3uAccountHandler.Delete)
-				r.Post("/{id}/refresh", m3uAccountHandler.Refresh)
-			})
-		})
-
-		r.Get("/api/satip/signal", satipHandler.Signal)
-		r.Get("/api/satip/transmitters", satipHandler.ListTransmitters)
-		r.Route("/api/satip/sources", func(r chi.Router) {
-			r.Get("/", satipHandler.List)
-			r.Get("/{id}", satipHandler.Get)
-			r.Get("/{id}/status", satipHandler.ScanStatus)
-			r.Group(func(r chi.Router) {
-				r.Use(authMW.RequireAdmin)
-				r.Post("/", satipHandler.Create)
-				r.Put("/{id}", satipHandler.Update)
-				r.Delete("/{id}", satipHandler.Delete)
-				r.Post("/{id}/scan", satipHandler.Scan)
-				r.Post("/{id}/clear", satipHandler.Clear)
-			})
-		})
-
-		r.Route("/api/streams", func(r chi.Router) {
-			r.Get("/", streamHandler.List)
-			r.Get("/{id}", streamHandler.Get)
-			r.Group(func(r chi.Router) {
-				r.Use(authMW.RequireAdmin)
-				r.Delete("/{id}", streamHandler.Delete)
-			})
-		})
-
-		r.Route("/api/channels", func(r chi.Router) {
-			r.Get("/", channelHandler.List)
-			r.Post("/", channelHandler.Create)
-			r.Get("/{id}", channelHandler.Get)
-			r.Put("/{id}", channelHandler.Update)
-			r.Delete("/{id}", channelHandler.Delete)
-			r.Get("/{id}/streams", channelHandler.GetStreams)
-			r.Post("/{id}/streams", channelHandler.AssignStreams)
-			r.Post("/{id}/fail", channelHandler.IncrementFailCount)
-			r.Delete("/{id}/fail", channelHandler.ResetFailCount)
-		})
-
-		r.Route("/api/channel-groups", func(r chi.Router) {
-			r.Get("/", channelGroupHandler.List)
-			r.Post("/", channelGroupHandler.Create)
-			r.Get("/{id}", channelGroupHandler.Get)
-			r.Put("/{id}", channelGroupHandler.Update)
-			r.Delete("/{id}", channelGroupHandler.Delete)
-		})
-
-		r.Route("/api/logos", func(r chi.Router) {
-			r.Use(authMW.RequireAdmin)
-			r.Get("/", logoHandler.List)
-			r.Post("/", logoHandler.Create)
-			r.Get("/{id}", logoHandler.Get)
-			r.Put("/{id}", logoHandler.Update)
-			r.Delete("/{id}", logoHandler.Delete)
-		})
-
-		r.Route("/api/stream-profiles", func(r chi.Router) {
-			r.Use(authMW.RequireAdmin)
-			r.Get("/", streamProfileHandler.List)
-			r.Post("/", streamProfileHandler.Create)
-			r.Get("/{id}", streamProfileHandler.Get)
-			r.Put("/{id}", streamProfileHandler.Update)
-			r.Delete("/{id}", streamProfileHandler.Delete)
-		})
-
-		r.Route("/api/epg", func(r chi.Router) {
-			r.Get("/sources", epgSourceHandler.List)
-			r.Get("/sources/{id}", epgSourceHandler.Get)
-			r.Get("/sources/{id}/status", epgSourceHandler.RefreshStatus)
-			r.Get("/data", epgDataHandler.List)
-			r.Get("/now", epgDataHandler.NowPlaying)
-			r.Get("/guide", epgDataHandler.Guide)
-			r.Group(func(r chi.Router) {
-				r.Use(authMW.RequireAdmin)
-				r.Post("/sources", epgSourceHandler.Create)
-				r.Put("/sources/{id}", epgSourceHandler.Update)
-				r.Delete("/sources/{id}", epgSourceHandler.Delete)
-				r.Post("/sources/{id}/refresh", epgSourceHandler.Refresh)
-			})
-		})
-
-		r.Route("/api/hdhr/devices", func(r chi.Router) {
-			r.Use(authMW.RequireAdmin)
-			r.Get("/", hdhrHandler.ListDevices)
-			r.Post("/", hdhrHandler.CreateDevice)
-			r.Get("/{id}", hdhrHandler.GetDevice)
-			r.Put("/{id}", hdhrHandler.UpdateDevice)
-			r.Delete("/{id}", hdhrHandler.DeleteDevice)
-		})
-
-		r.Route("/api/settings", func(r chi.Router) {
-			r.Use(authMW.RequireAdmin)
-			r.Get("/", settingsHandler.List)
-			r.Put("/", settingsHandler.Update)
-			r.Get("/export", settingsHandler.Export)
-			r.Post("/import", settingsHandler.Import)
-			r.Get("/backup", settingsHandler.Backup)
-			r.Post("/restore", settingsHandler.Restore)
-			r.Post("/soft-reset", settingsHandler.SoftReset)
-			r.Post("/hard-reset", settingsHandler.HardReset)
-		})
-
-		r.Route("/api/clients", func(r chi.Router) {
-			r.Use(authMW.RequireAdmin)
-			r.Get("/", clientHandler.List)
-			r.Post("/", clientHandler.Create)
-			r.Get("/{id}", clientHandler.Get)
-			r.Put("/{id}", clientHandler.Update)
-			r.Delete("/{id}", clientHandler.Delete)
-		})
-
-		r.Route("/api/recordings", func(r chi.Router) {
-			r.Get("/completed", vodHandler.ListCompletedRecordings)
-			r.Get("/completed/{streamID}/{filename}/probe", vodHandler.ProbeCompletedRecording)
-			r.Get("/completed/{streamID}/{filename}/stream", vodHandler.StreamCompletedRecording)
-			r.Delete("/completed/{streamID}/{filename}", vodHandler.DeleteCompletedRecording)
-			r.Post("/schedule", schedulerHandler.Schedule)
-			r.Get("/schedule", schedulerHandler.List)
-			r.Get("/schedule/{id}", schedulerHandler.Get)
-			r.Delete("/schedule/{id}", schedulerHandler.Delete)
-		})
-
-		r.Route("/api/activity", func(r chi.Router) {
-			r.Use(authMW.RequireAdmin)
-			r.Get("/", activityHandler.List)
-		})
-
-		r.Route("/api/wireguard", func(r chi.Router) {
-			r.Use(authMW.RequireAdmin)
-			r.Get("/status", wgHandler.Status)
-			r.Post("/reconnect", wgHandler.Reconnect)
-			r.Post("/connect", wgHandler.Connect)
-			r.Post("/disconnect", wgHandler.Disconnect)
-		})
-	})
-
-	r.Get("/logo", logoCache.ServeHTTP)
-
-	staticRoot := filepath.Join(filepath.Dir(cfg.DatabasePath), "static")
-	staticFileServer := http.FileServer(http.Dir(staticRoot))
-	r.Handle("/static/*", http.StripPrefix("/static/", http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-		w.Header().Set("Cache-Control", "public, max-age=3600")
-		staticFileServer.ServeHTTP(w, req)
-	})))
+	r := setupRouter(cfg, log, settingsService)
+	registerRoutes(r, routeHandlers{
+		auth:         handler.NewAuthHandler(authService),
+		user:         handler.NewUserHandler(authService),
+		m3uAccount:   handler.NewM3UAccountHandler(m3uService),
+		satip:        handler.NewSatIPHandler(satipService),
+		stream:       handler.NewStreamHandler(streamStore, streamStore, logoService),
+		channel:      handler.NewChannelHandler(channelService, logoService),
+		channelGroup: handler.NewChannelGroupHandler(channelService),
+		logo:         handler.NewLogoHandler(logoService),
+		profile:      handler.NewStreamProfileHandler(profileStore),
+		epgSource:    handler.NewEPGSourceHandler(epgService),
+		epgData:      handler.NewEPGDataHandler(epgStore, epgStore),
+		hdhr:         handler.NewHDHRHandler(hdhrService, proxyService, cfg),
+		output:       handler.NewOutputHandler(outputService),
+		proxy:        handler.NewProxyHandler(proxyService, settingsService, log),
+		vod:          handler.NewVODHandler(vodService, clientService, dashManager, log),
+		activity:     handler.NewActivityHandler(activityService),
+		settings:     handler.NewSettingsHandler(settingsService, exportService, dataResetter, authService, streamStore, epgStore),
+		client:       handler.NewClientHandler(clientService),
+		scheduler:    handler.NewSchedulerHandler(schedulerService, log),
+		dlna:         handler.NewDLNAHandler(dlnaService, authService, settingsService, cfg, log),
+		wireguard:    handler.NewWireGuardHandler(wgService, log),
+		logoCache:    logoCache,
+	}, authMW)
 
 	distFS, err := fs.Sub(web.Assets, "dist")
 	if err != nil {
 		log.Fatal().Err(err).Msg("failed to load embedded web assets")
 	}
-	indexHTML, err := fs.ReadFile(distFS, "index.html")
-	if err != nil {
-		log.Fatal().Err(err).Msg("failed to read embedded index.html")
-	}
-	versionedIndex := strings.ReplaceAll(string(indexHTML), `app.css"`, `app.css?v=`+buildVersion+`"`)
-	versionedIndex = strings.ReplaceAll(versionedIndex, `app.js"`, `app.js?v=`+buildVersion+`"`)
-	versionedIndexBytes := []byte(versionedIndex)
-
-	fileServer := http.FileServer(http.FS(distFS))
-	r.Get("/*", func(w http.ResponseWriter, req *http.Request) {
-		path := strings.TrimPrefix(req.URL.Path, "/")
-		if f, err := distFS.Open(path); err == nil {
-			f.Close()
-			if req.URL.RawQuery != "" && strings.Contains(req.URL.RawQuery, "v=") {
-				w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
-			} else {
-				w.Header().Set("Cache-Control", "public, max-age=3600")
-			}
-			fileServer.ServeHTTP(w, req)
-			return
-		}
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		w.Write(versionedIndexBytes)
-	})
+	versionedIndexBytes := buildVersionedIndex(distFS)
+	staticRoot := filepath.Join(filepath.Dir(cfg.DatabasePath), "static")
+	registerStaticRoutes(r, staticRoot, distFS, versionedIndexBytes)
 
 	wm := worker.NewManager(log)
 	wm.Add("m3u_refresh", worker.NewM3URefreshWorker(m3uService, cfg.M3URefreshInterval, log))
 	wm.Add("epg_refresh", worker.NewEPGRefreshWorker(epgService, cfg.EPGRefreshInterval, log))
-
 	wm.Add("ssdp", worker.NewSSDPWorker(hdhrStore, cfg.BaseURL, cfg.Settings.Workers.RetryDelay, cfg.Settings.Workers.SSDPAnnounceInterval, log))
 	wm.Add("hdhr_discover", worker.NewHDHRDiscoverWorker(hdhrStore, cfg.BaseURL, cfg.Settings.Workers.RetryDelay, log))
 	wm.Add("hdhr_servers", worker.NewHDHRServerWorker(hdhrStore, hdhrService, proxyService, settingsService, outputService, cfg, log))
@@ -533,14 +265,13 @@ func main() {
 	wm.Add("recording_scheduler", worker.NewSchedulerWorker(schedulerService, 30*time.Second, log))
 	wm.Add("wal_checkpoint", worker.NewWALCheckpointWorker(db, 5*time.Minute, log))
 	wm.Add("wireguard", worker.NewWireGuardWorker(wgService, 30*time.Second, log))
-
 	wm.Start(ctx)
 
 	srv := &http.Server{
 		Addr:         cfg.ListenAddr(),
 		Handler:      r,
 		ReadTimeout:  cfg.Settings.Server.HTTPReadTimeout,
-		WriteTimeout: 0, // Disabled for streaming
+		WriteTimeout: 0,
 		IdleTimeout:  cfg.Settings.Server.HTTPIdleTimeout,
 	}
 
@@ -581,4 +312,56 @@ func setupLogger(cfg *config.Config) zerolog.Logger {
 	}
 	return zerolog.New(zerolog.ConsoleWriter{Out: os.Stdout, TimeFormat: time.RFC3339}).
 		With().Timestamp().Logger()
+}
+
+func setupRouter(cfg *config.Config, log zerolog.Logger, settingsService *service.SettingsService) *chi.Mux {
+	r := chi.NewRouter()
+	r.Use(chimw.RequestID)
+	r.Use(chimw.RealIP)
+	r.Use(middleware.RequestLogger(log, settingsService.IsDebug))
+	r.Use(middleware.Recovery(log))
+
+	corsMiddleware := cors.Handler(cors.Options{
+		AllowedOrigins:   []string{"*"},
+		AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"},
+		AllowedHeaders:   []string{"Accept", "Authorization", "Content-Type", "X-API-Key"},
+		ExposedHeaders:   []string{"Link", "ETag"},
+		AllowCredentials: true,
+		MaxAge:           300,
+	})
+	r.Use(func(next http.Handler) http.Handler {
+		withCORS := corsMiddleware(next)
+		return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+			if strings.HasPrefix(req.URL.Path, "/api/") {
+				withCORS.ServeHTTP(w, req)
+				return
+			}
+			next.ServeHTTP(w, req)
+		})
+	})
+
+	bodyLimit := cfg.Settings.Server.RequestBodyLimitBytes
+	if bodyLimit <= 0 {
+		bodyLimit = 1 << 20
+	}
+	r.Use(func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Body != nil {
+				r.Body = http.MaxBytesReader(w, r.Body, bodyLimit)
+			}
+			next.ServeHTTP(w, r)
+		})
+	})
+
+	return r
+}
+
+func buildVersionedIndex(distFS fs.FS) []byte {
+	indexHTML, err := fs.ReadFile(distFS, "index.html")
+	if err != nil {
+		panic("failed to read embedded index.html: " + err.Error())
+	}
+	versionedIndex := strings.ReplaceAll(string(indexHTML), `app.css"`, `app.css?v=`+buildVersion+`"`)
+	versionedIndex = strings.ReplaceAll(versionedIndex, `app.js"`, `app.js?v=`+buildVersion+`"`)
+	return []byte(versionedIndex)
 }
