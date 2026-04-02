@@ -2999,6 +2999,8 @@
     if (typeof shaka !== 'undefined') {
       shaka.polyfill.installAll();
       shakaPlayer = new shaka.Player();
+      window._shakaDebug = shakaPlayer;
+      shakaPlayer.addEventListener('error', function(e) { console.error('SHAKA ERROR:', e.detail); });
       shakaPlayer.configure({
         streaming: {
           bufferingGoal: 15,
@@ -3023,8 +3025,10 @@
           overflowMenuButtons: []
         });
         var startTime = (dvr && dvr.duration > 0) ? 0 : null;
+        console.log('SHAKA LOAD:', streamSrc, 'startTime:', startTime, 'duration:', dvr ? dvr.duration : 'none');
         return shakaPlayer.load(streamSrc, startTime).then(function() {
-          videoEl.play().catch(function() {});
+          console.log('SHAKA LOADED OK. isLive:', shakaPlayer.isLive(), 'seekRange:', shakaPlayer.seekRange(), 'readyState:', videoEl.readyState);
+          videoEl.play().catch(function(e) { console.error('PLAY FAILED:', e); });
           var controls = playerWrap.querySelector('.shaka-bottom-controls .shaka-controls-container');
           if (controls) {
             var progEl = document.createElement('span');

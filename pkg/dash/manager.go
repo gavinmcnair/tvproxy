@@ -36,17 +36,9 @@ func (m *Manager) GetOrStart(ctx context.Context, channelID, inputPath, outputDi
 
 	if r, ok := m.remuxers[channelID]; ok {
 		if !r.IsDone() {
-			if duration > 0 && r.duration == 0 {
-				m.log.Info().Str("channel_id", channelID).Float64("duration", duration).Msg("restarting dash remuxer with duration")
-				r.Stop()
-				os.RemoveAll(r.OutputDir())
-				delete(m.remuxers, channelID)
-			} else {
-				return r, nil
-			}
-		} else {
-			delete(m.remuxers, channelID)
+			return r, nil
 		}
+		delete(m.remuxers, channelID)
 	}
 
 	r := NewRemuxer(inputPath, outputDir, isVOD, duration, m.log)
