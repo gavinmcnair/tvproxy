@@ -2789,7 +2789,6 @@
       if (retryTimeout) { clearTimeout(retryTimeout); retryTimeout = null; }
       if (pollInterval) { clearInterval(pollInterval); pollInterval = null; }
       if (progInterval) { clearInterval(progInterval); progInterval = null; }
-      if (progTimer) { clearInterval(progTimer); progTimer = null; }
       if (recordElapsedTimer) { clearInterval(recordElapsedTimer); recordElapsedTimer = null; }
       if (signalInterval) { clearInterval(signalInterval); signalInterval = null; }
       if (statsInterval) { clearInterval(statsInterval); statsInterval = null; }
@@ -3015,49 +3014,49 @@
         ui.configure({
           addBigPlayButton: false,
           fadeDelay: 2,
-          controlPanelElements: ['play_pause', 'spacer', 'mute', 'volume', 'fullscreen'],
+          controlPanelElements: ['play_pause', 'time_and_duration', 'spacer', 'mute', 'volume', 'fullscreen'],
           overflowMenuButtons: []
         });
-        return shakaPlayer.load(streamSrc).then(function() {
+        function waitForStream() {
+          if (!dvr) return Promise.resolve();
+          statusEl.style.color = '#ffa726';
+          statusEl.textContent = 'Connecting...';
+          return new Promise(function(resolve, reject) {
+            var attempts = 0;
+            var maxAttempts = 60;
+            function poll() {
+              if (playerCtx.signal.aborted) { reject(new Error('cancelled')); return; }
+              fetch('/vod/' + dvr.id + '/status').then(function(r) { return r.json(); }).then(function(st) {
+                if (st.buffered > 0) { resolve(); return; }
+                if (st.error) { reject(new Error(st.error)); return; }
+                attempts++;
+                if (attempts >= maxAttempts) { reject(new Error('stream timeout')); return; }
+                setTimeout(poll, 500);
+              }).catch(function() {
+                attempts++;
+                if (attempts >= maxAttempts) { reject(new Error('poll failed')); return; }
+                setTimeout(poll, 500);
+              });
+            }
+            poll();
+          });
+        }
+        return waitForStream().then(function() {
+          statusEl.style.color = '#ffa726';
+          statusEl.textContent = 'Buffering...';
+          return shakaPlayer.load(streamSrc);
+        }).then(function() {
           videoEl.play().catch(function() {});
           var controls = playerWrap.querySelector('.shaka-bottom-controls .shaka-controls-container');
           if (controls) {
-            var timeEl = document.createElement('span');
-            timeEl.style.cssText = 'color:#fff;font-size:12px;padding:0 8px;font-variant-numeric:tabular-nums;white-space:nowrap;';
             var progEl = document.createElement('span');
             progEl.className = 'shaka-prog-info';
-            progEl.style.cssText = 'color:rgba(255,255,255,0.7);font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;padding:0 8px;';
-            var playPause = controls.querySelector('.shaka-play-button');
-            if (playPause && playPause.nextSibling) {
-              controls.insertBefore(timeEl, playPause.nextSibling);
-              controls.insertBefore(progEl, timeEl.nextSibling);
-            } else {
-              var spacer = controls.querySelector('.shaka-spacer');
-              if (spacer) {
-                spacer.parentNode.insertBefore(timeEl, spacer);
-                spacer.parentNode.insertBefore(progEl, spacer);
-              }
+            progEl.style.cssText = 'color:rgba(255,255,255,0.9);font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;padding:0 8px;';
+            var spacer = controls.querySelector('.shaka-spacer');
+            if (spacer) {
+              spacer.parentNode.insertBefore(progEl, spacer);
             }
             nowPlayingEl = progEl;
-
-            var knownDuration = dvr && dvr.duration > 0 ? dvr.duration : 0;
-            setInterval(function() {
-              if (playerCtx.signal.aborted) return;
-              if (nowProgram && nowProgram.start && nowProgram.stop && isLive) {
-                var progStart = new Date(nowProgram.start).getTime();
-                var progStop = new Date(nowProgram.stop).getTime();
-                var elapsed = Date.now() - progStart;
-                var total = progStop - progStart;
-                timeEl.textContent = fmtTime(Math.max(0, elapsed / 1000)) + ' / ' + fmtTime(total / 1000);
-              } else if (!isLive && knownDuration > 0) {
-                timeEl.textContent = fmtTime(videoEl.currentTime) + ' / ' + fmtTime(knownDuration);
-              } else if (!isLive && videoEl.duration && isFinite(videoEl.duration)) {
-                timeEl.textContent = fmtTime(videoEl.currentTime) + ' / ' + fmtTime(videoEl.duration);
-              } else {
-                timeEl.textContent = fmtTime(videoEl.currentTime);
-              }
-              if (probeData && probeData.duration > 0 && knownDuration === 0) knownDuration = probeData.duration;
-            }, 500);
           }
         });
       }).catch(function(e) {
@@ -3175,44 +3174,6 @@
       }).catch(function() {});
     }
 
-    var progBar = document.createElement('div');
-    progBar.style.cssText = 'position:absolute;bottom:0;left:0;right:0;height:6px;background:rgba(255,255,255,0.15);z-index:25;cursor:pointer;';
-    var progFill = document.createElement('div');
-    progFill.style.cssText = 'height:100%;background:#4fc3f7;width:0%;transition:width 1s linear;pointer-events:none;';
-    progBar.appendChild(progFill);
-    progBar.onclick = function(e) {
-      var rect = progBar.getBoundingClientRect();
-      var pct = (e.clientX - rect.left) / rect.width;
-      if (!isLive && videoEl && videoEl.duration && isFinite(videoEl.duration)) {
-        videoEl.currentTime = pct * videoEl.duration;
-      }
-    };
-    playerWrap.appendChild(progBar);
-
-    var progTimer = null;
-    function updateProgrammeProgress() {
-      if (playerCtx.signal.aborted) { if (progTimer) clearInterval(progTimer); return; }
-      if (nowProgram && nowProgram.start && nowProgram.stop && isLive) {
-        var start = new Date(nowProgram.start).getTime();
-        var stop = new Date(nowProgram.stop).getTime();
-        var total = stop - start;
-        if (total > 0) {
-          var elapsed = Date.now() - start;
-          var pct = Math.min(100, Math.max(0, (elapsed / total) * 100));
-          progFill.style.width = pct + '%';
-          progBar.style.display = '';
-          return;
-        }
-      }
-      if (!isLive && videoEl && videoEl.duration && isFinite(videoEl.duration)) {
-        var pct = (videoEl.currentTime / videoEl.duration) * 100;
-        progFill.style.width = Math.min(100, Math.max(0, pct)) + '%';
-        progBar.style.display = '';
-        return;
-      }
-      progBar.style.display = 'none';
-    }
-    progTimer = setInterval(updateProgrammeProgress, 1000);
 
     fetchNowPlaying();
     if (tvgId) {

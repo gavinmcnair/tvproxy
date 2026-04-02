@@ -463,12 +463,18 @@ func (m *Manager) probeAsync(s *Session, streamURL string) {
 
 	var result *ffmpeg.ProbeResult
 	var err error
-	if ffmpeg.IsHTTPURL(streamURL) {
-		result, err = m.ProbeURL(probeCtx, streamURL)
-	} else {
-		result, err = ffmpeg.Probe(probeCtx, streamURL, m.config.UserAgent)
+	result, err = ffmpeg.Probe(probeCtx, streamURL, m.config.UserAgent)
+	if (err != nil || result == nil || result.Duration == 0) && ffmpeg.IsHTTPURL(streamURL) {
+		m.log.Debug().Str("session_id", s.ID).Msg("direct probe incomplete, trying HTTP pipe probe")
+		pipeResult, pipeErr := m.ProbeURL(probeCtx, streamURL)
+		if pipeErr == nil && pipeResult != nil {
+			if result == nil || (pipeResult.Video != nil && result.Video == nil) {
+				result = pipeResult
+			} else if pipeResult.Duration > 0 && result.Duration == 0 {
+				result.Duration = pipeResult.Duration
+			}
+		}
 	}
-
 	if err != nil || result == nil || (result.Video == nil && len(result.AudioTracks) == 0) {
 		m.log.Warn().Err(err).Str("session_id", s.ID).Msg("source probe failed, falling back to output file")
 		result = m.probeOutputFile(s)
