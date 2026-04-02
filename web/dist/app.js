@@ -2792,9 +2792,9 @@
       if (recordElapsedTimer) { clearInterval(recordElapsedTimer); recordElapsedTimer = null; }
       if (signalInterval) { clearInterval(signalInterval); signalInterval = null; }
       if (statsInterval) { clearInterval(statsInterval); statsInterval = null; }
-      if (shakaPlayer) {
-        shakaPlayer.destroy();
-        shakaPlayer = null;
+      if (dashPlayer) {
+        dashPlayer.destroy();
+        dashPlayer = null;
       } else if (videoEl) {
         videoEl.pause();
         videoEl.removeAttribute('src');
@@ -2977,8 +2977,7 @@
     };
     document.body.appendChild(overlay);
 
-    var useDirectStream = dvr && dvr.duration > 0;
-    var streamSrc = dvr ? (useDirectStream ? '/vod/' + dvr.id + '/stream' : '/vod/' + dvr.id + '/dash/manifest.mpd') : url;
+    var streamSrc = dvr ? '/vod/' + dvr.id + '/dash/manifest.mpd' : url;
 
     var savedVol = parseFloat(localStorage.getItem('tvproxy_volume') || '0.5');
     videoEl.volume = savedVol;
@@ -2996,81 +2995,92 @@
       buildAudioMenu(probeData.audio_tracks);
     }
 
-    var shakaPlayer = null;
-    if (typeof shaka !== 'undefined') {
-      shaka.polyfill.installAll();
-      shakaPlayer = new shaka.Player();
-      window._shakaDebug = shakaPlayer;
-      shakaPlayer.addEventListener('error', function(e) { console.error('SHAKA ERROR:', e.detail); });
-      shakaPlayer.configure({
-        streaming: {
-          bufferingGoal: 10,
-          rebufferingGoal: 2,
-          bufferBehind: 30,
-          failureCallback: function(error) {
-            console.warn('SHAKA FAILURE:', error.code, error.data);
-          }
-        },
-        manifest: {
-          availabilityWindowOverride: Infinity,
-          retryParameters: { maxAttempts: 10, baseDelay: 2000, timeout: 30000 }
+    var dashPlayer = null;
+    videoEl.setAttribute('controls', '');
+
+    function waitForStream() {
+      if (!dvr) return Promise.resolve();
+      statusEl.style.color = '#ffa726';
+      statusEl.textContent = 'Connecting...';
+      return new Promise(function(resolve, reject) {
+        var attempts = 0;
+        function poll() {
+          if (playerCtx.signal.aborted) { reject(new Error('cancelled')); return; }
+          fetch('/vod/' + dvr.id + '/status').then(function(r) { return r.json(); }).then(function(st) {
+            if (st.buffered > 0) { if (st.duration > 0 && !dvr.duration) dvr.duration = st.duration; resolve(); return; }
+            if (st.error) { reject(new Error(st.error)); return; }
+            attempts++;
+            if (attempts >= 60) { reject(new Error('stream timeout')); return; }
+            setTimeout(poll, 500);
+          }).catch(function() { attempts++; if (attempts >= 60) { reject(new Error('poll failed')); return; } setTimeout(poll, 500); });
         }
+        poll();
       });
-      shakaPlayer.attach(videoEl).then(function() {
-        var ui = new shaka.ui.Overlay(shakaPlayer, playerWrap, videoEl);
-        ui.configure({
-          addBigPlayButton: false,
-          fadeDelay: 2,
-          controlPanelElements: ['play_pause', 'time_and_duration', 'spacer', 'mute', 'volume', 'fullscreen'],
-          overflowMenuButtons: []
-        });
-        function waitForStream() {
-          if (!dvr) return Promise.resolve();
-          statusEl.style.color = '#ffa726';
-          statusEl.textContent = 'Connecting...';
-          return new Promise(function(resolve, reject) {
-            var attempts = 0;
-            function poll() {
-              if (playerCtx.signal.aborted) { reject(new Error('cancelled')); return; }
-              fetch('/vod/' + dvr.id + '/status').then(function(r) { return r.json(); }).then(function(st) {
-                if (st.buffered > 0) { if (st.duration > 0 && !dvr.duration) dvr.duration = st.duration; resolve(); return; }
-                if (st.error) { reject(new Error(st.error)); return; }
-                attempts++;
-                if (attempts >= 60) { reject(new Error('stream timeout')); return; }
-                setTimeout(poll, 500);
-              }).catch(function() { attempts++; if (attempts >= 60) { reject(new Error('poll failed')); return; } setTimeout(poll, 500); });
-            }
-            poll();
-          });
-        }
-        return waitForStream().then(function() {
-          statusEl.style.color = '#ffa726';
-          statusEl.textContent = 'Buffering...';
-          console.log('SHAKA LOAD:', streamSrc, 'duration:', dvr ? dvr.duration : 'none');
-          var startAt = (dvr && dvr.duration > 0) ? 0 : null;
-          return shakaPlayer.load(streamSrc, startAt);
-        }).then(function() {
-          console.log('SHAKA LOADED OK. isLive:', shakaPlayer.isLive(), 'seekRange:', shakaPlayer.seekRange(), 'readyState:', videoEl.readyState);
-          videoEl.play().catch(function(e) { console.error('PLAY FAILED:', e); });
-          var controls = playerWrap.querySelector('.shaka-bottom-controls .shaka-controls-container');
-          if (controls) {
-            var progEl = document.createElement('span');
-            progEl.className = 'shaka-prog-info';
-            progEl.style.cssText = 'color:rgba(255,255,255,0.9);font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;padding:0 8px;';
-            var spacer = controls.querySelector('.shaka-spacer');
-            if (spacer) {
-              spacer.parentNode.insertBefore(progEl, spacer);
-            }
-            nowPlayingEl = progEl;
+    }
+
+    if (typeof dashjs !== 'undefined') {
+      waitForStream().then(function() {
+        statusEl.style.color = '#ffa726';
+        statusEl.textContent = 'Buffering...';
+        return fetch(streamSrc).then(function() {}).catch(function() {});
+      }).then(function() {
+        var isVOD = dvr && dvr.duration > 0;
+        dashPlayer = dashjs.MediaPlayer().create();
+        window._dashDebug = dashPlayer;
+        dashPlayer.updateSettings({
+          streaming: {
+            timeShiftBuffer: {
+              calcFromSegmentTimeline: isVOD,
+              fallbackToSegmentTimeline: true
+            },
+            delay: {
+              liveDelay: isVOD ? 0 : 4,
+              useSuggestedPresentationDelay: !isVOD
+            },
+            liveCatchup: {
+              enabled: !isVOD
+            },
+            buffer: {
+              stallThreshold: 0.5,
+              bufferTimeDefault: 12
+            },
+            retryAttempts: {
+              MPD: 10,
+              MediaSegment: 10,
+              InitializationSegment: 10
+            },
+            retryIntervals: {
+              MPD: 2000,
+              MediaSegment: 1000,
+              InitializationSegment: 1000
+            },
+            manifestRequestTimeout: 60000,
+            fragmentRequestTimeout: 30000
           }
         });
+        dashPlayer.on(dashjs.MediaPlayer.events.ERROR, function(e) {
+          console.error('DASH ERROR:', e);
+          statusEl.style.color = '#ff6b6b';
+          statusEl.textContent = 'Errored';
+          statusEl.style.cursor = 'pointer';
+          statusEl.style.pointerEvents = 'auto';
+          statusEl.title = e.error ? e.error.message : String(e);
+          statusEl.onclick = function() { alert('Player error:\n\n' + JSON.stringify(e.error || e)); };
+        });
+        dashPlayer.on(dashjs.MediaPlayer.events.STREAM_INITIALIZED, function() {
+          var dvrWin = dashPlayer.getDvrWindow();
+          console.log('DASH INIT. dvrWindow:', dvrWin, 'duration:', dashPlayer.duration());
+          if (isVOD) {
+            dashPlayer.seek(0);
+          }
+        });
+        dashPlayer.setXHRWithCredentialsForType('MPD', false);
+        dashPlayer.initialize(videoEl, streamSrc, true);
       }).catch(function(e) {
         statusEl.style.color = '#ff6b6b';
         statusEl.textContent = 'Errored';
-        statusEl.style.cursor = 'pointer';
-        statusEl.style.pointerEvents = 'auto';
         statusEl.title = e.message || String(e);
-        statusEl.onclick = function() { alert('Player error:\n\n' + (e.detail || e.message || e)); };
+        statusEl.onclick = function() { alert('Stream error:\n\n' + e.message); };
       });
     } else {
       videoEl.src = streamSrc;
@@ -3130,8 +3140,8 @@
 
     function restartPlayback() {
       if (retryTimeout) { clearTimeout(retryTimeout); retryTimeout = null; }
-      if (shakaPlayer) {
-        shakaPlayer.load(streamSrc).catch(function() {});
+      if (dashPlayer) {
+        dashPlayer.attachSource(streamSrc);
       } else if (videoEl) {
         videoEl.src = streamSrc;
         videoEl.play().catch(function() {});
@@ -3212,11 +3222,6 @@
           if (dvrTracker) dvrTracker.updateBuffered(st.buffered);
           if (st.duration > 0 && dvr && !dvr.duration) {
             dvr.duration = st.duration;
-          }
-          if (st.ready && dvr && dvr.duration > 0 && shakaPlayer && shakaPlayer.isLive()) {
-            var currentTime = videoEl.currentTime;
-            console.log('Session done, reloading as static from', currentTime);
-            shakaPlayer.load(streamSrc, currentTime).catch(function(e) { console.warn('Static reload failed:', e); });
           }
           if (isLive && st.duration > 0 && !channelID) {
             isLive = false;
