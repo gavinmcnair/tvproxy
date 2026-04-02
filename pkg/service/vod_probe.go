@@ -52,14 +52,15 @@ func (s *VODService) TranscodeFile(ctx context.Context, filePath, profileName st
 	probe, probeErr := ffmpeg.Probe(ctx, filePath, "")
 	if probeErr == nil && probe.Video != nil {
 		fileCodec := ffmpeg.NormalizeVideoCodec(probe.Video.Codec)
+		fileContainer := ffmpeg.NormalizeContainer(probe.FormatName)
 		videoMatch := sp.VideoCodec == "copy" || sp.VideoCodec == fileCodec
-		containerMatch := sp.Container == probe.FormatName
+		containerMatch := sp.Container == "" || sp.Container == fileContainer
 		if videoMatch && containerMatch {
 			f, err := os.Open(filePath)
 			if err != nil {
 				return nil, "", err
 			}
-			return f, containerContentType(probe.FormatName), nil
+			return f, containerContentType(fileContainer), nil
 		}
 	}
 

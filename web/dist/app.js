@@ -1199,7 +1199,7 @@
 
       function toggleRadioRecord(btn, streamID) {
         if (btn.dataset.recording === '1') {
-          api.del('/vod/' + btn.dataset.sessionId + '/recording').then(function() {
+          api.del('/api/vod/record/' + btn.dataset.channelId).then(function() {
             btn.style.color = '';
             btn.dataset.recording = '0';
             btn.title = 'Record';
@@ -1207,15 +1207,11 @@
           return;
         }
         btn.style.color = '#ffa726';
-        api.post('/stream/' + streamID + '/vod?profile=Browser')
-          .then(function(resp) {
-            if (!resp.session_id) { btn.style.color = ''; return; }
-            btn.dataset.sessionId = resp.session_id;
-            return api.post('/vod/' + resp.session_id + '/recording');
-          })
+        api.post('/api/vod/record/' + streamID, { program_title: btn.dataset.sname || '', channel_name: btn.dataset.sname || '' })
           .then(function() {
             btn.style.color = '#e53935';
             btn.dataset.recording = '1';
+            btn.dataset.channelId = streamID;
             btn.title = 'Stop Recording';
           })
           .catch(function() { btn.style.color = ''; });
@@ -2816,11 +2812,13 @@
     recordBtn.onclick = function() {
       if (!dvr) return;
       recordBtn.disabled = true;
+      var recordChannelID = channelID || (dvr ? dvr.id : null);
+      if (!recordChannelID) { recordBtn.disabled = false; return; }
       if (isRecording) {
-        api.del('/vod/' + dvr.id + '/recording').then(function() { stopRecordingUI(); }).catch(function() {}).finally(function() { recordBtn.disabled = false; });
+        api.del('/api/vod/record/' + recordChannelID).then(function() { stopRecordingUI(); }).catch(function() {}).finally(function() { recordBtn.disabled = false; });
       } else {
         startRecordingUI();
-        api.post('/vod/' + dvr.id + '/recording').catch(function() { stopRecordingUI(); }).finally(function() { recordBtn.disabled = false; });
+        api.post('/api/vod/record/' + recordChannelID, { program_title: title, channel_name: title }).catch(function() { stopRecordingUI(); }).finally(function() { recordBtn.disabled = false; });
       }
     };
 
@@ -4271,7 +4269,7 @@
             var basePath = '/api/recordings/completed/' + encodedStreamID + '/' + encodedName;
             var actions = h('td', { style: 'display:flex;gap:4px;' });
             var playBtn = h('button', { className: 'btn btn-primary btn-sm', onClick: function() {
-              var fileUrl = basePath + '/stream?profile=Browser&token=' + encodeURIComponent(state.accessToken || '');
+              var fileUrl = basePath + '/stream?token=' + encodeURIComponent(state.accessToken || '');
               play({ streamID: rec.stream_id, name: title, fileUrl: fileUrl });
             }}, '\u25B6 Play');
             var deleteBtn = h('button', { className: 'btn btn-danger btn-sm', onClick: async function() {
