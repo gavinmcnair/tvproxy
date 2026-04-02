@@ -2756,6 +2756,7 @@
       if (retryTimeout) { clearTimeout(retryTimeout); retryTimeout = null; }
       if (pollInterval) { clearInterval(pollInterval); pollInterval = null; }
       if (progInterval) { clearInterval(progInterval); progInterval = null; }
+      if (progTimer) { clearInterval(progTimer); progTimer = null; }
       if (signalInterval) { clearInterval(signalInterval); signalInterval = null; }
       if (statsInterval) { clearInterval(statsInterval); statsInterval = null; }
       if (shakaPlayer) {
@@ -3087,6 +3088,38 @@
         }
       }).catch(function() {});
     }
+
+    var progBar = document.createElement('div');
+    progBar.style.cssText = 'position:absolute;bottom:0;left:0;right:0;height:3px;background:rgba(255,255,255,0.15);z-index:25;pointer-events:none;';
+    var progFill = document.createElement('div');
+    progFill.style.cssText = 'height:100%;background:#4fc3f7;width:0%;transition:width 1s linear;';
+    progBar.appendChild(progFill);
+    playerWrap.appendChild(progBar);
+
+    var progTimer = null;
+    function updateProgrammeProgress() {
+      if (playerCtx.signal.aborted) { if (progTimer) clearInterval(progTimer); return; }
+      if (nowProgram && nowProgram.start && nowProgram.stop && isLive) {
+        var start = new Date(nowProgram.start).getTime();
+        var stop = new Date(nowProgram.stop).getTime();
+        var total = stop - start;
+        if (total > 0) {
+          var elapsed = Date.now() - start;
+          var pct = Math.min(100, Math.max(0, (elapsed / total) * 100));
+          progFill.style.width = pct + '%';
+          progBar.style.display = '';
+          return;
+        }
+      }
+      if (!isLive && videoEl && videoEl.duration && isFinite(videoEl.duration)) {
+        var pct = (videoEl.currentTime / videoEl.duration) * 100;
+        progFill.style.width = Math.min(100, Math.max(0, pct)) + '%';
+        progBar.style.display = '';
+        return;
+      }
+      progBar.style.display = 'none';
+    }
+    progTimer = setInterval(updateProgrammeProgress, 1000);
 
     fetchNowPlaying();
     if (tvgId) {

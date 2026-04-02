@@ -30,7 +30,7 @@ func NewManager(log zerolog.Logger) *Manager {
 	}
 }
 
-func (m *Manager) GetOrStart(ctx context.Context, channelID, inputPath, outputDir string) (*Remuxer, error) {
+func (m *Manager) GetOrStart(ctx context.Context, channelID, inputPath, outputDir string, isVOD bool) (*Remuxer, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -41,7 +41,7 @@ func (m *Manager) GetOrStart(ctx context.Context, channelID, inputPath, outputDi
 		delete(m.remuxers, channelID)
 	}
 
-	r := NewRemuxer(inputPath, outputDir, m.log)
+	r := NewRemuxer(inputPath, outputDir, isVOD, m.log)
 	if err := r.Start(ctx); err != nil {
 		return nil, err
 	}

@@ -448,7 +448,9 @@ func (h *VODHandler) DASHManifest(w http.ResponseWriter, r *http.Request) {
 	}
 
 	dashDir := dash.ChannelDir(channelID)
-	remuxer, err := h.dashManager.GetOrStart(context.Background(), channelID, sess.FilePath, dashDir)
+	_, _, duration := h.vodService.GetProbeInfo(channelID)
+	isVOD := duration > 0
+	remuxer, err := h.dashManager.GetOrStart(context.Background(), channelID, sess.FilePath, dashDir, isVOD)
 	if err != nil {
 		h.log.Error().Err(err).Str("channel_id", channelID).Msg("failed to start dash remuxer")
 		respondError(w, http.StatusInternalServerError, "dash remuxer failed")

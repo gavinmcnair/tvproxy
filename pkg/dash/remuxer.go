@@ -60,6 +60,7 @@ type Remuxer struct {
 	inputPath    string
 	outputDir    string
 	manifestPath string
+	isVOD        bool
 	cmd          *exec.Cmd
 	cancel       context.CancelFunc
 	done         chan struct{}
@@ -69,11 +70,12 @@ type Remuxer struct {
 	log          zerolog.Logger
 }
 
-func NewRemuxer(inputPath, outputDir string, log zerolog.Logger) *Remuxer {
+func NewRemuxer(inputPath, outputDir string, isVOD bool, log zerolog.Logger) *Remuxer {
 	return &Remuxer{
 		inputPath:    inputPath,
 		outputDir:    outputDir,
 		manifestPath: filepath.Join(outputDir, "manifest.mpd"),
+		isVOD:        isVOD,
 		done:         make(chan struct{}),
 		ready:        make(chan struct{}),
 		log:          log,
@@ -124,8 +126,11 @@ func (r *Remuxer) Start(ctx context.Context) error {
 		"--mpd_output", r.manifestPath,
 		"--segment_duration", "2",
 		"--io_block_size", "65536",
-		"--suggested_presentation_delay", "3",
-		"--min_buffer_time", "2",
+	}
+	if r.isVOD {
+		args = append(args, "--generate_static_live_mpd")
+	} else {
+		args = append(args, "--suggested_presentation_delay", "3", "--min_buffer_time", "2")
 	}
 	r.cmd = exec.CommandContext(rctx, packagerBin, args...)
 	r.cmd.Stdin = &tailReader{file: inputFile, ctx: rctx}
