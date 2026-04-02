@@ -1,11 +1,13 @@
 package main
 
 import (
+	"encoding/json"
 	"io/fs"
 	"net/http"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/rs/zerolog"
 
 	"github.com/gavinmcnair/tvproxy/pkg/handler"
 	"github.com/gavinmcnair/tvproxy/pkg/logocache"
@@ -36,6 +38,7 @@ type routeHandlers struct {
 	dlna         *handler.DLNAHandler
 	wireguard    *handler.WireGuardHandler
 	logoCache    *logocache.Cache
+	log          zerolog.Logger
 }
 
 func registerRoutes(r chi.Router, h routeHandlers, authMW *middleware.AuthMiddleware) {
@@ -245,6 +248,30 @@ func registerRoutes(r chi.Router, h routeHandlers, authMW *middleware.AuthMiddle
 	})
 
 	r.Get("/logo", h.logoCache.ServeHTTP)
+
+	r.Post("/api/frontend-errors", frontendErrorHandler(h.log))
+}
+
+func frontendErrorHandler(log zerolog.Logger) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Errors []struct {
+				Msg    string `json:"msg"`
+				Source string `json:"source"`
+				Line   int    `json:"line"`
+				Col    int    `json:"col"`
+				Stack  string `json:"stack"`
+			} `json:"errors"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		for _, e := range body.Errors {
+			log.Warn().Str("source", e.Source).Int("line", e.Line).Int("col", e.Col).Str("stack", e.Stack).Msg("frontend: " + e.Msg)
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}
 }
 
 func registerStaticRoutes(r chi.Router, staticRoot string, distFS fs.FS, versionedIndexBytes []byte) {

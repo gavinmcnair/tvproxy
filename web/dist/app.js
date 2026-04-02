@@ -1,6 +1,24 @@
 (function() {
   'use strict';
 
+  var jsErrorLog = [];
+  var jsErrorFlushTimer = null;
+  var jsErrorEnabled = false;
+  function reportJSError(msg, source, line, col, err) {
+    if (!jsErrorEnabled) return;
+    jsErrorLog.push({ msg: String(msg), source: (source || '').split('/').pop(), line: line || 0, col: col || 0, stack: err && err.stack ? err.stack.split('\n').slice(0, 3).join(' | ') : '' });
+    if (!jsErrorFlushTimer) jsErrorFlushTimer = setTimeout(flushJSErrors, 2000);
+  }
+  function flushJSErrors() {
+    jsErrorFlushTimer = null;
+    if (jsErrorLog.length === 0) return;
+    var batch = jsErrorLog.splice(0, 20);
+    var token = localStorage.getItem('tvproxy_access_token') || '';
+    fetch('/api/frontend-errors', { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': token ? 'Bearer ' + token : '' }, body: JSON.stringify({ errors: batch }) }).catch(function() {});
+  }
+  window.onerror = function(msg, source, line, col, err) { reportJSError(msg, source, line, col, err); };
+  window.addEventListener('unhandledrejection', function(e) { reportJSError('Unhandled rejection: ' + (e.reason && e.reason.message || e.reason || '?'), '', 0, 0, e.reason); });
+
   function createDVRTracker(isLive, duration) {
     var buffered = 0;
     var dur = duration || 0;
@@ -144,6 +162,11 @@
     async fetchUser() {
       try {
         state.user = await api.get('/api/auth/me');
+        if (state.user && state.user.is_admin) {
+          api.get('/api/settings').then(function(settings) {
+            jsErrorEnabled = (Array.isArray(settings) ? settings : []).some(function(s) { return s.key === 'debug_enabled' && s.value === 'true'; });
+          }).catch(function() {});
+        }
       } catch {
         state.user = null;
       }

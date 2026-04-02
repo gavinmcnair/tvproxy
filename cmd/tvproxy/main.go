@@ -245,6 +245,7 @@ func main() {
 		dlna:         handler.NewDLNAHandler(dlnaService, authService, settingsService, cfg, log),
 		wireguard:    handler.NewWireGuardHandler(wgService, log),
 		logoCache:    logoCache,
+		log:          log,
 	}, authMW)
 
 	distFS, err := fs.Sub(web.Assets, "dist")
