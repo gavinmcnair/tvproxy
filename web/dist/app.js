@@ -4299,30 +4299,33 @@
       async function renderScheduled(scheduledDiv) {
         try {
           var allRecordings = await api.get('/api/recordings/schedule');
-          var recordings = (allRecordings || []).filter(function(r) { return r.status === 'pending'; });
+          var recordings = (allRecordings || []).filter(function(r) { return r.status === 'pending' || r.status === 'recording'; });
           scheduledDiv.innerHTML = '';
           if (recordings.length === 0) {
-            scheduledDiv.appendChild(h('p', { style: 'color: var(--text-muted); padding: 16px;' }, 'No scheduled recordings.'));
+            scheduledDiv.appendChild(h('p', { style: 'color: var(--text-muted); padding: 16px;' }, 'No upcoming or active recordings.'));
             return;
           }
           var table = h('table', { className: 'table' });
-          table.innerHTML = '<thead><tr><th>Channel</th><th>Program</th><th>Start</th><th>Stop</th><th>Actions</th></tr></thead>';
+          table.innerHTML = '<thead><tr><th>Channel</th><th>Program</th><th>Start</th><th>Stop</th><th>Status</th><th>Actions</th></tr></thead>';
           var tbody = h('tbody');
           recordings.forEach(function(rec) {
+            var isActive = rec.status === 'recording';
             var startStr = fmtLocalDateTime(rec.start_at);
             var stopStr = fmtLocalDateTime(rec.stop_at);
             var actions = h('td', { style: 'display:flex;gap:4px;' });
             var deleteBtn = h('button', { className: 'btn btn-danger btn-sm', onClick: async function() {
-              if (!confirm('Delete scheduled recording "' + (rec.program_title || '') + '"?')) return;
+              if (!confirm((isActive ? 'Stop' : 'Delete') + ' recording "' + (rec.program_title || '') + '"?')) return;
               await api.del('/api/recordings/schedule/' + rec.id);
               renderScheduled(scheduledDiv);
-            }}, 'Delete');
+            }}, isActive ? 'Stop' : 'Delete');
             actions.appendChild(deleteBtn);
+            var statusCell = isActive ? h('td', { style: 'color:var(--danger);font-weight:600' }, '\u23FA Recording') : h('td', null, 'Scheduled');
             var tr = h('tr', null,
               h('td', null, rec.channel_name),
               h('td', null, rec.program_title),
               h('td', { title: fmtUTC(rec.start_at) }, startStr),
               h('td', { title: fmtUTC(rec.stop_at) }, stopStr),
+              statusCell,
               actions
             );
             tbody.appendChild(tr);
@@ -5086,8 +5089,12 @@
       }
 
       async function fetchAndRender() {
-        var activity = await api.get('/api/activity');
-        renderViewers(activity, []);
+        var [activity, scheduled] = await Promise.all([
+          api.get('/api/activity'),
+          api.get('/api/recordings/schedule').catch(function() { return []; })
+        ]);
+        var activeRecordings = (scheduled || []).filter(function(r) { return r.status === 'recording'; });
+        renderViewers(activity, activeRecordings);
       }
 
       try {
