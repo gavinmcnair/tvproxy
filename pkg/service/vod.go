@@ -222,7 +222,7 @@ func (s *VODService) StartWatchingStream(ctx context.Context, streamID string, p
 	return streamID, consumerID, container, nil
 }
 
-func (s *VODService) StartWatchingFile(ctx context.Context, filePath, name, profileName, userAgent, remoteAddr string) (string, string, string, float64, error) {
+func (s *VODService) StartWatchingFile(ctx context.Context, filePath, name, profileName, userAgent, remoteAddr string) (string, string, string, float64, bool, error) {
 	command, args, container := s.composeSessionArgs(ctx, profileName, filePath, "")
 
 	sessionKey := "file:" + filepath.Base(filePath)
@@ -239,13 +239,15 @@ func (s *VODService) StartWatchingFile(ctx context.Context, filePath, name, prof
 		OutputDir:   s.config.VODOutputDir,
 	}, session.ConsumerViewer)
 	if err != nil {
-		return "", "", "", 0, err
+		return "", "", "", 0, false, err
 	}
 
 	var duration float64
+	var audioOnly bool
 	probe, _ := ffmpeg.Probe(ctx, filePath, "")
 	if probe != nil {
 		duration = probe.Duration
+		audioOnly = probe.Video == nil && len(probe.AudioTracks) > 0
 		sess := s.sessionMgr.Get(sessionKey)
 		if sess != nil {
 			sess.SetProbeInfo(probe.Video, probe.AudioTracks, probe.Duration)
@@ -264,7 +266,7 @@ func (s *VODService) StartWatchingFile(ctx context.Context, filePath, name, prof
 		})
 	}
 
-	return sessionKey, consumerID, container, duration, nil
+	return sessionKey, consumerID, container, duration, audioOnly, nil
 }
 
 func (s *VODService) StopWatching(channelID string, consumerID string) {

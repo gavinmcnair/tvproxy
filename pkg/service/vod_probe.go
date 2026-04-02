@@ -49,8 +49,8 @@ func (s *VODService) TranscodeFile(ctx context.Context, filePath, profileName st
 		return f, "video/mp4", nil
 	}
 
-	probe, probeErr := ffmpeg.Probe(ctx, filePath, "")
-	if probeErr == nil && probe.Video != nil {
+	probe, probeErr := s.cachedOrFreshProbe(ctx, filePath)
+	if probeErr == nil && probe != nil && probe.Video != nil {
 		fileCodec := ffmpeg.NormalizeVideoCodec(probe.Video.Codec)
 		fileContainer := ffmpeg.NormalizeContainer(probe.FormatName)
 		videoMatch := sp.VideoCodec == "copy" || sp.VideoCodec == fileCodec
@@ -85,6 +85,18 @@ func (s *VODService) TranscodeFile(ctx context.Context, filePath, profileName st
 
 	contentType := containerContentType(sp.Container)
 	return &cmdReadCloser{ReadCloser: stdout, cmd: cmd}, contentType, nil
+}
+
+func (s *VODService) cachedOrFreshProbe(ctx context.Context, filePath string) (*ffmpeg.ProbeResult, error) {
+	hash := ffmpeg.StreamHash(filePath)
+	if cached, err := s.recordingStore.GetProbe(hash); err == nil && cached != nil {
+		return cached, nil
+	}
+	result, err := ffmpeg.Probe(ctx, filePath, "")
+	if err == nil && result != nil {
+		s.recordingStore.SaveProbe(hash, result)
+	}
+	return result, err
 }
 
 func containerContentType(container string) string {

@@ -130,7 +130,7 @@ func (r *Remuxer) Start(ctx context.Context) error {
 	if r.isVOD {
 		args = append(args, "--generate_static_live_mpd")
 	} else {
-		args = append(args, "--suggested_presentation_delay", "3", "--min_buffer_time", "2")
+		args = append(args, "--suggested_presentation_delay", "3", "--min_buffer_time", "2", "--time_shift_buffer_depth", "300")
 	}
 	r.cmd = exec.CommandContext(rctx, packagerBin, args...)
 	r.cmd.Stdin = &tailReader{file: inputFile, ctx: rctx}

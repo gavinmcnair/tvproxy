@@ -444,7 +444,7 @@ func (h *VODHandler) PlayCompletedRecording(w http.ResponseWriter, r *http.Reque
 		profileName = "Browser"
 	}
 
-	sessionID, consumerID, container, duration, err := h.vodService.StartWatchingFile(r.Context(), fullPath, title, profileName, r.UserAgent(), r.RemoteAddr)
+	sessionID, consumerID, container, duration, audioOnly, err := h.vodService.StartWatchingFile(r.Context(), fullPath, title, profileName, r.UserAgent(), r.RemoteAddr)
 	if err != nil {
 		h.log.Error().Err(err).Str("filename", filename).Msg("failed to create file session")
 		respondError(w, http.StatusInternalServerError, "session creation failed")
@@ -456,6 +456,7 @@ func (h *VODHandler) PlayCompletedRecording(w http.ResponseWriter, r *http.Reque
 		"consumer_id": consumerID,
 		"container":   container,
 		"duration":    duration,
+		"audio_only":  audioOnly,
 	})
 }
 

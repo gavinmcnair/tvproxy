@@ -2686,7 +2686,10 @@
       if (opts.recordingPath) {
         try {
           var recResp = await api.post(opts.recordingPath + '?profile=Browser');
-          if (recResp.session_id) {
+          if (recResp.audio_only && recResp.session_id) {
+            api.del('/vod/' + recResp.session_id + (recResp.consumer_id ? '?consumer_id=' + recResp.consumer_id : '')).catch(function() {});
+            startFloatingRadio(null, name, tvgId, false, opts.recordingPath.replace('/play', '/stream'));
+          } else if (recResp.session_id) {
             var recSession = { id: recResp.session_id, consumer_id: recResp.consumer_id, duration: recResp.duration, container: recResp.container };
             openVideoModal(name, null, tvgId, recSession, recResp.session_id);
           }
@@ -2764,6 +2767,7 @@
       if (pollInterval) { clearInterval(pollInterval); pollInterval = null; }
       if (progInterval) { clearInterval(progInterval); progInterval = null; }
       if (progTimer) { clearInterval(progTimer); progTimer = null; }
+      if (recordElapsedTimer) { clearInterval(recordElapsedTimer); recordElapsedTimer = null; }
       if (signalInterval) { clearInterval(signalInterval); signalInterval = null; }
       if (statsInterval) { clearInterval(statsInterval); statsInterval = null; }
       if (shakaPlayer) {
@@ -2810,15 +2814,24 @@
     var recordBtn = document.createElement('button');
     recordBtn.title = 'Record';
     recordBtn.textContent = '\u23FA';
+    var recordStartTime = null;
+    var recordElapsedTimer = null;
     function startRecordingUI() {
       isRecording = true;
+      recordStartTime = Date.now();
       recordBtn.style.color = '#e53935';
       recordBtn.title = 'Stop Recording';
+      updateStatusText();
+      if (recordElapsedTimer) clearInterval(recordElapsedTimer);
+      recordElapsedTimer = setInterval(updateStatusText, 1000);
     }
     function stopRecordingUI() {
       isRecording = false;
+      recordStartTime = null;
+      if (recordElapsedTimer) { clearInterval(recordElapsedTimer); recordElapsedTimer = null; }
       recordBtn.style.color = '';
       recordBtn.title = 'Record';
+      updateStatusText();
     }
     recordBtn.onclick = function() {
       if (!dvr) return;
@@ -2872,6 +2885,11 @@
 
     function switchAudioTrack(audioIndex) {
       if (!dvr || !channelID) return;
+      if (isRecording) {
+        toast.warn('Cannot switch audio while recording');
+        buildAudioMenu(probeData ? probeData.audio_tracks : []);
+        return;
+      }
       statusEl.style.color = '#ffa726';
       statusEl.textContent = 'Switching audio...';
       (async function() {
@@ -2885,7 +2903,9 @@
             if (dvrTracker) dvrTracker.reset();
             streamSrc = '/vod/' + dvr.id + '/dash/manifest.mpd';
           }
-        } catch(e) {}
+        } catch(e) {
+          toast.error('Audio switch failed');
+        }
         restartPlayback();
       })();
     }
@@ -3078,6 +3098,12 @@
 
     function updateStatusText() {
       var state = isRecording ? 'Recording' : 'Streaming';
+      if (isRecording && recordStartTime) {
+        var elapsed = Math.floor((Date.now() - recordStartTime) / 1000);
+        var m = Math.floor(elapsed / 60);
+        var s = elapsed % 60;
+        state += ' ' + m + ':' + String(s).padStart(2, '0');
+      }
       statusEl.textContent = state + buildStatusSuffix();
     }
 
@@ -3099,10 +3125,17 @@
     }
 
     var progBar = document.createElement('div');
-    progBar.style.cssText = 'position:absolute;bottom:0;left:0;right:0;height:3px;background:rgba(255,255,255,0.15);z-index:25;pointer-events:none;';
+    progBar.style.cssText = 'position:absolute;bottom:0;left:0;right:0;height:6px;background:rgba(255,255,255,0.15);z-index:25;cursor:pointer;';
     var progFill = document.createElement('div');
-    progFill.style.cssText = 'height:100%;background:#4fc3f7;width:0%;transition:width 1s linear;';
+    progFill.style.cssText = 'height:100%;background:#4fc3f7;width:0%;transition:width 1s linear;pointer-events:none;';
     progBar.appendChild(progFill);
+    progBar.onclick = function(e) {
+      var rect = progBar.getBoundingClientRect();
+      var pct = (e.clientX - rect.left) / rect.width;
+      if (!isLive && videoEl && videoEl.duration && isFinite(videoEl.duration)) {
+        videoEl.currentTime = pct * videoEl.duration;
+      }
+    };
     playerWrap.appendChild(progBar);
 
     var progTimer = null;
@@ -4269,7 +4302,7 @@
             return;
           }
           var table = h('table', { className: 'table' });
-          table.innerHTML = '<thead><tr><th>Title</th><th>Channel</th><th>Size</th><th>Date</th><th>Actions</th></tr></thead>';
+          table.innerHTML = '<thead><tr><th>Title</th><th>Channel</th><th>Duration</th><th>Size</th><th>Date</th><th>Actions</th></tr></thead>';
           var tbody = h('tbody');
           recordings.forEach(function(rec) {
             var dateStr = fmtLocalDateTime(rec.mod_time);
@@ -4287,11 +4320,20 @@
               await api.del(basePath);
               renderCompleted(completedDiv);
             }}, 'Delete');
+            var dlBtn = h('button', { className: 'btn btn-sm', onClick: function() {
+              var a = document.createElement('a');
+              a.href = basePath + '/stream?token=' + encodeURIComponent(state.accessToken || '');
+              a.download = rec.filename;
+              a.click();
+            }}, '\u2B07 Download');
             actions.appendChild(playBtn);
+            actions.appendChild(dlBtn);
             actions.appendChild(deleteBtn);
+            var durStr = rec.duration > 0 ? (Math.floor(rec.duration / 60) + ':' + String(Math.floor(rec.duration % 60)).padStart(2, '0')) : '-';
             var tr = h('tr', null,
               h('td', null, title),
               h('td', null, channelName),
+              h('td', null, durStr),
               h('td', null, fmtSize(rec.size)),
               h('td', { title: fmtUTC(rec.mod_time) }, dateStr),
               actions

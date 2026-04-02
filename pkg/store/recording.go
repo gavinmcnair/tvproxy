@@ -55,6 +55,7 @@ type RecordingEntry struct {
 	Filename string         `json:"filename"`
 	Size     int64          `json:"size"`
 	ModTime  string         `json:"mod_time"`
+	Duration float64        `json:"duration,omitempty"`
 	Meta     *RecordingMeta `json:"meta,omitempty"`
 }
 
@@ -396,6 +397,10 @@ func (s *RecordingStoreImpl) scanRecordingDir(recDir, streamHash, userID string,
 
 		if !isAdmin && entry.Meta != nil && entry.Meta.UserID != "" && entry.Meta.UserID != userID {
 			continue
+		}
+
+		if entry.Meta != nil && !entry.Meta.StartedAt.IsZero() && !entry.Meta.StoppedAt.IsZero() {
+			entry.Duration = entry.Meta.StoppedAt.Sub(entry.Meta.StartedAt).Seconds()
 		}
 
 		*entries = append(*entries, entry)
