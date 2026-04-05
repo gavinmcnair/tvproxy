@@ -59,7 +59,7 @@ func Load() *Config {
 		LogLevel:              envStr("TVPROXY_LOG_LEVEL", "info"),
 		LogJSON:               envBool("TVPROXY_LOG_JSON", false),
 		M3URefreshInterval:    envDuration("TVPROXY_M3U_REFRESH_INTERVAL", 24*time.Hour),
-		EPGRefreshInterval:    envDuration("TVPROXY_EPG_REFRESH_INTERVAL", 12*time.Hour),
+		EPGRefreshInterval:    envDuration("TVPROXY_EPG_REFRESH_INTERVAL", 1*time.Hour),
 		VODOutputDir:          envStr("TVPROXY_VOD_OUTPUT_DIR", "/record"),
 		VODSessionTimeout:     envDuration("TVPROXY_VOD_SESSION_TIMEOUT", 5*time.Minute),
 		RecordDir:             envStr("TVPROXY_RECORD_DIR", "/record"),

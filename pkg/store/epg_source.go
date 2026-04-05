@@ -22,6 +22,7 @@ type EPGSourceStore interface {
 	UpdateLastRefreshed(ctx context.Context, id string, lastRefreshed time.Time) error
 	UpdateLastError(ctx context.Context, id, lastError string) error
 	UpdateCounts(ctx context.Context, id string, channelCount, programCount int) error
+	UpdateETag(ctx context.Context, id, etag string) error
 }
 
 type EPGSourceStoreImpl struct {
@@ -147,6 +148,19 @@ func (s *EPGSourceStoreImpl) UpdateCounts(_ context.Context, id string, channelC
 		if s.sources[i].ID == id {
 			s.sources[i].ChannelCount = channelCount
 			s.sources[i].ProgramCount = programCount
+			s.sources[i].UpdatedAt = time.Now()
+			return s.save()
+		}
+	}
+	return fmt.Errorf("epg source not found")
+}
+
+func (s *EPGSourceStoreImpl) UpdateETag(_ context.Context, id, etag string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i := range s.sources {
+		if s.sources[i].ID == id {
+			s.sources[i].ETag = etag
 			s.sources[i].UpdatedAt = time.Now()
 			return s.save()
 		}

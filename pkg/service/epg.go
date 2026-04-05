@@ -107,6 +107,7 @@ func (s *EPGService) RefreshSource(ctx context.Context, sourceID string) error {
 
 	s.Set(sourceID, RefreshStatus{State: "running", Message: "Refreshing..."})
 
+	source.ETag = ""
 	if err := s.refreshSource(ctx, source); err != nil {
 		s.epgSourceStore.UpdateLastError(ctx, source.ID, err.Error())
 		s.Set(sourceID, RefreshStatus{State: "error", Message: err.Error()})
@@ -118,18 +119,48 @@ func (s *EPGService) RefreshSource(ctx context.Context, sourceID string) error {
 	return nil
 }
 
+func (s *EPGService) shouldRefresh(source *models.EPGSource) bool {
+	if source.ETag != "" {
+		return true
+	}
+	if source.LastRefreshed == nil {
+		return true
+	}
+	return time.Since(*source.LastRefreshed) >= 12*time.Hour
+}
+
 func (s *EPGService) refreshSource(ctx context.Context, source *models.EPGSource) error {
+	if !s.shouldRefresh(source) {
+		s.log.Debug().Str("source_id", source.ID).Str("name", source.Name).Msg("skipping epg refresh, last refresh < 24h and no etag")
+		return nil
+	}
+
 	s.log.Info().Str("source_id", source.ID).Str("name", source.Name).Msg("refreshing epg source")
 
-	body, err := httputil.FetchAndDecompress(ctx, s.httpClient, s.config, source.URL, s.log)
+	result, err := httputil.FetchConditional(ctx, s.httpClient, s.config, source.URL, source.ETag, s.log)
 	if err != nil {
 		return fmt.Errorf("fetching xmltv url: %w", err)
 	}
-	defer body.Close()
+	if !result.Changed {
+		s.log.Info().Str("source_id", source.ID).Str("name", source.Name).Msg("epg source unchanged (304)")
+		return nil
+	}
+	defer result.Body.Close()
+
+	if result.ETag != source.ETag {
+		s.epgSourceStore.UpdateETag(ctx, source.ID, result.ETag)
+	}
+
+	body := result.Body
 
 	tv, err := xmltv.Parse(body)
 	if err != nil {
 		return fmt.Errorf("parsing xmltv: %w", err)
+	}
+
+	if len(tv.Channels) == 0 && len(tv.Programmes) == 0 {
+		s.log.Warn().Str("source_id", source.ID).Msg("fetched EPG is empty, keeping existing data")
+		return nil
 	}
 
 	s.log.Info().
@@ -137,6 +168,15 @@ func (s *EPGService) refreshSource(ctx context.Context, source *models.EPGSource
 		Int("programmes", len(tv.Programmes)).
 		Msg("parsed xmltv data")
 
+	epgDataItems := make([]models.EPGData, 0, len(tv.Channels))
+	for _, ch := range tv.Channels {
+		epgDataItems = append(epgDataItems, models.EPGData{
+			EPGSourceID: source.ID,
+			ChannelID:   ch.ID,
+			Name:        ch.DisplayName,
+			Icon:        ch.Icon,
+		})
+	}
 	existingData, err := s.epgStore.ListBySourceID(ctx, source.ID)
 	if err != nil {
 		return fmt.Errorf("listing existing epg data: %w", err)
@@ -150,15 +190,6 @@ func (s *EPGService) refreshSource(ctx context.Context, source *models.EPGSource
 		return fmt.Errorf("deleting existing epg data: %w", err)
 	}
 
-	epgDataItems := make([]models.EPGData, 0, len(tv.Channels))
-	for _, ch := range tv.Channels {
-		epgDataItems = append(epgDataItems, models.EPGData{
-			EPGSourceID: source.ID,
-			ChannelID:   ch.ID,
-			Name:        ch.DisplayName,
-			Icon:        ch.Icon,
-		})
-	}
 	if err := s.epgStore.BulkCreateEPGData(ctx, epgDataItems); err != nil {
 		return fmt.Errorf("bulk creating epg data: %w", err)
 	}

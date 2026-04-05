@@ -58,3 +58,39 @@ func FetchAndDecompress(ctx context.Context, client *http.Client, cfg *config.Co
 	}
 	return DecompressReader(resp.Body, url)
 }
+
+type ConditionalResult struct {
+	Body    io.ReadCloser
+	ETag    string
+	Changed bool
+}
+
+func FetchConditional(ctx context.Context, client *http.Client, cfg *config.Config, url, etag string, log zerolog.Logger) (*ConditionalResult, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("creating request: %w", err)
+	}
+	SetBrowserHeaders(req, cfg)
+	if etag != "" {
+		req.Header.Set("If-None-Match", etag)
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode == http.StatusNotModified {
+		resp.Body.Close()
+		return &ConditionalResult{Changed: false, ETag: etag}, nil
+	}
+	if resp.StatusCode != http.StatusOK {
+		LogUpstreamFailure(log, resp, url)
+		resp.Body.Close()
+		return nil, fmt.Errorf("unexpected status code: %d", resp.StatusCode)
+	}
+	newETag := resp.Header.Get("ETag")
+	body, err := DecompressReader(resp.Body, url)
+	if err != nil {
+		return nil, err
+	}
+	return &ConditionalResult{Body: body, ETag: newETag, Changed: true}, nil
+}
