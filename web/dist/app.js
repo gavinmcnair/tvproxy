@@ -1461,17 +1461,22 @@
     container.appendChild(h('div', { className: 'loading-page' }, h('div', { className: 'spinner' }), 'Loading...'));
 
     try {
-      const [accounts, satipSources, channels, groups, epgSources, devices] = await Promise.all([
+      const [accounts, satipSources, channels, groups, epgSources, devices, wgStatus] = await Promise.all([
         api.get('/api/m3u/accounts').catch(() => []),
         api.get('/api/satip/sources').catch(() => []),
         channelsCache.getAll().catch(() => []),
         channelGroupsCache.getAll().catch(() => []),
         api.get('/api/epg/sources').catch(() => []),
         api.get('/api/hdhr/devices').catch(() => []),
+        api.get('/api/wireguard/multi/status').catch(() => null),
       ]);
 
       const m3uStreamCount = accounts.reduce((sum, a) => sum + (a.stream_count || 0), 0);
       const satipStreamCount = satipSources.reduce((sum, s) => sum + (s.stream_count || 0), 0);
+      var wgProfiles = wgStatus && wgStatus.profiles ? wgStatus.profiles : [];
+      var wgConnected = wgProfiles.filter(function(p) { return p.state === 'connected' && p.healthy; }).length;
+      var wgTotal = wgProfiles.length;
+      var wgLabel = wgTotal > 0 ? wgConnected + '/' + wgTotal : 'Off';
 
       container.innerHTML = '';
 
@@ -1484,6 +1489,7 @@
         { label: 'Channel Groups', value: groups.length, icon: '\ud83d\udcc2', page: 'channels' },
         { label: 'EPG Sources', value: epgSources.length, icon: '\ud83d\udcc5', page: 'epg-sources' },
         { label: 'HDHR Devices', value: devices.length, icon: '\ud83d\udce1', page: 'hdhr-devices' },
+        { label: 'WireGuard', value: wgLabel, icon: '\ud83d\udd12', page: 'wireguard' },
       ];
 
       const grid = h('div', { className: 'dashboard-grid' },
