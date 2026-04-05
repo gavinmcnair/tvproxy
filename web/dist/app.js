@@ -4682,6 +4682,10 @@
             var m = Math.floor(secs / 60);
             var s = secs % 60;
             var durStr = m + ':' + String(s).padStart(2, '0');
+            var actions = h('td', { style: 'display:flex;gap:4px;' });
+            var playBtn = h('button', { className: 'btn btn-primary btn-sm', onClick: function() {
+              play({ channelID: rec.channel_id, name: rec.channel_name || rec.stream_name || '?' });
+            }}, '\u25B6 Play');
             var stopBtn = h('button', { className: 'btn btn-danger btn-sm', onClick: async function() {
               stopBtn.disabled = true;
               stopBtn.textContent = 'Stopping...';
@@ -4693,11 +4697,13 @@
                 setTimeout(function() { stopBtn.textContent = 'Stop'; stopBtn.disabled = false; }, 2000);
               }
             }}, 'Stop');
+            actions.appendChild(playBtn);
+            actions.appendChild(stopBtn);
             var tr = h('tr', null,
               h('td', null, rec.channel_name || rec.stream_name || '?'),
               h('td', null, rec.profile_name || '-'),
               h('td', null, durStr),
-              h('td', null, stopBtn)
+              actions
             );
             tbody.appendChild(tr);
           });
