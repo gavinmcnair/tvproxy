@@ -36,9 +36,10 @@ type routeHandlers struct {
 	client       *handler.ClientHandler
 	scheduler    *handler.SchedulerHandler
 	dlna         *handler.DLNAHandler
-	wireguard    *handler.WireGuardHandler
-	logoCache    *logocache.Cache
-	log          zerolog.Logger
+	wireguard      *handler.WireGuardHandler
+	wireguardMulti *handler.MultiWireGuardHandler
+	logoCache      *logocache.Cache
+	log            zerolog.Logger
 }
 
 func registerRoutes(r chi.Router, h routeHandlers, authMW *middleware.AuthMiddleware) {
@@ -244,6 +245,16 @@ func registerRoutes(r chi.Router, h routeHandlers, authMW *middleware.AuthMiddle
 			r.Post("/reconnect", h.wireguard.Reconnect)
 			r.Post("/connect", h.wireguard.Connect)
 			r.Post("/disconnect", h.wireguard.Disconnect)
+
+			r.Get("/profiles", h.wireguardMulti.ListProfiles)
+			r.Post("/profiles", h.wireguardMulti.CreateProfile)
+			r.Get("/profiles/{id}", h.wireguardMulti.GetProfile)
+			r.Put("/profiles/{id}", h.wireguardMulti.UpdateProfile)
+			r.Delete("/profiles/{id}", h.wireguardMulti.DeleteProfile)
+			r.Get("/profiles/{id}/status", h.wireguardMulti.ProfileStatus)
+			r.Post("/profiles/{id}/reconnect", h.wireguardMulti.Reconnect)
+			r.Post("/profiles/{id}/activate", h.wireguardMulti.SetActive)
+			r.Get("/multi/status", h.wireguardMulti.Status)
 		})
 	})
 

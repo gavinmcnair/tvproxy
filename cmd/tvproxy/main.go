@@ -178,6 +178,15 @@ func main() {
 		log.Error().Err(err).Msg("failed to start wireguard tunnel (continuing without VPN)")
 	}
 
+	wgProfileStore := store.NewWireGuardProfileStore(filepath.Join(dataDir, "wireguard_profiles.json"))
+	if err := wgProfileStore.Load(); err != nil {
+		log.Fatal().Err(err).Msg("failed to load wireguard profile store")
+	}
+	wgMultiService := service.NewMultiWireGuardService(wgProfileStore, settingsService, log)
+	if err := wgMultiService.Start(ctx); err != nil {
+		log.Error().Err(err).Msg("failed to start multi wireguard (continuing)")
+	}
+
 	wgHTTPClient := wgService.HTTPClient()
 
 	logoTimeout := 10 * time.Second
@@ -243,7 +252,8 @@ func main() {
 		client:       handler.NewClientHandler(clientService),
 		scheduler:    handler.NewSchedulerHandler(schedulerService, log),
 		dlna:         handler.NewDLNAHandler(dlnaService, authService, settingsService, cfg, log),
-		wireguard:    handler.NewWireGuardHandler(wgService, log),
+		wireguard:      handler.NewWireGuardHandler(wgService, log),
+		wireguardMulti: handler.NewMultiWireGuardHandler(wgMultiService, wgProfileStore, log),
 		logoCache:    logoCache,
 		log:          log,
 	}, authMW)
