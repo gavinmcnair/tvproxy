@@ -20,15 +20,23 @@ func RequestLogger(log zerolog.Logger, debugFn func() bool) func(next http.Handl
 				return
 			}
 
-			log.Info().
+			event := log.Info().
 				Str("method", r.Method).
 				Str("path", path).
 				Int("status", ww.status).
 				Dur("duration", time.Since(start)).
-				Str("remote", r.RemoteAddr).
-				Msg("request")
+				Str("remote", r.RemoteAddr)
+			if ua := r.UserAgent(); ua != "" && isHDHRPath(path) {
+				event = event.Str("user_agent", ua)
+			}
+			event.Msg("request")
 		})
 	}
+}
+
+func isHDHRPath(path string) bool {
+	return path == "/discover.json" || path == "/lineup.json" || path == "/lineup_status.json" ||
+		path == "/device.xml" || path == "/capability" || strings.HasPrefix(path, "/channel/")
 }
 
 func isNoisyPath(path string) bool {

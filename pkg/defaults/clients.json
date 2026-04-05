@@ -95,6 +95,16 @@
       ]
     },
     {
+      "name": "HDHomeRun",
+      "priority": 60,
+      "auto_detect": false,
+      "hwaccel": "default",
+      "container": "mpegts",
+      "match_rules": [
+        {"header_name": "User-Agent", "match_type": "contains", "match_value": "HDHomeRun/"}
+      ]
+    },
+    {
       "name": "Browser",
       "priority": 100,
       "auto_detect": true,

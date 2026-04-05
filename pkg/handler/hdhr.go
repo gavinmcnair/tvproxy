@@ -32,6 +32,8 @@ type lineupStatusResponse struct {
 	ScanPossible   int      `json:"ScanPossible"`
 	Source         string   `json:"Source"`
 	SourceList     []string `json:"SourceList"`
+	NetworkID      int      `json:"NetworkID"`
+	NetworkIDList  []int    `json:"NetworkIDList"`
 }
 
 type hdhrDeviceRequest struct {
@@ -69,8 +71,10 @@ func (h *HDHRHandler) LineupStatus(w http.ResponseWriter, r *http.Request) {
 	resp := lineupStatusResponse{
 		ScanInProgress: 0,
 		ScanPossible:   1,
-		Source:         "Cable",
-		SourceList:     []string{"Cable"},
+		Source:         "Antenna",
+		SourceList:     []string{"Antenna", "Cable", "Amateur"},
+		NetworkID:      0,
+		NetworkIDList:  []int{},
 	}
 
 	respondJSON(w, http.StatusOK, resp)

@@ -32,6 +32,9 @@ type DiscoverData struct {
 type LineupEntry struct {
 	GuideNumber string `json:"GuideNumber"`
 	GuideName   string `json:"GuideName"`
+	VideoCodec  string `json:"VideoCodec,omitempty"`
+	AudioCodec  string `json:"AudioCodec,omitempty"`
+	HD          int    `json:"HD,omitempty"`
 	URL         string `json:"URL"`
 }
 
@@ -145,7 +148,7 @@ func (s *HDHRService) GetDiscoverData(ctx context.Context, baseURL string) (*Dis
 }
 
 func (s *HDHRService) GetLineup(ctx context.Context, baseURL string) ([]LineupEntry, error) {
-	return s.buildLineup(ctx, baseURL, nil)
+	return s.buildLineup(ctx, baseURL, nil, 0)
 }
 
 func (s *HDHRService) GetDeviceXML(ctx context.Context, baseURL string) (*DeviceXML, error) {
@@ -187,7 +190,7 @@ func (s *HDHRService) GetLineupForDevice(ctx context.Context, device *models.HDH
 	if len(device.ChannelGroupIDs) > 0 {
 		groupSet = xmlutil.ToStringSet(device.ChannelGroupIDs)
 	}
-	return s.buildLineup(ctx, baseURL, groupSet)
+	return s.buildLineup(ctx, baseURL, groupSet, device.StartNumber)
 }
 
 func (s *HDHRService) GetDeviceXMLForDevice(ctx context.Context, device *models.HDHRDevice, baseURL string) (*DeviceXML, error) {
@@ -202,8 +205,8 @@ func (s *HDHRService) GetDeviceXMLForDevice(ctx context.Context, device *models.
 			DeviceType:   "urn:schemas-upnp-org:device:MediaServer:1",
 			FriendlyName: device.Name,
 			Manufacturer: "Silicondust",
-			ModelName:    "HDTC-2US",
-			ModelNumber:  "HDTC-2US",
+			ModelName:    s.config.HDHRModelNumber,
+			ModelNumber:  s.config.HDHRModelNumber,
 			SerialNumber: device.DeviceID,
 			UDN:          "uuid:" + device.DeviceID,
 		},
@@ -226,14 +229,17 @@ func (s *HDHRService) firstEnabledDevice(ctx context.Context) (*models.HDHRDevic
 	return nil, ErrNoHDHRDevice
 }
 
-func (s *HDHRService) buildLineup(ctx context.Context, baseURL string, groupFilter map[string]bool) ([]LineupEntry, error) {
+func (s *HDHRService) buildLineup(ctx context.Context, baseURL string, groupFilter map[string]bool, startNumber int) ([]LineupEntry, error) {
 	channels, err := s.channelStore.List(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("listing channels: %w", err)
 	}
 
 	lineup := make([]LineupEntry, 0, len(channels))
-	guideNum := 1
+	guideNum := startNumber
+	if guideNum <= 0 {
+		guideNum = 1
+	}
 	for _, ch := range channels {
 		if !ch.IsEnabled {
 			continue
@@ -249,6 +255,9 @@ func (s *HDHRService) buildLineup(ctx context.Context, baseURL string, groupFilt
 		lineup = append(lineup, LineupEntry{
 			GuideNumber: strconv.Itoa(guideNum),
 			GuideName:   ch.Name,
+			VideoCodec:  "H264",
+			AudioCodec:  "AAC",
+			HD:          1,
 			URL:         streamURL,
 		})
 		guideNum++
