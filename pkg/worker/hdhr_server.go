@@ -216,8 +216,8 @@ func (w *HDHRServerWorker) buildRouter(device models.HDHRDevice, baseURL string)
 		handler.RespondJSONPublic(rw, http.StatusOK, map[string]any{
 			"ScanInProgress": 0,
 			"ScanPossible":   1,
-			"Source":         "Antenna",
-			"SourceList":     []string{"Antenna", "Cable", "Amateur"},
+			"Source":         "Cable",
+			"SourceList":     []string{"Cable", "Antenna"},
 			"NetworkID":      0,
 			"NetworkIDList":  []int{},
 		})

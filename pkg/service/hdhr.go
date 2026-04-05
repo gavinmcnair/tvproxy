@@ -148,7 +148,7 @@ func (s *HDHRService) GetDiscoverData(ctx context.Context, baseURL string) (*Dis
 }
 
 func (s *HDHRService) GetLineup(ctx context.Context, baseURL string) ([]LineupEntry, error) {
-	return s.buildLineup(ctx, baseURL, nil, 0)
+	return s.buildLineup(ctx, baseURL, nil)
 }
 
 func (s *HDHRService) GetDeviceXML(ctx context.Context, baseURL string) (*DeviceXML, error) {
@@ -190,7 +190,7 @@ func (s *HDHRService) GetLineupForDevice(ctx context.Context, device *models.HDH
 	if len(device.ChannelGroupIDs) > 0 {
 		groupSet = xmlutil.ToStringSet(device.ChannelGroupIDs)
 	}
-	return s.buildLineup(ctx, baseURL, groupSet, device.StartNumber)
+	return s.buildLineup(ctx, baseURL, groupSet)
 }
 
 func (s *HDHRService) GetDeviceXMLForDevice(ctx context.Context, device *models.HDHRDevice, baseURL string) (*DeviceXML, error) {
@@ -229,17 +229,14 @@ func (s *HDHRService) firstEnabledDevice(ctx context.Context) (*models.HDHRDevic
 	return nil, ErrNoHDHRDevice
 }
 
-func (s *HDHRService) buildLineup(ctx context.Context, baseURL string, groupFilter map[string]bool, startNumber int) ([]LineupEntry, error) {
+func (s *HDHRService) buildLineup(ctx context.Context, baseURL string, groupFilter map[string]bool) ([]LineupEntry, error) {
 	channels, err := s.channelStore.List(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("listing channels: %w", err)
 	}
 
 	lineup := make([]LineupEntry, 0, len(channels))
-	guideNum := startNumber
-	if guideNum <= 0 {
-		guideNum = 1
-	}
+	guideNum := 1
 	for _, ch := range channels {
 		if !ch.IsEnabled {
 			continue

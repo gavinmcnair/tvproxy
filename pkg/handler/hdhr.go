@@ -71,8 +71,8 @@ func (h *HDHRHandler) LineupStatus(w http.ResponseWriter, r *http.Request) {
 	resp := lineupStatusResponse{
 		ScanInProgress: 0,
 		ScanPossible:   1,
-		Source:         "Antenna",
-		SourceList:     []string{"Antenna", "Cable", "Amateur"},
+		Source:         "Cable",
+		SourceList:     []string{"Cable", "Antenna"},
 		NetworkID:      0,
 		NetworkIDList:  []int{},
 	}

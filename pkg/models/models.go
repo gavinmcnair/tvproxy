@@ -185,7 +185,6 @@ type HDHRDevice struct {
 	FirmwareVersion string    `json:"firmware_version"`
 	TunerCount      int       `json:"tuner_count"`
 	Port            int       `json:"port"`
-	StartNumber     int       `json:"start_number"`
 	ChannelGroupIDs []string  `json:"channel_group_ids,omitempty"`
 	IsEnabled       bool      `json:"is_enabled"`
 	CreatedAt       time.Time `json:"created_at"`

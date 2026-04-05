@@ -270,7 +270,7 @@ func main() {
 	wm.Add("m3u_refresh", worker.NewM3URefreshWorker(m3uService, cfg.M3URefreshInterval, log))
 	wm.Add("epg_refresh", worker.NewEPGRefreshWorker(epgService, cfg.EPGRefreshInterval, log))
 	wm.Add("ssdp", worker.NewSSDPWorker(hdhrStore, cfg.BaseURL, cfg.Settings.Workers.RetryDelay, cfg.Settings.Workers.SSDPAnnounceInterval, log))
-	wm.Add("hdhr_discover", worker.NewHDHRDiscoverWorker(hdhrStore, cfg.BaseURL, cfg.Settings.Workers.RetryDelay, log))
+	wm.Add("hdhr_discover", worker.NewHDHRDiscoverWorker(hdhrStore, cfg, cfg.BaseURL, cfg.Settings.Workers.RetryDelay, log))
 	wm.Add("hdhr_servers", worker.NewHDHRServerWorker(hdhrStore, hdhrService, proxyService, settingsService, outputService, cfg, log))
 	wm.Add("dlna", worker.NewDLNAWorker(dlnaService, cfg.BaseURL, cfg.Port, cfg.Settings.Workers.RetryDelay, cfg.Settings.Workers.DLNAAnnounceInterval, log))
 	wm.Add("recording_scheduler", worker.NewSchedulerWorker(schedulerService, 30*time.Second, log))
