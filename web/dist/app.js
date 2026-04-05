@@ -4958,7 +4958,7 @@
         form.appendChild(h('h3', { style: 'margin:0 0 16px 0' }, isEdit ? 'Edit Profile' : 'New Profile'));
 
         var fields = [
-          { key: 'name', label: 'Name', placeholder: 'e.g., Bulgaria, US East' },
+          { key: 'name', label: 'Name', placeholder: 'e.g., US East, Switzerland' },
           { key: 'private_key', label: 'Private Key', type: 'password', placeholder: 'Base64-encoded WireGuard private key' },
           { key: 'address', label: 'Address', placeholder: '10.20.30.40/24' },
           { key: 'dns', label: 'DNS', placeholder: '1.1.1.1, 8.8.8.8' },
@@ -5076,6 +5076,7 @@
           statusBadge.appendChild(h('span', { style: 'width:8px;height:8px;border-radius:50%;background:' + activeColor + ';display:inline-block' }));
           statusBadge.appendChild(h('span', { style: 'font-weight:500;color:' + activeColor }, activeLabel));
           header.appendChild(statusBadge);
+          statusBadgeRef = statusBadge;
           container.appendChild(header);
 
           var controls = h('div', { style: 'display:flex;align-items:center;gap:8px;margin-bottom:16px;flex-wrap:wrap' });
@@ -5095,11 +5096,14 @@
           controls.appendChild(profileSelect);
 
           var addBtn = h('button', { className: 'btn btn-primary btn-sm' }, '+ Add Profile');
-          addBtn.onclick = function() { selectedProfileId = 'new'; renderPage(); };
+          addBtn.onclick = function() { selectedProfileId = 'new'; stopPolling(); renderPage(); };
           controls.appendChild(addBtn);
           container.appendChild(controls);
 
           contentDiv = h('div');
+
+          selectedStatusRef = null;
+          overviewRef = null;
 
           if (selectedProfileId === 'new') {
             contentDiv.appendChild(renderProfileForm(null));
@@ -5107,10 +5111,14 @@
             var profile = profiles.find(function(p) { return p.id === selectedProfileId; });
             if (profile) {
               var ps = (multiStatus.profiles || []).find(function(p) { return p.id === selectedProfileId; });
-              if (ps) contentDiv.appendChild(renderProfileStatus(ps));
+              var statusDiv = h('div');
+              if (ps) statusDiv.appendChild(renderProfileStatus(ps));
+              contentDiv.appendChild(statusDiv);
+              selectedStatusRef = statusDiv;
               contentDiv.appendChild(renderProfileForm(profile));
             }
           } else if (profiles.length > 0) {
+            overviewRef = h('div');
             (multiStatus.profiles || []).forEach(function(ps) {
               var card = h('div', { style: 'margin-bottom:12px;cursor:pointer' });
               var nameRow = h('div', { style: 'display:flex;align-items:center;gap:8px;margin-bottom:4px' });
@@ -5124,8 +5132,9 @@
               if (ps.exit_ip) card.appendChild(h('div', { style: 'font-size:0.85em;color:var(--text-muted)' }, 'Exit: ' + ps.exit_ip));
               card.style.cssText = 'background:var(--bg-card);border:1px solid var(--border);border-radius:8px;padding:12px 16px;cursor:pointer;' + (ps.active ? 'border-left:3px solid var(--success);' : '');
               card.onclick = function() { selectedProfileId = ps.id; renderPage(); };
-              contentDiv.appendChild(card);
+              overviewRef.appendChild(card);
             });
+            contentDiv.appendChild(overviewRef);
           } else {
             contentDiv.appendChild(h('p', { style: 'color:var(--text-muted);text-align:center;padding:32px' }, 'No profiles configured. Click "+ Add Profile" to create one.'));
           }
@@ -5138,9 +5147,50 @@
         }
       }
 
+      var statusBadgeRef = null;
+      var overviewRef = null;
+      var selectedStatusRef = null;
+
+      async function pollStatus() {
+        try {
+          var multiStatus = await api.get('/api/wireguard/multi/status');
+          if (statusBadgeRef) {
+            var activeLabel = multiStatus.active_profile_name || 'None';
+            var activeColor = multiStatus.active_profile_id ? 'var(--success)' : 'var(--text-muted)';
+            statusBadgeRef.innerHTML = '';
+            statusBadgeRef.appendChild(h('span', { style: 'width:8px;height:8px;border-radius:50%;background:' + activeColor + ';display:inline-block' }));
+            statusBadgeRef.appendChild(h('span', { style: 'font-weight:500;color:' + activeColor }, activeLabel));
+          }
+          if (selectedStatusRef && selectedProfileId && selectedProfileId !== 'new') {
+            var ps = (multiStatus.profiles || []).find(function(p) { return p.id === selectedProfileId; });
+            if (ps) {
+              selectedStatusRef.innerHTML = '';
+              selectedStatusRef.appendChild(renderProfileStatus(ps));
+            }
+          }
+          if (overviewRef && !selectedProfileId) {
+            overviewRef.innerHTML = '';
+            (multiStatus.profiles || []).forEach(function(ps) {
+              var card = h('div', { style: 'background:var(--bg-card);border:1px solid var(--border);border-radius:8px;padding:12px 16px;cursor:pointer;margin-bottom:12px;' + (ps.active ? 'border-left:3px solid var(--success);' : '') });
+              var nameRow = h('div', { style: 'display:flex;align-items:center;gap:8px;margin-bottom:4px' });
+              nameRow.appendChild(h('span', { style: 'font-weight:600;font-size:1.05em' }, ps.name || 'Unnamed'));
+              var st = ps.state || 'disconnected';
+              nameRow.appendChild(h('span', { style: 'font-size:0.85em;color:' + stateColor(st) }, stateLabel(st)));
+              if (ps.active) nameRow.appendChild(h('span', { className: 'badge badge-success', style: 'font-size:0.75em' }, 'Active'));
+              if (ps.healthy === true) nameRow.appendChild(h('span', { style: 'font-size:0.85em;color:var(--success)' }, '\u2705'));
+              if (ps.healthy === false) nameRow.appendChild(h('span', { style: 'font-size:0.85em;color:var(--danger)' }, '\u274C'));
+              card.appendChild(nameRow);
+              if (ps.exit_ip) card.appendChild(h('div', { style: 'font-size:0.85em;color:var(--text-muted)' }, 'Exit: ' + ps.exit_ip));
+              card.onclick = function() { selectedProfileId = ps.id; renderPage(); };
+              overviewRef.appendChild(card);
+            });
+          }
+        } catch (e) {}
+      }
+
       function startPolling() {
         stopPolling();
-        pollTimer = setInterval(renderPage, 5000);
+        pollTimer = setInterval(pollStatus, 5000);
       }
 
       function stopPolling() {
@@ -5148,7 +5198,7 @@
       }
 
       await renderPage();
-      if (!selectedProfileId || selectedProfileId === 'new') startPolling();
+      startPolling();
 
       var observer = new MutationObserver(function() {
         if (!document.body.contains(container)) {
