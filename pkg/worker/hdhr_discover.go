@@ -12,6 +12,7 @@ import (
 
 	"github.com/rs/zerolog"
 
+	"github.com/gavinmcnair/tvproxy/pkg/config"
 	"github.com/gavinmcnair/tvproxy/pkg/store"
 )
 
@@ -36,20 +37,22 @@ const (
 
 type HDHRDiscoverWorker struct {
 	hdhrStore  store.HDHRDeviceStore
+	config     *config.Config
 	baseURL    string
 	log        zerolog.Logger
 	retryDelay time.Duration
 }
 
-func NewHDHRDiscoverWorker(hdhrStore store.HDHRDeviceStore, baseURL string, retryDelay time.Duration, log zerolog.Logger) *HDHRDiscoverWorker {
+func NewHDHRDiscoverWorker(hdhrStore store.HDHRDeviceStore, cfg *config.Config, baseURL string, retryDelay time.Duration, log zerolog.Logger) *HDHRDiscoverWorker {
 	if retryDelay <= 0 {
 		retryDelay = 2 * time.Second
 	}
 	return &HDHRDiscoverWorker{
-		hdhrStore: hdhrStore,
-		baseURL:        baseURL,
-		log:            log.With().Str("worker", "hdhr_discover").Logger(),
-		retryDelay:     retryDelay,
+		hdhrStore:  hdhrStore,
+		config:     cfg,
+		baseURL:    baseURL,
+		log:        log.With().Str("worker", "hdhr_discover").Logger(),
+		retryDelay: retryDelay,
 	}
 }
 
@@ -186,7 +189,12 @@ func (w *HDHRDiscoverWorker) handleDiscoverRequest(ctx context.Context, conn *ne
 		}
 
 		deviceBaseURL := fmt.Sprintf("http://%s:%d", host, device.Port)
-		reply := w.buildDiscoverReply(deviceID, device.TunerCount, device.DeviceAuth, deviceBaseURL)
+		auth := device.DeviceAuth
+		if auth == "" {
+			auth = w.config.HDHRDeviceAuth
+		}
+		w.log.Info().Str("device", device.Name).Str("remote", remoteAddr.String()).Str("base_url", deviceBaseURL).Msg("sending discover reply")
+		reply := w.buildDiscoverReply(deviceID, device.TunerCount, auth, deviceBaseURL)
 		if _, err := conn.WriteToUDP(reply, remoteAddr); err != nil {
 			w.log.Warn().Err(err).Str("remote", remoteAddr.String()).Msg("failed to send discover reply")
 		}
@@ -217,21 +225,20 @@ func (w *HDHRDiscoverWorker) buildDiscoverReply(deviceID uint32, tunerCount int,
 	var payload []byte
 
 	payload = append(payload, w.encodeTLV(hdhrTagDeviceType, w.encodeUint32(hdhrDeviceTypeTuner))...)
-
 	payload = append(payload, w.encodeTLV(hdhrTagDeviceID, w.encodeUint32(deviceID))...)
+
+	if deviceAuth != "" {
+		payload = append(payload, w.encodeTLV(hdhrTagDeviceAuth, []byte(deviceAuth))...)
+	}
+
+	payload = append(payload, w.encodeTLV(hdhrTagBaseURL, []byte(baseURL))...)
 
 	if tunerCount > 0 {
 		payload = append(payload, w.encodeTLV(hdhrTagTunerCount, []byte{byte(tunerCount)})...)
 	}
 
-	payload = append(payload, w.encodeTLV(hdhrTagBaseURL, []byte(baseURL))...)
-
 	lineupURL := fmt.Sprintf("%s/lineup.json", baseURL)
 	payload = append(payload, w.encodeTLV(hdhrTagLineupURL, []byte(lineupURL))...)
-
-	if deviceAuth != "" {
-		payload = append(payload, w.encodeTLV(hdhrTagDeviceAuth, []byte(deviceAuth))...)
-	}
 
 	pkt := make([]byte, 4+len(payload)+4)
 	binary.BigEndian.PutUint16(pkt[0:2], hdhrTypeDiscoverRpy)

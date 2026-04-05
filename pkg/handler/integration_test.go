@@ -73,6 +73,9 @@ func setupFullEnv(t *testing.T) *fullTestEnv {
 		AccessTokenExpiry:  15 * time.Minute,
 		RefreshTokenExpiry: 7 * 24 * time.Hour,
 		APIKey:             "test-api-key",
+		HDHRFirmwareVersion: "20260326",
+		HDHRModelNumber:     "HDHR5-2DT",
+		HDHRFirmwareName:    "hdhomerun5_dvbt",
 		Settings:           tuningSettings,
 	}
 
@@ -728,7 +731,7 @@ func TestIntegration_StreamProfileCRUD(t *testing.T) {
 		assert.Equal(t, http.StatusOK, rec.Code)
 		var profiles []map[string]any
 		decodeResponse(t, rec, &profiles)
-		assert.Len(t, profiles, 15)
+		assert.Len(t, profiles, 16)
 	})
 
 	t.Run("get", func(t *testing.T) {
@@ -1543,7 +1546,7 @@ func TestIntegration_HDHRDiscovery(t *testing.T) {
 		assert.Equal(t, http.StatusOK, rec.Code)
 		var resp map[string]any
 		decodeResponse(t, rec, &resp)
-		assert.Equal(t, "Cable", resp["Source"])
+		assert.Equal(t, "Antenna", resp["Source"])
 	})
 
 	t.Run("discover without devices fails", func(t *testing.T) {
@@ -2155,7 +2158,7 @@ func TestIntegration_ClientCRUD(t *testing.T) {
 		assert.Equal(t, http.StatusOK, rec.Code)
 		var clients []map[string]any
 		decodeResponse(t, rec, &clients)
-		assert.Len(t, clients, 10)
+		assert.Len(t, clients, 11)
 		assert.Equal(t, "Plex", clients[0]["name"])
 		assert.Equal(t, "VLC", clients[1]["name"])
 		assert.Equal(t, "Skybox", clients[2]["name"])
@@ -2165,7 +2168,8 @@ func TestIntegration_ClientCRUD(t *testing.T) {
 		assert.Equal(t, "Panasonic TV", clients[6]["name"])
 		assert.Equal(t, "iPhone", clients[7]["name"])
 		assert.Equal(t, "Safari", clients[8]["name"])
-		assert.Equal(t, "Browser", clients[9]["name"])
+		assert.Equal(t, "HDHomeRun", clients[9]["name"])
+		assert.Equal(t, "Browser", clients[10]["name"])
 	})
 
 	t.Run("get seeded client with rules", func(t *testing.T) {
@@ -2280,7 +2284,7 @@ func TestIntegration_ClientCRUD(t *testing.T) {
 		assert.Equal(t, http.StatusOK, rec.Code)
 		var clients []map[string]any
 		decodeResponse(t, rec, &clients)
-		assert.Len(t, clients, 10)
+		assert.Len(t, clients, 11)
 	})
 }
 
@@ -2400,7 +2404,7 @@ func TestIntegration_SoftReset(t *testing.T) {
 		rec = doRequest(t, env, "GET", "/api/stream-profiles/", nil, env.adminToken)
 		assert.Equal(t, http.StatusOK, rec.Code)
 		decodeResponse(t, rec, &profiles)
-		assert.Equal(t, 12, len(profiles))
+		assert.Equal(t, 13, len(profiles))
 
 		rec = doRequest(t, env, "GET", "/api/channels/", nil, env.adminToken)
 		assert.Equal(t, http.StatusOK, rec.Code)
@@ -2434,13 +2438,13 @@ func TestIntegration_HardReset(t *testing.T) {
 		assert.Equal(t, http.StatusOK, rec.Code)
 		var profiles []map[string]any
 		decodeResponse(t, rec, &profiles)
-		assert.Equal(t, 12, len(profiles))
+		assert.Equal(t, 13, len(profiles))
 
 		rec = doRequest(t, env, "GET", "/api/clients/", nil, newToken)
 		assert.Equal(t, http.StatusOK, rec.Code)
 		var clients []map[string]any
 		decodeResponse(t, rec, &clients)
-		assert.Equal(t, 10, len(clients))
+		assert.Equal(t, 11, len(clients))
 
 		rec = doRequest(t, env, "GET", "/api/users/", nil, newToken)
 		assert.Equal(t, http.StatusOK, rec.Code)
@@ -2577,8 +2581,8 @@ func TestIntegration_HDHR_Discover(t *testing.T) {
 	assert.Equal(t, "Test Tuner", discover["FriendlyName"])
 	assert.Equal(t, "Silicondust", discover["Manufacturer"])
 	assert.Equal(t, "https://www.silicondust.com/", discover["ManufacturerURL"])
-	assert.Equal(t, "HDTC-2US", discover["ModelNumber"])
-	assert.Equal(t, "hdhomerun_atsc", discover["FirmwareName"])
+	assert.Equal(t, "HDHR5-2DT", discover["ModelNumber"])
+	assert.Equal(t, "hdhomerun5_dvbt", discover["FirmwareName"])
 	assert.Equal(t, "20240101", discover["FirmwareVersion"])
 	assert.Equal(t, "AABBCCDD", discover["DeviceID"])
 	assert.Equal(t, "authkey123", discover["DeviceAuth"])
@@ -2634,10 +2638,10 @@ func TestIntegration_HDHR_LineupStatus(t *testing.T) {
 	decodeResponse(t, rec, &status)
 	assert.Equal(t, float64(0), status["ScanInProgress"])
 	assert.Equal(t, float64(1), status["ScanPossible"])
-	assert.Equal(t, "Cable", status["Source"])
+	assert.Equal(t, "Antenna", status["Source"])
 	sourceList := status["SourceList"].([]any)
-	require.Len(t, sourceList, 1)
-	assert.Equal(t, "Cable", sourceList[0])
+	require.Len(t, sourceList, 3)
+	assert.Equal(t, "Antenna", sourceList[0])
 }
 
 func TestIntegration_HDHR_DeviceXML(t *testing.T) {
@@ -2658,7 +2662,7 @@ func TestIntegration_HDHR_DeviceXML(t *testing.T) {
 	assert.Contains(t, body, "urn:schemas-upnp-org:device:MediaServer:1")
 	assert.Contains(t, body, "XML Tuner")
 	assert.Contains(t, body, "Silicondust")
-	assert.Contains(t, body, "HDTC-2US")
+	assert.Contains(t, body, "HDHR5-2DT")
 	assert.Contains(t, body, "DEADBEEF")
 	assert.Contains(t, body, "uuid:DEADBEEF")
 }
@@ -2896,7 +2900,7 @@ func TestIntegration_ClientSyncSurvival(t *testing.T) {
 		require.Equal(t, http.StatusOK, rec.Code)
 		var profiles []map[string]any
 		decodeResponse(t, rec, &profiles)
-		assert.Equal(t, 13, len(profiles))
+		assert.Equal(t, 14, len(profiles))
 
 		var foundCustom bool
 		for _, p := range profiles {
@@ -2910,9 +2914,9 @@ func TestIntegration_ClientSyncSurvival(t *testing.T) {
 		require.Equal(t, http.StatusOK, rec.Code)
 		var clients []map[string]any
 		decodeResponse(t, rec, &clients)
-		assert.Equal(t, 10, len(clients))
+		assert.Equal(t, 11, len(clients))
 		assert.Equal(t, "Plex", clients[0]["name"])
-		assert.Equal(t, "Browser", clients[9]["name"])
+		assert.Equal(t, "Browser", clients[10]["name"])
 	})
 }
 

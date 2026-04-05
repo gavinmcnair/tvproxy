@@ -183,6 +183,16 @@ func (w *HDHRServerWorker) buildRouter(device models.HDHRDevice, baseURL string)
 		AllowCredentials: false,
 		MaxAge:           300,
 	}))
+	r.Use(func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
+			event := w.log.Info().Str("method", req.Method).Str("path", req.URL.Path).Str("remote", req.RemoteAddr).Int("port", device.Port)
+			if ua := req.UserAgent(); ua != "" {
+				event = event.Str("user_agent", ua)
+			}
+			event.Msg("hdhr request")
+			next.ServeHTTP(rw, req)
+		})
+	})
 
 	r.Get("/discover.json", func(rw http.ResponseWriter, req *http.Request) {
 		data, err := w.hdhrService.GetDiscoverDataForDevice(req.Context(), &device, baseURL)
@@ -206,8 +216,10 @@ func (w *HDHRServerWorker) buildRouter(device models.HDHRDevice, baseURL string)
 		handler.RespondJSONPublic(rw, http.StatusOK, map[string]any{
 			"ScanInProgress": 0,
 			"ScanPossible":   1,
-			"Source":         "Cable",
-			"SourceList":     []string{"Cable"},
+			"Source":         "Antenna",
+			"SourceList":     []string{"Antenna", "Cable", "Amateur"},
+			"NetworkID":      0,
+			"NetworkIDList":  []int{},
 		})
 	})
 
