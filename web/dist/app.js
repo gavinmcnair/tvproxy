@@ -4874,16 +4874,11 @@
 
     'wireguard': async function(container) {
       container.innerHTML = '';
-      container.appendChild(h('div', { className: 'loading-page' }, h('div', { className: 'spinner' }), 'Loading WireGuard status...'));
+      container.appendChild(h('div', { className: 'loading-page' }, h('div', { className: 'spinner' }), 'Loading WireGuard...'));
 
       var pollTimer = null;
-      var statusEl = null;
-      var statusTextEl = null;
-      var statsCardEl = null;
-      var formFields = {};
-      var enableCheckbox = null;
-      var saveBtn = null;
-      var currentState = 'unconfigured';
+      var selectedProfileId = null;
+      var contentDiv = null;
 
       function fmtBytes(bytes) {
         if (bytes < 1024) return bytes + ' B';
@@ -4928,288 +4923,231 @@
         return 'Unconfigured';
       }
 
-      function updateStatus(status) {
-        var st = status.state || 'unconfigured';
-        currentState = st;
+      function renderProfileStatus(ps) {
+        var card = h('div', { style: 'background:var(--bg-card);border:1px solid var(--border);border-radius:8px;padding:16px;margin-bottom:16px;' + (ps.active ? 'border-left:3px solid var(--success);' : '') });
+        var st = ps.state || 'disconnected';
 
-        var color = stateColor(st);
-        statusEl.innerHTML = '';
-        statusEl.appendChild(h('span', { style: 'width:8px;height:8px;border-radius:50%;background:' + color + ';display:inline-block' }));
-        if (st === 'connecting') {
-          statusEl.appendChild(h('div', { className: 'spinner', style: 'width:14px;height:14px' }));
-        }
-        statusTextEl.textContent = stateLabel(st);
-        statusTextEl.setAttribute('style', 'font-size:0.95em;font-weight:500;color:' + color);
-
-        statsCardEl.innerHTML = '';
-        var cardBase = 'background:var(--bg-card);border:1px solid var(--border);border-radius:8px;padding:16px;margin-bottom:20px;';
-        if (st === 'error' && status.error) {
-          statsCardEl.setAttribute('style', cardBase + 'display:block;border-left:3px solid var(--danger);');
-          statsCardEl.appendChild(h('div', { style: 'color:var(--danger)' }, status.error));
-          return;
+        if (st === 'error' && ps.error) {
+          card.appendChild(h('div', { style: 'color:var(--danger);margin-bottom:8px' }, ps.error));
         }
 
         if (st === 'connected') {
-          statsCardEl.setAttribute('style', cardBase + 'display:block;border-left:3px solid var(--success);');
-
           var grid = h('div', { style: 'display:grid;grid-template-columns:auto 1fr;gap:2px 12px;font-size:0.88em;color:var(--text-muted)' });
-
           function addStat(label, value) {
             grid.appendChild(h('span', { style: 'font-weight:500' }, label));
             grid.appendChild(h('span', null, value));
           }
-
-          addStat('Exit IP', status.exit_ip || 'Checking...');
-          addStat('Session', fmtDuration(status.connected_since));
-          addStat('Last Handshake', fmtRelative(status.last_handshake));
-          addStat('TX', fmtBytes(status.tx_bytes || 0));
-          addStat('RX', fmtBytes(status.rx_bytes || 0));
-          if (status.peer_endpoint) addStat('Peer', status.peer_endpoint);
-
-          statsCardEl.appendChild(grid);
-          return;
+          addStat('Exit IP', ps.exit_ip || 'Checking...');
+          addStat('Session', fmtDuration(ps.connected_since));
+          addStat('Last Handshake', fmtRelative(ps.last_handshake));
+          addStat('TX', fmtBytes(ps.tx_bytes || 0));
+          addStat('RX', fmtBytes(ps.rx_bytes || 0));
+          if (ps.peer_endpoint) addStat('Peer', ps.peer_endpoint);
+          addStat('Health', ps.healthy ? '\u2705 Healthy' : '\u274C Unhealthy');
+          if (ps.last_healthcheck) addStat('Last Check', fmtRelative(ps.last_healthcheck));
+          if (ps.active) addStat('Routing', '\u2705 Active');
+          card.appendChild(grid);
         }
 
-        statsCardEl.setAttribute('style', cardBase + 'display:none;');
+        return card;
       }
 
-      function setFieldsDisabled(disabled) {
-        Object.keys(formFields).forEach(function(key) {
-          formFields[key].disabled = disabled;
+      function renderProfileForm(profile) {
+        var form = h('div', { style: 'background:var(--bg-card);border:1px solid var(--border);border-radius:8px;padding:16px;margin-bottom:16px;' });
+        var isEdit = profile && profile.id;
+        form.appendChild(h('h3', { style: 'margin:0 0 16px 0' }, isEdit ? 'Edit Profile' : 'New Profile'));
+
+        var fields = [
+          { key: 'name', label: 'Name', placeholder: 'e.g., Bulgaria, US East' },
+          { key: 'private_key', label: 'Private Key', type: 'password', placeholder: 'Base64-encoded WireGuard private key' },
+          { key: 'address', label: 'Address', placeholder: '10.20.30.40/24' },
+          { key: 'dns', label: 'DNS', placeholder: '1.1.1.1, 8.8.8.8' },
+          { key: 'peer_public_key', label: 'Peer Public Key', placeholder: 'Base64-encoded peer public key' },
+          { key: 'peer_endpoint', label: 'Peer Endpoint', placeholder: 'vpn.example.com:51820' },
+          { key: 'route_hosts', label: 'Route Hosts', placeholder: 'Leave empty to route all traffic' },
+          { key: 'healthcheck_url', label: 'Health Check URL', placeholder: 'https://example.com/stream.m3u' },
+          { key: 'healthcheck_method', label: 'Health Check Method', placeholder: 'HEAD or GET' },
+          { key: 'priority', label: 'Priority', placeholder: '0 = highest' },
+        ];
+        var inputs = {};
+        var inputStyle = 'width:60%;padding:8px 10px;background:var(--bg-input);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text-primary);font-size:0.9em;box-sizing:border-box;max-width:100%;';
+        if (window.innerWidth < 600) inputStyle = inputStyle.replace('width:60%', 'width:100%');
+
+        fields.forEach(function(f) {
+          var row = h('div', { style: 'margin-bottom:10px' });
+          row.appendChild(h('label', { style: 'display:block;font-weight:500;margin-bottom:4px;font-size:0.9em' }, f.label));
+          var input = h('input', { type: f.type || 'text', placeholder: f.placeholder || '' });
+          input.style.cssText = inputStyle;
+          var val = profile ? (profile[f.key] || '') : '';
+          if (f.key === 'private_key' && val === '***') { input.placeholder = 'Enter to change'; }
+          else if (f.key === 'priority' && profile) { input.value = String(profile.priority || 0); }
+          else { input.value = val; }
+          inputs[f.key] = input;
+          row.appendChild(input);
+          form.appendChild(row);
         });
-      }
 
-      function clearErrors() {
-        Object.keys(formFields).forEach(function(key) {
-          var errEl = formFields[key]._errorEl;
-          if (errEl) { errEl.textContent = ''; errEl.style.display = 'none'; }
-        });
-      }
+        var checkRow = h('div', { style: 'margin-bottom:16px;display:flex;align-items:center;gap:8px' });
+        var enableCb = h('input', { type: 'checkbox' });
+        if (profile && profile.is_enabled) enableCb.checked = true;
+        checkRow.appendChild(enableCb);
+        checkRow.appendChild(h('label', { style: 'font-weight:500;cursor:pointer' }, 'Enabled'));
+        form.appendChild(checkRow);
 
-      function showErrors(errors) {
-        clearErrors();
-        Object.keys(errors).forEach(function(key) {
-          if (formFields[key] && formFields[key]._errorEl) {
-            formFields[key]._errorEl.textContent = errors[key];
-            formFields[key]._errorEl.style.display = 'block';
-          }
-        });
-      }
-
-      function hasRequiredFields() {
-        var required = ['address', 'dns', 'peer_public_key', 'peer_endpoint'];
-        for (var i = 0; i < required.length; i++) {
-          if (!formFields[required[i]] || !formFields[required[i]].value.trim()) return false;
-        }
-        return true;
-      }
-
-      function updateButtonState() {
-        var hasFields = hasRequiredFields();
-        if (saveBtn) saveBtn.disabled = !hasFields;
-        if (enableCheckbox) enableCheckbox.disabled = !hasFields && !enableCheckbox.checked;
-      }
-
-      async function doConnect() {
-        clearErrors();
-        var body = {
-          private_key: formFields.private_key.value.trim(),
-          address: formFields.address.value.trim(),
-          dns: formFields.dns.value.trim(),
-          peer_public_key: formFields.peer_public_key.value.trim(),
-          peer_endpoint: formFields.peer_endpoint.value.trim(),
-          route_hosts: '',
+        var btnRow = h('div', { style: 'display:flex;gap:8px' });
+        var saveBtn = h('button', { className: 'btn btn-primary' }, isEdit ? 'Save' : 'Create');
+        saveBtn.onclick = async function() {
+          saveBtn.disabled = true;
+          var body = {};
+          fields.forEach(function(f) { body[f.key] = inputs[f.key].value.trim(); });
+          body.is_enabled = enableCb.checked;
+          body.priority = parseInt(body.priority) || 0;
+          body.healthcheck_interval = 60;
+          if (!body.healthcheck_method) body.healthcheck_method = 'HEAD';
+          try {
+            if (isEdit) {
+              await api.put('/api/wireguard/profiles/' + profile.id, body);
+              toast.success('Profile saved');
+            } else {
+              await api.post('/api/wireguard/profiles', body);
+              toast.success('Profile created');
+            }
+            renderPage();
+          } catch (err) { toast.error(err.message); }
+          saveBtn.disabled = false;
         };
+        btnRow.appendChild(saveBtn);
 
-        try {
-          var resp = await fetch('/api/wireguard/connect', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + state.accessToken },
-            body: JSON.stringify(body),
-          });
-          var data = await resp.json();
+        if (isEdit) {
+          var deleteBtn = h('button', { className: 'btn btn-danger' }, 'Delete');
+          deleteBtn.onclick = async function() {
+            if (!confirm('Delete profile "' + (profile.name || '') + '"?')) return;
+            try {
+              await api.del('/api/wireguard/profiles/' + profile.id);
+              toast.success('Profile deleted');
+              selectedProfileId = null;
+              renderPage();
+            } catch (err) { toast.error(err.message); }
+          };
+          btnRow.appendChild(deleteBtn);
 
-          if (resp.status === 422 && data.errors) {
-            showErrors(data.errors);
-            enableCheckbox.checked = false;
-            return;
-          }
-          if (!resp.ok) {
-            toast.error(data.error || 'Connection failed');
-            enableCheckbox.checked = false;
-            return;
-          }
+          var reconnectBtn = h('button', { className: 'btn btn-secondary' }, 'Reconnect');
+          reconnectBtn.onclick = async function() {
+            reconnectBtn.disabled = true;
+            try {
+              await api.post('/api/wireguard/profiles/' + profile.id + '/reconnect');
+              toast.success('Reconnecting...');
+              renderPage();
+            } catch (err) { toast.error(err.message); }
+            reconnectBtn.disabled = false;
+          };
+          btnRow.appendChild(reconnectBtn);
 
-          enableCheckbox.checked = true;
-          setFieldsDisabled(true);
-          updateStatus(data);
-          startPolling();
-          toast.success('WireGuard connected');
-        } catch (err) {
-          toast.error(err.message);
-          enableCheckbox.checked = false;
+          var activateBtn = h('button', { className: 'btn btn-secondary' }, 'Set Active');
+          activateBtn.onclick = async function() {
+            try {
+              await api.post('/api/wireguard/profiles/' + profile.id + '/activate');
+              toast.success('Activated');
+              renderPage();
+            } catch (err) { toast.error(err.message); }
+          };
+          btnRow.appendChild(activateBtn);
         }
+
+        form.appendChild(btnRow);
+        return form;
       }
 
-      async function doDisconnect() {
-        clearErrors();
+      async function renderPage() {
         try {
-          var resp = await fetch('/api/wireguard/disconnect', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + state.accessToken },
+          var [profiles, multiStatus] = await Promise.all([
+            api.get('/api/wireguard/profiles'),
+            api.get('/api/wireguard/multi/status')
+          ]);
+
+          container.innerHTML = '';
+
+          var header = h('div', { style: 'display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;flex-wrap:wrap;gap:8px' });
+          header.appendChild(h('h2', { style: 'margin:0' }, 'WireGuard VPN'));
+
+          var activeLabel = multiStatus.active_profile_name || 'None';
+          var activeColor = multiStatus.active_profile_id ? 'var(--success)' : 'var(--text-muted)';
+          var statusBadge = h('div', { style: 'display:flex;align-items:center;gap:6px' });
+          statusBadge.appendChild(h('span', { style: 'width:8px;height:8px;border-radius:50%;background:' + activeColor + ';display:inline-block' }));
+          statusBadge.appendChild(h('span', { style: 'font-weight:500;color:' + activeColor }, activeLabel));
+          header.appendChild(statusBadge);
+          container.appendChild(header);
+
+          var controls = h('div', { style: 'display:flex;align-items:center;gap:8px;margin-bottom:16px;flex-wrap:wrap' });
+          var profileSelect = h('select', { style: 'padding:8px 10px;background:var(--bg-input);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text-primary);font-size:0.9em;' });
+          profileSelect.appendChild(h('option', { value: '' }, '-- Select Profile --'));
+          profiles.forEach(function(p) {
+            var label = p.name + (p.id === multiStatus.active_profile_id ? ' \u2705' : '');
+            var opt = h('option', { value: p.id }, label);
+            if (p.id === selectedProfileId) opt.selected = true;
+            profileSelect.appendChild(opt);
           });
-          var data = await resp.json();
-          enableCheckbox.checked = false;
-          setFieldsDisabled(false);
-          updateStatus(data);
-          stopPolling();
-          toast.success('WireGuard disconnected');
+          profileSelect.onchange = function() {
+            selectedProfileId = profileSelect.value || null;
+            renderPage();
+          };
+          controls.appendChild(profileSelect);
+
+          var addBtn = h('button', { className: 'btn btn-primary btn-sm' }, '+ Add Profile');
+          addBtn.onclick = function() { selectedProfileId = 'new'; renderPage(); };
+          controls.appendChild(addBtn);
+          container.appendChild(controls);
+
+          contentDiv = h('div');
+
+          if (selectedProfileId === 'new') {
+            contentDiv.appendChild(renderProfileForm(null));
+          } else if (selectedProfileId) {
+            var profile = profiles.find(function(p) { return p.id === selectedProfileId; });
+            if (profile) {
+              var ps = (multiStatus.profiles || []).find(function(p) { return p.id === selectedProfileId; });
+              if (ps) contentDiv.appendChild(renderProfileStatus(ps));
+              contentDiv.appendChild(renderProfileForm(profile));
+            }
+          } else if (profiles.length > 0) {
+            (multiStatus.profiles || []).forEach(function(ps) {
+              var card = h('div', { style: 'margin-bottom:12px;cursor:pointer' });
+              var nameRow = h('div', { style: 'display:flex;align-items:center;gap:8px;margin-bottom:4px' });
+              nameRow.appendChild(h('span', { style: 'font-weight:600;font-size:1.05em' }, ps.name || 'Unnamed'));
+              var st = ps.state || 'disconnected';
+              nameRow.appendChild(h('span', { style: 'font-size:0.85em;color:' + stateColor(st) }, stateLabel(st)));
+              if (ps.active) nameRow.appendChild(h('span', { className: 'badge badge-success', style: 'font-size:0.75em' }, 'Active'));
+              if (ps.healthy === true) nameRow.appendChild(h('span', { style: 'font-size:0.85em;color:var(--success)' }, '\u2705'));
+              if (ps.healthy === false) nameRow.appendChild(h('span', { style: 'font-size:0.85em;color:var(--danger)' }, '\u274C'));
+              card.appendChild(nameRow);
+              if (ps.exit_ip) card.appendChild(h('div', { style: 'font-size:0.85em;color:var(--text-muted)' }, 'Exit: ' + ps.exit_ip));
+              card.style.cssText = 'background:var(--bg-card);border:1px solid var(--border);border-radius:8px;padding:12px 16px;cursor:pointer;' + (ps.active ? 'border-left:3px solid var(--success);' : '');
+              card.onclick = function() { selectedProfileId = ps.id; renderPage(); };
+              contentDiv.appendChild(card);
+            });
+          } else {
+            contentDiv.appendChild(h('p', { style: 'color:var(--text-muted);text-align:center;padding:32px' }, 'No profiles configured. Click "+ Add Profile" to create one.'));
+          }
+
+          container.appendChild(contentDiv);
+
         } catch (err) {
-          toast.error(err.message);
+          container.innerHTML = '';
+          container.appendChild(h('p', { style: 'color: var(--danger)' }, 'Failed to load: ' + err.message));
         }
       }
 
       function startPolling() {
         stopPolling();
-        pollTimer = setInterval(async function() {
-          try {
-            var status = await api.get('/api/wireguard/status');
-            updateStatus(status);
-          } catch (e) {}
-        }, 5000);
+        pollTimer = setInterval(renderPage, 5000);
       }
 
       function stopPolling() {
         if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
       }
 
-      function buildForm(config) {
-        var form = h('div', null);
-
-        var heading = h('h3', { style: 'margin:0 0 16px 0' }, 'Configuration');
-        form.appendChild(heading);
-
-        var fields = [
-          { key: 'private_key', label: 'Private Key', type: 'password', placeholder: 'Base64-encoded WireGuard private key' },
-          { key: 'address', label: 'Address', placeholder: '10.20.30.40/24' },
-          { key: 'dns', label: 'DNS', placeholder: '1.1.1.1, 8.8.8.8' },
-          { key: 'peer_public_key', label: 'Peer Public Key', placeholder: 'Base64-encoded peer public key' },
-          { key: 'peer_endpoint', label: 'Peer Endpoint', placeholder: 'vpn.example.com:51820' },
-        ];
-
-        fields.forEach(function(f) {
-          var row = h('div', { style: 'margin-bottom:12px' });
-          row.appendChild(h('label', { style: 'display:block;font-weight:500;margin-bottom:4px;font-size:0.9em' }, f.label));
-
-          var input = h('input', { type: f.type || 'text', placeholder: f.placeholder || '' });
-          input.style.cssText = 'width:60%;padding:8px 10px;background:var(--bg-input);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text-primary);font-size:0.9em;box-sizing:border-box;max-width:100%;';
-          if (window.innerWidth < 600) input.style.width = '100%';
-
-          var val = config[f.key] || '';
-          if (f.key === 'private_key' && val === '***') {
-            input.placeholder = 'Enter to change';
-          } else {
-            input.value = val;
-          }
-
-          input.addEventListener('input', updateButtonState);
-          formFields[f.key] = input;
-          row.appendChild(input);
-
-          var errEl = h('div', { style: 'display:none;color:var(--danger);font-size:0.85em;margin-top:2px' });
-          input._errorEl = errEl;
-          row.appendChild(errEl);
-
-          if (f.hint) {
-            row.appendChild(h('div', { style: 'color:var(--text-muted);font-size:0.82em;margin-top:2px' }, f.hint));
-          }
-
-          form.appendChild(row);
-        });
-
-        var checkRow = h('div', { style: 'margin-bottom:16px;display:flex;align-items:center;gap:8px' });
-        enableCheckbox = h('input', { type: 'checkbox' });
-        enableCheckbox.addEventListener('change', function() {
-          if (enableCheckbox.checked) {
-            doConnect();
-          } else {
-            doDisconnect();
-          }
-        });
-        checkRow.appendChild(enableCheckbox);
-        checkRow.appendChild(h('label', { style: 'font-weight:500;cursor:pointer' }, 'Enable WireGuard VPN'));
-        form.appendChild(checkRow);
-
-        saveBtn = h('button', { className: 'btn btn-primary' }, 'Save & Connect');
-        saveBtn.addEventListener('click', function() {
-          enableCheckbox.checked = true;
-          doConnect();
-        });
-        form.appendChild(saveBtn);
-
-        var reconnectBtn = h('button', { className: 'btn btn-secondary', style: 'margin-left:8px;display:none' }, 'Reconnect');
-        reconnectBtn.addEventListener('click', async function() {
-          reconnectBtn.disabled = true;
-          reconnectBtn.textContent = 'Reconnecting...';
-          try {
-            var resp = await fetch('/api/wireguard/reconnect', {
-              method: 'POST',
-              headers: { 'Authorization': 'Bearer ' + state.accessToken },
-            });
-            var data = await resp.json();
-            if (!resp.ok) { toast.error(data.error || 'Reconnect failed'); return; }
-            updateStatus(data);
-            toast.success('WireGuard reconnected');
-          } catch (err) { toast.error(err.message); }
-          finally { reconnectBtn.disabled = false; reconnectBtn.textContent = 'Reconnect'; }
-        });
-        form.appendChild(reconnectBtn);
-
-        var origUpdateStatus = updateStatus;
-        updateStatus = function(status) {
-          origUpdateStatus(status);
-          reconnectBtn.style.display = (status.state === 'connected' || status.state === 'error') ? 'inline-block' : 'none';
-        };
-
-        return form;
-      }
-
-      try {
-        var status = await api.get('/api/wireguard/status');
-        container.innerHTML = '';
-
-        var header = h('div', { style: 'display:flex;align-items:center;justify-content:space-between;margin-bottom:16px' });
-        header.appendChild(h('h2', { style: 'margin:0' }, 'WireGuard VPN'));
-        var statusWrap = h('div', { style: 'display:flex;align-items:center;gap:6px' });
-        statusEl = h('span', { style: 'display:inline-flex;align-items:center;gap:4px' });
-        statusTextEl = h('span', { style: 'font-size:0.95em;font-weight:500' });
-        statusWrap.appendChild(statusEl);
-        statusWrap.appendChild(statusTextEl);
-        header.appendChild(statusWrap);
-        container.appendChild(header);
-
-        statsCardEl = h('div', { style: 'display:none;background:var(--bg-card);border:1px solid var(--border);border-left:3px solid var(--success);border-radius:8px;padding:16px;margin-bottom:20px;' });
-        container.appendChild(statsCardEl);
-
-        updateStatus(status);
-
-        var config = status.config || {};
-        var formEl = buildForm(config);
-        container.appendChild(formEl);
-
-        var isConnected = status.state === 'connected' || status.state === 'connecting';
-        if (isConnected) {
-          enableCheckbox.checked = true;
-          setFieldsDisabled(true);
-          startPolling();
-        }
-        updateButtonState();
-
-      } catch (err) {
-        container.innerHTML = '';
-        container.appendChild(h('p', { style: 'color: var(--danger)' }, 'Failed to load: ' + err.message));
-        return;
-      }
+      await renderPage();
+      startPolling();
 
       var observer = new MutationObserver(function() {
         if (!document.body.contains(container)) {

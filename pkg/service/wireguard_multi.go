@@ -49,6 +49,8 @@ func NewMultiWireGuardService(profileStore *store.WireGuardProfileStore, setting
 }
 
 func (s *MultiWireGuardService) Start(ctx context.Context) error {
+	s.migrateLegacyConfig(ctx)
+
 	profiles, err := s.profileStore.List(ctx)
 	if err != nil {
 		return fmt.Errorf("listing profiles: %w", err)
@@ -65,6 +67,44 @@ func (s *MultiWireGuardService) Start(ctx context.Context) error {
 
 	s.selectBestActive(ctx)
 	return nil
+}
+
+func (s *MultiWireGuardService) migrateLegacyConfig(ctx context.Context) {
+	profiles, _ := s.profileStore.List(ctx)
+	if len(profiles) > 0 {
+		return
+	}
+
+	get := func(key string) string {
+		val, _ := s.settingsService.Get(ctx, key)
+		return val
+	}
+
+	addr := get("wg_address")
+	if addr == "" {
+		return
+	}
+
+	enabled := get("wg_enabled") == "true"
+
+	p := &models.WireGuardProfile{
+		Name:          "Default",
+		PrivateKey:    get("wg_private_key"),
+		Address:       addr,
+		DNS:           get("wg_dns"),
+		PeerPublicKey: get("wg_peer_public_key"),
+		PeerEndpoint:  get("wg_peer_endpoint"),
+		RouteHosts:    get("wg_route_hosts"),
+		IsEnabled:     enabled,
+		Priority:      0,
+	}
+
+	if err := s.profileStore.Create(ctx, p); err != nil {
+		s.log.Error().Err(err).Msg("failed to migrate legacy wireguard config")
+		return
+	}
+
+	s.log.Info().Str("name", p.Name).Bool("enabled", enabled).Msg("migrated legacy wireguard config to profile")
 }
 
 func (s *MultiWireGuardService) Stop() {
