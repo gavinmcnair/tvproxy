@@ -13,19 +13,23 @@ const (
 )
 
 type Session struct {
-	ID           string
-	ChannelID    string
-	StreamID     string
-	StreamURL    string
-	StreamName   string
-	ChannelName  string
-	ProfileName  string
-	FilePath     string
-	TempDir      string
-	BufferedSecs float64
-	Duration     float64
-	Video        *ffmpeg.VideoInfo
-	AudioTracks  []ffmpeg.AudioTrack
+	ID              string
+	ChannelID       string
+	StreamID        string
+	StreamURL       string
+	StreamName      string
+	ChannelName     string
+	ProfileName     string
+	OutputVideoCodec string
+	OutputAudioCodec string
+	OutputContainer  string
+	OutputHWAccel    string
+	FilePath        string
+	TempDir         string
+	BufferedSecs    float64
+	Duration        float64
+	Video           *ffmpeg.VideoInfo
+	AudioTracks     []ffmpeg.AudioTrack
 	consumers    map[string]*Consumer
 	cancel       func()
 	done         chan struct{}

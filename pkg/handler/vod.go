@@ -201,12 +201,16 @@ func (h *VODHandler) Status(w http.ResponseWriter, r *http.Request) {
 	video, audioTracks, duration := h.vodService.GetProbeInfo(channelID)
 
 	resp := map[string]any{
-		"buffered":   buffered,
-		"ready":      done,
-		"error":      errMsg,
-		"recording":  h.vodService.IsRecording(channelID),
-		"profile":    sess.ProfileName,
-		"stream_url": sess.StreamURL,
+		"buffered":           buffered,
+		"ready":              done,
+		"error":              errMsg,
+		"recording":          h.vodService.IsRecording(channelID),
+		"profile":            sess.ProfileName,
+		"stream_url":         sess.StreamURL,
+		"output_video_codec": sess.OutputVideoCodec,
+		"output_audio_codec": sess.OutputAudioCodec,
+		"output_container":   sess.OutputContainer,
+		"output_hwaccel":     sess.OutputHWAccel,
 	}
 	if video != nil {
 		resp["video"] = video

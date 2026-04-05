@@ -129,6 +129,9 @@ func simplifyFrameRate(rate string) string {
 		return rate
 	}
 	fps := num / den
+	if fps <= 0 || fps > 300 {
+		return ""
+	}
 	if fps == float64(int(fps)) {
 		return strconv.Itoa(int(fps))
 	}

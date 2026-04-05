@@ -93,13 +93,22 @@ func (s *VODService) resolveStreamForChannel(ctx context.Context, channelID stri
 	return "", "", "", "", "", fmt.Errorf("no active streams for channel %s", channelID)
 }
 
-func (s *VODService) composeSessionArgs(ctx context.Context, profileName, streamURL, streamGroup string) (string, string, string) {
+type sessionArgs struct {
+	Command          string
+	Args             string
+	Container        string
+	OutputVideoCodec string
+	OutputAudioCodec string
+	OutputHWAccel    string
+}
+
+func (s *VODService) composeSessionArgs(ctx context.Context, profileName, streamURL, streamGroup string) sessionArgs {
 	if profileName == "" {
-		return "ffmpeg", "", "mp4"
+		return sessionArgs{Command: "ffmpeg", Container: "mp4"}
 	}
 	sp, err := s.streamProfileRepo.GetByName(ctx, profileName)
 	if err != nil {
-		return "ffmpeg", "", "mp4"
+		return sessionArgs{Command: "ffmpeg", Container: "mp4"}
 	}
 
 	globalHW, globalCodec := s.settingsService.ResolveGlobalDefaults(ctx)
@@ -110,6 +119,10 @@ func (s *VODService) composeSessionArgs(ctx context.Context, profileName, stream
 	videoCodec := sp.VideoCodec
 	if videoCodec == "default" || videoCodec == "" {
 		videoCodec = globalCodec
+	}
+	audioCodec := sp.AudioCodec
+	if audioCodec == "default" || audioCodec == "" {
+		audioCodec = "aac"
 	}
 
 	var probe *ffmpeg.ProbeResult
@@ -129,7 +142,14 @@ func (s *VODService) composeSessionArgs(ctx context.Context, profileName, stream
 		AudioOnly:     audioOnly,
 		CustomCommand: sp.Args,
 	})
-	return command, args, sp.Container
+	return sessionArgs{
+		Command:          command,
+		Args:             args,
+		Container:        sp.Container,
+		OutputVideoCodec: videoCodec,
+		OutputAudioCodec: audioCodec,
+		OutputHWAccel:    hwaccel,
+	}
 }
 
 func (s *VODService) StartWatching(ctx context.Context, channelID string, profileName string, userAgent string, remoteAddr string) (string, string, string, bool, error) {
@@ -139,24 +159,28 @@ func (s *VODService) StartWatching(ctx context.Context, channelID string, profil
 	}
 
 	audioOnly := strings.EqualFold(streamGroup, "radio")
-	command, args, container := s.composeSessionArgs(ctx, profileName, streamURL, streamGroup)
+	sa := s.composeSessionArgs(ctx, profileName, streamURL, streamGroup)
 
 	_, consumerID, err := s.sessionMgr.GetOrCreateWithConsumer(ctx, session.StartOpts{
-		ChannelID:   channelID,
-		StreamID:    streamID,
-		StreamURL:   streamURL,
-		StreamName:  streamName,
-		ChannelName: channelName,
-		ProfileName: profileName,
-		Command:     command,
-		Args:        args,
-		OutputDir:   s.config.VODOutputDir,
+		ChannelID:        channelID,
+		StreamID:         streamID,
+		StreamURL:        streamURL,
+		StreamName:       streamName,
+		ChannelName:      channelName,
+		ProfileName:      profileName,
+		OutputVideoCodec: sa.OutputVideoCodec,
+		OutputAudioCodec: sa.OutputAudioCodec,
+		OutputContainer:  sa.Container,
+		OutputHWAccel:    sa.OutputHWAccel,
+		Command:          sa.Command,
+		Args:             sa.Args,
+		OutputDir:        s.config.VODOutputDir,
 	}, session.ConsumerViewer)
 	if err != nil {
 		return "", "", "", false, err
 	}
 
-	s.log.Info().Str("channel_id", channelID).Str("profile", profileName).Str("container", container).Str("user_agent", userAgent).Str("remote", remoteAddr).Msg("viewer started")
+	s.log.Info().Str("channel_id", channelID).Str("profile", profileName).Str("container", sa.Container).Str("user_agent", userAgent).Str("remote", remoteAddr).Msg("viewer started")
 
 	if s.activity != nil {
 		s.activity.Add(ViewerOpts{
@@ -170,7 +194,7 @@ func (s *VODService) StartWatching(ctx context.Context, channelID string, profil
 		})
 	}
 
-	return channelID, consumerID, container, audioOnly, nil
+	return channelID, consumerID, sa.Container, audioOnly, nil
 }
 
 func (s *VODService) StartWatchingStream(ctx context.Context, streamID string, profileName string, userAgent string, remoteAddr string) (string, string, string, error) {
@@ -187,24 +211,28 @@ func (s *VODService) StartWatchingStream(ctx context.Context, streamID string, p
 		streamURL = audioOnlyURL(*stream)
 	}
 
-	command, args, container := s.composeSessionArgs(ctx, profileName, streamURL, stream.Group)
+	sa := s.composeSessionArgs(ctx, profileName, streamURL, stream.Group)
 
 	_, consumerID, err := s.sessionMgr.GetOrCreateWithConsumer(ctx, session.StartOpts{
-		ChannelID:   streamID,
-		StreamID:    streamID,
-		StreamURL:   streamURL,
-		StreamName:  stream.Name,
-		ChannelName: stream.Name,
-		ProfileName: profileName,
-		Command:     command,
-		Args:        args,
-		OutputDir:   s.config.VODOutputDir,
+		ChannelID:        streamID,
+		StreamID:         streamID,
+		StreamURL:        streamURL,
+		StreamName:       stream.Name,
+		ChannelName:      stream.Name,
+		ProfileName:      profileName,
+		OutputVideoCodec: sa.OutputVideoCodec,
+		OutputAudioCodec: sa.OutputAudioCodec,
+		OutputContainer:  sa.Container,
+		OutputHWAccel:    sa.OutputHWAccel,
+		Command:          sa.Command,
+		Args:             sa.Args,
+		OutputDir:        s.config.VODOutputDir,
 	}, session.ConsumerViewer)
 	if err != nil {
 		return "", "", "", err
 	}
 
-	s.log.Info().Str("stream_id", streamID).Str("profile", profileName).Str("container", container).Str("user_agent", userAgent).Str("remote", remoteAddr).Msg("viewer started")
+	s.log.Info().Str("stream_id", streamID).Str("profile", profileName).Str("container", sa.Container).Str("user_agent", userAgent).Str("remote", remoteAddr).Msg("viewer started")
 
 	if s.activity != nil {
 		s.activity.Add(ViewerOpts{
@@ -219,24 +247,28 @@ func (s *VODService) StartWatchingStream(ctx context.Context, streamID string, p
 		})
 	}
 
-	return streamID, consumerID, container, nil
+	return streamID, consumerID, sa.Container, nil
 }
 
 func (s *VODService) StartWatchingFile(ctx context.Context, filePath, name, profileName, userAgent, remoteAddr string) (string, string, string, float64, bool, error) {
-	command, args, container := s.composeSessionArgs(ctx, profileName, filePath, "")
+	sa := s.composeSessionArgs(ctx, profileName, filePath, "")
 
 	sessionKey := "file:" + filepath.Base(filePath)
 
 	_, consumerID, err := s.sessionMgr.GetOrCreateWithConsumer(ctx, session.StartOpts{
-		ChannelID:   sessionKey,
-		StreamID:    sessionKey,
-		StreamURL:   filePath,
-		StreamName:  name,
-		ChannelName: name,
-		ProfileName: profileName,
-		Command:     command,
-		Args:        args,
-		OutputDir:   s.config.VODOutputDir,
+		ChannelID:        sessionKey,
+		StreamID:         sessionKey,
+		StreamURL:        filePath,
+		StreamName:       name,
+		ChannelName:      name,
+		ProfileName:      profileName,
+		OutputVideoCodec: sa.OutputVideoCodec,
+		OutputAudioCodec: sa.OutputAudioCodec,
+		OutputContainer:  sa.Container,
+		OutputHWAccel:    sa.OutputHWAccel,
+		Command:          sa.Command,
+		Args:             sa.Args,
+		OutputDir:        s.config.VODOutputDir,
 	}, session.ConsumerViewer)
 	if err != nil {
 		return "", "", "", 0, false, err
@@ -266,7 +298,7 @@ func (s *VODService) StartWatchingFile(ctx context.Context, filePath, name, prof
 		})
 	}
 
-	return sessionKey, consumerID, container, duration, audioOnly, nil
+	return sessionKey, consumerID, sa.Container, duration, audioOnly, nil
 }
 
 func (s *VODService) StopWatching(channelID string, consumerID string) {

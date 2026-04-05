@@ -28,15 +28,19 @@ import (
 const maxBufferedSecs = 172800.0
 
 type StartOpts struct {
-	ChannelID   string
-	StreamID    string
-	StreamURL   string
-	StreamName  string
-	ChannelName string
-	ProfileName string
-	Command     string
-	Args        string
-	OutputDir   string
+	ChannelID        string
+	StreamID         string
+	StreamURL        string
+	StreamName       string
+	ChannelName      string
+	ProfileName      string
+	OutputVideoCodec string
+	OutputAudioCodec string
+	OutputContainer  string
+	OutputHWAccel    string
+	Command          string
+	Args             string
+	OutputDir        string
 }
 
 type Manager struct {
@@ -342,9 +346,13 @@ func (m *Manager) GetOrCreateWithConsumer(ctx context.Context, opts StartOpts, c
 		StreamURL:   opts.StreamURL,
 		StreamName:  opts.StreamName,
 		ChannelName: opts.ChannelName,
-		ProfileName: opts.ProfileName,
-		FilePath:    filePath,
-		TempDir:     tempDir,
+		ProfileName:      opts.ProfileName,
+		OutputVideoCodec: opts.OutputVideoCodec,
+		OutputAudioCodec: opts.OutputAudioCodec,
+		OutputContainer:  opts.OutputContainer,
+		OutputHWAccel:    opts.OutputHWAccel,
+		FilePath:         filePath,
+		TempDir:          tempDir,
 		consumers:   make(map[string]*Consumer),
 		cancel:      cancel,
 		done:        make(chan struct{}),

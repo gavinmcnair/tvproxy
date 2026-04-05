@@ -3113,7 +3113,6 @@
 
     overlay.appendChild(modal);
     overlay.onclick = function(e) {
-      if (e.target === overlay) cleanup();
       audioMenu.style.display = 'none';
     };
     document.body.appendChild(overlay);
@@ -3313,8 +3312,21 @@
 
     function restartPlayback() {
       if (retryTimeout) { clearTimeout(retryTimeout); retryTimeout = null; }
-      if (dashPlayer) {
+      if (dashPlayer && dvr) {
+        statusEl.style.color = '#ffa726';
+        statusEl.textContent = 'Reconnecting...';
+        waitForStream().then(function() {
+          return fetch(streamSrc).then(function() {}).catch(function() {});
+        }).then(function() {
+          dashPlayer.attachSource(streamSrc);
+          videoEl.play().catch(function() {});
+        }).catch(function() {
+          statusEl.style.color = '#ff6b6b';
+          statusEl.textContent = 'Reconnect failed';
+        });
+      } else if (dashPlayer) {
         dashPlayer.attachSource(streamSrc);
+        videoEl.play().catch(function() {});
       } else if (videoEl) {
         videoEl.src = streamSrc;
         videoEl.play().catch(function() {});
@@ -3425,6 +3437,10 @@
             probeData = { video: st.video || null, audio_tracks: st.audio_tracks || [], duration: st.duration, profile: st.profile || '' };
             buildAudioMenu(probeData.audio_tracks);
           }
+          if (st.output_video_codec) outputCodecs.video = st.output_video_codec;
+          if (st.output_audio_codec) outputCodecs.audio = st.output_audio_codec;
+          if (st.output_container) outputCodecs.container = st.output_container;
+          if (st.output_hwaccel) outputCodecs.hwaccel = st.output_hwaccel;
           if (st.stream_url && st.stream_url.startsWith('rtsp://') && !signalInterval) {
             satipStreamUrl = st.stream_url;
             var pollSignal = async function() {
@@ -3442,6 +3458,11 @@
       }, 2000);
     }
 
+    var outputCodecs = { video: '', audio: '', container: '', hwaccel: '' };
+    var lastBufferedTime = 0;
+    var lastBufferedTs = 0;
+    var transcodeSpeed = 0;
+
     function updateStats() {
       if (playerCtx.signal.aborted || statsOverlay.style.display === 'none') return;
       var vi = probeData && probeData.video ? probeData.video : null;
@@ -3450,23 +3471,61 @@
       var res = videoEl && videoEl.videoWidth ? videoEl.videoWidth + 'x' + videoEl.videoHeight : null;
       var buf = videoEl && videoEl.buffered.length > 0 ? (videoEl.buffered.end(0) - videoEl.currentTime).toFixed(1) + 's' : '0s';
 
+      if (dvrTracker && dvrTracker.buffered > 0) {
+        var now = Date.now();
+        if (lastBufferedTs > 0) {
+          var elapsed = (now - lastBufferedTs) / 1000;
+          if (elapsed > 0.5) {
+            var mediaDelta = dvrTracker.buffered - lastBufferedTime;
+            transcodeSpeed = mediaDelta / elapsed;
+            lastBufferedTime = dvrTracker.buffered;
+            lastBufferedTs = now;
+          }
+        } else {
+          lastBufferedTime = dvrTracker.buffered;
+          lastBufferedTs = Date.now();
+        }
+      }
+
       var left = [];
+      if (vi || activeAudio) {
+        var inputParts = [];
+        if (vi) {
+          var vIn = esc(vi.codec) + (vi.profile ? ' (' + esc(vi.profile) + ')' : '');
+          if (vi.pix_fmt) vIn += ' ' + esc(vi.pix_fmt);
+          if (vi.color_space && vi.color_space !== 'unknown') vIn += ' ' + esc(vi.color_space);
+          if (vi.field_order && vi.field_order !== 'unknown' && vi.field_order !== 'progressive') vIn += ' ' + esc(vi.field_order);
+          inputParts.push(vIn);
+        }
+        if (activeAudio) {
+          var aIn = esc(activeAudio.codec || '?');
+          if (activeAudio.language) aIn += ' [' + esc(activeAudio.language) + ']';
+          if (activeAudio.channels) aIn += ' ' + activeAudio.channels + 'ch';
+          inputParts.push(aIn);
+        }
+        left.push('In: ' + inputParts.join(' | '));
+      }
+      if (outputCodecs.video || outputCodecs.audio) {
+        var outParts = [];
+        if (outputCodecs.video) outParts.push(esc(outputCodecs.video));
+        if (outputCodecs.audio) outParts.push(esc(outputCodecs.audio));
+        if (outputCodecs.container) outParts.push(esc(outputCodecs.container));
+        if (outputCodecs.hwaccel && outputCodecs.hwaccel !== 'none') outParts.push(esc(outputCodecs.hwaccel.toUpperCase()));
+        left.push('Out: ' + outParts.join(' | '));
+      }
       if (res) left.push(res);
       if (vi) {
-        left.push(esc(vi.codec) + (vi.profile ? ' (' + esc(vi.profile) + ')' : ''));
         if (vi.fps) left.push(esc(vi.fps) + ' fps');
         if (vi.bit_rate) left.push((parseInt(vi.bit_rate) / 1000).toFixed(0) + ' kbps');
-        if (vi.field_order && vi.field_order !== 'unknown' && vi.field_order !== 'progressive') left.push(esc(vi.field_order));
-        if (vi.pix_fmt) left.push(esc(vi.pix_fmt));
-        if (vi.color_space && vi.color_space !== 'unknown') left.push(esc(vi.color_space));
       }
-      if (activeAudio) {
-        var aLabel = esc(activeAudio.codec || '?');
-        if (activeAudio.language) aLabel += ' [' + esc(activeAudio.language) + ']';
-        if (activeAudio.channels) aLabel += ' ' + activeAudio.channels + 'ch';
-        left.push(aLabel);
+      var playbackParts = ['buf ' + esc(buf)];
+      if (transcodeSpeed > 0) playbackParts.push(transcodeSpeed.toFixed(1) + 'x');
+      var quality = videoEl && videoEl.getVideoPlaybackQuality ? videoEl.getVideoPlaybackQuality() : null;
+      if (quality) {
+        var dropColor = quality.droppedVideoFrames > 50 ? '#ff6b6b' : quality.droppedVideoFrames > 0 ? '#ffb300' : '#4caf50';
+        playbackParts.push('<span style="color:' + dropColor + '">' + quality.droppedVideoFrames + ' dropped</span>');
       }
-      left.push('buf ' + esc(buf));
+      left.push(playbackParts.join(' | '));
       if (probeData && probeData.profile) left.push(esc(probeData.profile));
 
       var right = [];
@@ -4605,9 +4664,60 @@
         }
       }
 
+      async function renderActive(activeDiv) {
+        try {
+          var activity = await api.get('/api/activity');
+          var recordings = (activity || []).filter(function(v) { return v.type === 'recording'; });
+          activeDiv.innerHTML = '';
+          if (recordings.length === 0) {
+            activeDiv.appendChild(h('p', { style: 'color: var(--text-muted); padding: 16px;' }, 'No active recordings.'));
+            return;
+          }
+          var table = h('table', { className: 'table' });
+          table.innerHTML = '<thead><tr><th>Channel</th><th>Profile</th><th>Duration</th><th>Actions</th></tr></thead>';
+          var tbody = h('tbody');
+          recordings.forEach(function(rec) {
+            var secs = Math.floor((Date.now() - new Date(rec.started_at).getTime()) / 1000);
+            if (secs < 0) secs = 0;
+            var m = Math.floor(secs / 60);
+            var s = secs % 60;
+            var durStr = m + ':' + String(s).padStart(2, '0');
+            var stopBtn = h('button', { className: 'btn btn-danger btn-sm', onClick: async function() {
+              stopBtn.disabled = true;
+              stopBtn.textContent = 'Stopping...';
+              try {
+                await api.del('/api/vod/record/' + rec.channel_id);
+                renderActive(activeDiv);
+              } catch(e) {
+                stopBtn.textContent = 'Failed';
+                setTimeout(function() { stopBtn.textContent = 'Stop'; stopBtn.disabled = false; }, 2000);
+              }
+            }}, 'Stop');
+            var tr = h('tr', null,
+              h('td', null, rec.channel_name || rec.stream_name || '?'),
+              h('td', null, rec.profile_name || '-'),
+              h('td', null, durStr),
+              h('td', null, stopBtn)
+            );
+            tbody.appendChild(tr);
+          });
+          table.appendChild(tbody);
+          activeDiv.appendChild(table);
+        } catch(err) {
+          activeDiv.innerHTML = '';
+          activeDiv.appendChild(h('p', { style: 'color: var(--danger)' }, 'Failed to load: ' + err.message));
+        }
+      }
+
       container.innerHTML = '';
 
-      var scheduledSection = h('div', { className: 'table-container' },
+      var activeSection = h('div', { className: 'table-container' },
+        h('div', { className: 'table-header' }, h('h3', null, 'Active Recordings'))
+      );
+      var activeDiv = h('div');
+      activeSection.appendChild(activeDiv);
+
+      var scheduledSection = h('div', { className: 'table-container', style: 'margin-top: 16px;' },
         h('div', { className: 'table-header' }, h('h3', null, 'Scheduled Recordings'))
       );
       var scheduledDiv = h('div');
@@ -4619,13 +4729,15 @@
       var completedDiv = h('div');
       completedSection.appendChild(completedDiv);
 
+      container.appendChild(activeSection);
       container.appendChild(scheduledSection);
       container.appendChild(completedSection);
 
+      renderActive(activeDiv);
       renderScheduled(scheduledDiv);
       renderCompleted(completedDiv);
 
-      pollTimer = setInterval(function() { renderScheduled(scheduledDiv); }, 5000);
+      pollTimer = setInterval(function() { renderActive(activeDiv); renderScheduled(scheduledDiv); }, 5000);
 
       var observer = new MutationObserver(function() {
         if (!document.body.contains(container)) {
@@ -5341,6 +5453,26 @@
           }
 
           card.appendChild(detailsGrid);
+
+          if (isRecording && v.channel_id) {
+            var stopBtn = h('button', {
+              className: 'btn btn-sm btn-danger',
+              style: 'align-self:flex-start;margin-top:4px;font-size:0.85em;padding:4px 12px;',
+              onclick: async function() {
+                stopBtn.disabled = true;
+                stopBtn.textContent = 'Stopping...';
+                try {
+                  await api.del('/api/vod/record/' + v.channel_id);
+                  await fetchAndRender();
+                } catch(e) {
+                  stopBtn.textContent = 'Failed';
+                  setTimeout(function() { stopBtn.textContent = 'Stop Recording'; stopBtn.disabled = false; }, 2000);
+                }
+              }
+            }, 'Stop Recording');
+            card.appendChild(stopBtn);
+          }
+
           grid.appendChild(card);
         });
         container.appendChild(grid);
