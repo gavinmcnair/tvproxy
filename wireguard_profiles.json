@@ -1,0 +1,19 @@
+[
+  {
+    "id": "782d8491-9d79-4026-8216-2bd289edc333",
+    "name": "Bulgaria",
+    "private_key": "IpUvutIHmyz+QORT6JVhXd7iPuYqPW2KeO/Cc5vCRKY=",
+    "address": "10.34.232.137/16",
+    "dns": "10.35.53.1",
+    "peer_public_key": "W31EZNwNi1bhP+Y1L+8QU6Q5snHFJWg+neN7J7934wQ=",
+    "peer_endpoint": "bg-sof.pvdata.host:3389",
+    "route_hosts": "",
+    "healthcheck_url": "http://t.41rpa.uk:8880",
+    "healthcheck_method": "HEAD",
+    "healthcheck_interval": 60,
+    "is_enabled": false,
+    "priority": 0,
+    "created_at": "2026-04-05T11:58:08.597045+01:00",
+    "updated_at": "2026-04-05T11:58:30.319826+01:00"
+  }
+]

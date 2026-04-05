@@ -276,6 +276,7 @@ func main() {
 	wm.Add("recording_scheduler", worker.NewSchedulerWorker(schedulerService, 30*time.Second, log))
 	wm.Add("wal_checkpoint", worker.NewWALCheckpointWorker(db, 5*time.Minute, log))
 	wm.Add("wireguard", worker.NewWireGuardWorker(wgService, 30*time.Second, log))
+	wm.Add("wireguard_multi", worker.NewMultiWireGuardWorker(wgMultiService, 30*time.Second, 60*time.Second, log))
 	wm.Start(ctx)
 
 	srv := &http.Server{
