@@ -249,6 +249,12 @@
 
     _saveToStorage() {
       if (!this._storageKey || !this._data) return;
+      if (this._data.length === 0) {
+        localStorage.removeItem(this._storageKey);
+        localStorage.removeItem(this._storageKey + '_etag');
+        this._etag = null;
+        return;
+      }
       try {
         localStorage.setItem(this._storageKey, JSON.stringify(this._data));
         if (this._etagEndpoint && this._etag) {
@@ -283,7 +289,7 @@
     _refreshInBackground() {
       (async () => {
         try {
-          if (this._etagEndpoint && this._etag) {
+          if (this._etagEndpoint && this._etag && this._data && this._data.length > 0) {
             var check = await api.getConditional(this._etagEndpoint, this._etag);
             if (check.status === 304) return;
           }
