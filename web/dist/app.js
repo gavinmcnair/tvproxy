@@ -5089,6 +5089,7 @@
           });
           profileSelect.onchange = function() {
             selectedProfileId = profileSelect.value || null;
+            if (selectedProfileId) stopPolling(); else startPolling();
             renderPage();
           };
           controls.appendChild(profileSelect);
@@ -5147,7 +5148,7 @@
       }
 
       await renderPage();
-      startPolling();
+      if (!selectedProfileId || selectedProfileId === 'new') startPolling();
 
       var observer = new MutationObserver(function() {
         if (!document.body.contains(container)) {
