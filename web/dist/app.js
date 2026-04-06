@@ -3467,13 +3467,16 @@
       if (dashPlayer) {
         var win = dashPlayer.getDvrWindow();
         var knownDur = dvr.duration || epgDuration || 0;
-        var effectiveDur = knownDur > 0 ? knownDur : win.end;
-        var target = pct * effectiveDur;
-        if (target > win.end && dvr && dvr.duration > 0 && !seekRow._seeking) {
+        var seekOff = (dvr && dvr._seekOffset) || 0;
+        var effectiveDur = knownDur > 0 ? knownDur : (seekOff + win.end);
+        var absTarget = pct * effectiveDur;
+        var relTarget = absTarget - seekOff;
+        if (relTarget > win.end && dvr && dvr.duration > 0 && !seekRow._seeking) {
           seekRow._seeking = true;
           statusEl.style.color = '#ffa726';
           statusEl.textContent = 'Seeking...';
-          fetch('/vod/' + dvr.id + '/seek?position=' + target.toFixed(1), { method: 'POST' }).then(function() {
+          dvr._seekOffset = absTarget;
+          fetch('/vod/' + dvr.id + '/seek?position=' + absTarget.toFixed(1), { method: 'POST' }).then(function() {
             restartPlayback();
           }).catch(function() {
             statusEl.textContent = 'Seek failed';
@@ -3482,9 +3485,9 @@
           });
           return;
         }
-        target = Math.max(win.start, Math.min(win.end - 1, target));
-        console.log('SEEK: pct=' + pct.toFixed(3), 'effectiveDur=' + effectiveDur.toFixed(1), 'dvrWindow=', JSON.stringify(win), 'target=' + target.toFixed(1), 'currentTime=' + videoEl.currentTime.toFixed(1));
-        dashPlayer.seek(target);
+        var dashTarget = Math.max(win.start, Math.min(win.end - 1, relTarget));
+        console.log('SEEK: pct=' + pct.toFixed(3), 'absTarget=' + absTarget.toFixed(1), 'relTarget=' + relTarget.toFixed(1), 'dashTarget=' + dashTarget.toFixed(1), 'seekOff=' + seekOff.toFixed(1));
+        dashPlayer.seek(dashTarget);
       } else {
         var dur = videoEl.duration;
         if (dur && isFinite(dur)) videoEl.currentTime = pct * dur;
@@ -3554,17 +3557,21 @@
 
       if (dashPlayer) {
         var win = dashPlayer.getDvrWindow();
-        var effectiveDur = knownDur > 0 ? knownDur : win.end;
+        var seekOff = (dvr && dvr._seekOffset) || 0;
+        var effectiveDur = knownDur > 0 ? knownDur : (seekOff + win.end);
         if (win.size > 0 && effectiveDur > 0) {
-          seekPlayed.style.width = ((cur / effectiveDur) * 100) + '%';
-          seekThumb.style.left = ((cur / effectiveDur) * 100) + '%';
-          seekTranscoded.style.width = ((win.end / effectiveDur) * 100) + '%';
+          var absCur = seekOff + cur;
+          var absTranscoded = seekOff + win.end;
+          seekPlayed.style.width = ((absCur / effectiveDur) * 100) + '%';
+          seekThumb.style.left = ((absCur / effectiveDur) * 100) + '%';
+          seekTranscoded.style.width = ((absTranscoded / effectiveDur) * 100) + '%';
           var bufEnd = 0;
-          if (videoEl.buffered.length > 0) bufEnd = videoEl.buffered.end(videoEl.buffered.length - 1);
+          if (videoEl.buffered.length > 0) bufEnd = seekOff + videoEl.buffered.end(videoEl.buffered.length - 1);
           seekBuffered.style.width = ((bufEnd / effectiveDur) * 100) + '%';
-          timeDisplay.textContent = fmtCtrlTime(cur) + ' / ' + fmtCtrlTime(effectiveDur);
+          timeDisplay.textContent = fmtCtrlTime(absCur) + ' / ' + fmtCtrlTime(effectiveDur);
         } else {
-          timeDisplay.textContent = fmtCtrlTime(cur);
+          var absCur = seekOff + cur;
+          timeDisplay.textContent = fmtCtrlTime(absCur);
         }
       } else {
         if (isFinite(dur) && dur > 0) {
@@ -3914,6 +3921,7 @@
           if (st.output_audio_codec) outputCodecs.audio = st.output_audio_codec;
           if (st.output_container) outputCodecs.container = st.output_container;
           if (st.output_hwaccel) outputCodecs.hwaccel = st.output_hwaccel;
+          if (st.seek_offset != null) dvr._seekOffset = st.seek_offset;
           if (st.stream_url && st.stream_url.startsWith('rtsp://') && !signalInterval) {
             satipStreamUrl = st.stream_url;
             var pollSignal = async function() {

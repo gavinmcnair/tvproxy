@@ -229,6 +229,9 @@ func (h *VODHandler) Status(w http.ResponseWriter, r *http.Request) {
 	if duration >= 30 {
 		resp["duration"] = duration
 	}
+	if sess.SeekOffset > 0 {
+		resp["seek_offset"] = sess.SeekOffset
+	}
 	respondJSON(w, http.StatusOK, resp)
 }
 
