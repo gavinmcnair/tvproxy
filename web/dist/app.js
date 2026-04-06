@@ -992,6 +992,25 @@
       actionIcons.appendChild(copyIcon);
     }
 
+    var refreshIcon = document.createElement('button');
+    refreshIcon.style.cssText = iconBtnStyle + 'font-size:16px;';
+    refreshIcon.title = 'Refresh metadata';
+    refreshIcon.textContent = '\u21BB';
+    refreshIcon.onmouseenter = function() { refreshIcon.style.background = 'rgba(255,255,255,0.2)'; };
+    refreshIcon.onmouseleave = function() { refreshIcon.style.background = 'rgba(0,0,0,0.5)'; };
+    refreshIcon.onclick = function() {
+      refreshIcon.style.opacity = '0.5';
+      refreshIcon.disabled = true;
+      api.del('/api/tmdb/cache?query=' + encodeURIComponent(opts.title)).then(function() {
+        overlay.remove();
+        showProgrammeModal(opts);
+      }).catch(function() {
+        refreshIcon.style.opacity = '1';
+        refreshIcon.disabled = false;
+      });
+    };
+    actionIcons.appendChild(refreshIcon);
+
     metaRow.appendChild(actionIcons);
     titleBlock.appendChild(metaRow);
     backdrop.appendChild(titleBlock);

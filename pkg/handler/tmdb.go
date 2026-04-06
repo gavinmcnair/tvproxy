@@ -165,3 +165,22 @@ func (h *TMDBHandler) Details(w http.ResponseWriter, r *http.Request) {
 
 	respondJSON(w, http.StatusOK, result)
 }
+
+func (h *TMDBHandler) InvalidateCache(w http.ResponseWriter, r *http.Request) {
+	query := r.URL.Query().Get("query")
+	if query == "" {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	h.cache.Delete("search_" + query)
+	if h.cacheDir != "" {
+		safe := strings.Map(func(r rune) rune {
+			if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-' || r == '_' {
+				return r
+			}
+			return '_'
+		}, "search_"+query)
+		os.Remove(filepath.Join(h.cacheDir, safe+".json"))
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
