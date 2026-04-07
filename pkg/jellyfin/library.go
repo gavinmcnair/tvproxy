@@ -1,0 +1,437 @@
+package jellyfin
+
+import (
+	"context"
+	"fmt"
+	"net/http"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/go-chi/chi/v5"
+
+	"github.com/gavinmcnair/tvproxy/pkg/models"
+)
+
+const (
+	viewMoviesID  = "f0000000-0000-0000-0000-000000000001"
+	viewTVID      = "f0000000-0000-0000-0000-000000000002"
+	viewLiveTVID  = "f0000000-0000-0000-0000-000000000004"
+)
+
+func (s *Server) userViews(w http.ResponseWriter, r *http.Request) {
+	views := []BaseItemDto{
+		{
+			Name:           "Movies",
+			ServerID:       s.serverID,
+			ID:             viewMoviesID,
+			Type:           "CollectionFolder",
+			CollectionType: "movies",
+			IsFolder:       true,
+			ImageTags:      map[string]string{},
+		},
+		{
+			Name:           "TV Shows",
+			ServerID:       s.serverID,
+			ID:             viewTVID,
+			Type:           "CollectionFolder",
+			CollectionType: "tvshows",
+			IsFolder:       true,
+			ImageTags:      map[string]string{},
+		},
+		{
+			Name:           "Live TV",
+			ServerID:       s.serverID,
+			ID:             viewLiveTVID,
+			Type:           "CollectionFolder",
+			CollectionType: "livetv",
+			IsFolder:       true,
+			ImageTags:      map[string]string{},
+		},
+	}
+
+	s.respondJSON(w, http.StatusOK, BaseItemDtoQueryResult{
+		Items:            views,
+		TotalRecordCount: len(views),
+	})
+}
+
+func (s *Server) getItems(w http.ResponseWriter, r *http.Request) {
+	parentID := r.URL.Query().Get("parentId")
+	if parentID == "" {
+		parentID = r.URL.Query().Get("ParentId")
+	}
+	itemTypes := r.URL.Query().Get("includeItemTypes")
+	if itemTypes == "" {
+		itemTypes = r.URL.Query().Get("IncludeItemTypes")
+	}
+
+	ctx := r.Context()
+
+	switch {
+	case parentID == viewMoviesID || strings.Contains(itemTypes, "Movie"):
+		s.getMovies(w, r, ctx)
+	case parentID == viewTVID || strings.Contains(itemTypes, "Series"):
+		s.getSeries(w, r, ctx)
+	case parentID == viewLiveTVID:
+		s.liveTvChannels(w, r)
+	default:
+		s.respondJSON(w, http.StatusOK, BaseItemDtoQueryResult{
+			Items:            []BaseItemDto{},
+			TotalRecordCount: 0,
+		})
+	}
+}
+
+func (s *Server) getMovies(w http.ResponseWriter, r *http.Request, ctx context.Context) {
+	streams, err := s.streams.List(ctx)
+	if err != nil {
+		s.respondJSON(w, http.StatusOK, BaseItemDtoQueryResult{Items: []BaseItemDto{}, TotalRecordCount: 0})
+		return
+	}
+
+	var items []BaseItemDto
+	for _, st := range streams {
+		if st.VODType != "movie" {
+			continue
+		}
+
+		item := BaseItemDto{
+			Name:         st.Name,
+			ServerID:     s.serverID,
+			ID:           strings.ReplaceAll(st.ID, "-", ""),
+			Type:         "Movie",
+			MediaType:    "Video",
+			IsFolder:     false,
+			LocationType: "FileSystem",
+			ImageTags:    map[string]string{},
+			UserData:     &UserItemData{Key: st.ID},
+		}
+
+		lookupName := st.Name
+		if st.VODCollection != "" {
+			lookupName = st.VODCollection
+		}
+
+		if m := s.tmdbClient.LookupMovie(lookupName); m != nil {
+			item.Overview = m.Overview
+			item.CommunityRating = m.Rating
+			item.OfficialRating = m.Certification
+			item.Genres = m.Genres
+			if m.Year != "" {
+				if yr, err := strconv.Atoi(m.Year); err == nil {
+					item.ProductionYear = yr
+				}
+			}
+			if m.PosterPath != "" {
+				item.ImageTags["Primary"] = "tmdb"
+			}
+		}
+
+		if st.VODDuration > 0 {
+			item.RunTimeTicks = int64(st.VODDuration * 10000000)
+		}
+
+		items = append(items, item)
+	}
+
+	if items == nil {
+		items = []BaseItemDto{}
+	}
+
+	startIndex := 0
+	limit := len(items)
+	if si := r.URL.Query().Get("startIndex"); si != "" {
+		startIndex, _ = strconv.Atoi(si)
+	}
+	if li := r.URL.Query().Get("limit"); li != "" {
+		limit, _ = strconv.Atoi(li)
+	}
+
+	total := len(items)
+	if startIndex > len(items) {
+		items = []BaseItemDto{}
+	} else if startIndex+limit > len(items) {
+		items = items[startIndex:]
+	} else {
+		items = items[startIndex : startIndex+limit]
+	}
+
+	s.respondJSON(w, http.StatusOK, BaseItemDtoQueryResult{
+		Items:            items,
+		TotalRecordCount: total,
+		StartIndex:       startIndex,
+	})
+}
+
+func (s *Server) getSeries(w http.ResponseWriter, r *http.Request, ctx context.Context) {
+	streams, err := s.streams.List(ctx)
+	if err != nil {
+		s.respondJSON(w, http.StatusOK, BaseItemDtoQueryResult{Items: []BaseItemDto{}, TotalRecordCount: 0})
+		return
+	}
+
+	seriesMap := make(map[string]*BaseItemDto)
+	for _, st := range streams {
+		if st.VODType != "series" {
+			continue
+		}
+		key := st.VODSeries
+		if key == "" {
+			key = st.Name
+		}
+		if _, exists := seriesMap[key]; exists {
+			seriesMap[key].ChildCount++
+			continue
+		}
+
+		item := &BaseItemDto{
+			Name:         key,
+			ServerID:     s.serverID,
+			ID:           fmt.Sprintf("series_%x", hashString(key)),
+			Type:         "Series",
+			MediaType:    "Video",
+			IsFolder:     true,
+			LocationType: "FileSystem",
+			ChildCount:   1,
+			ImageTags:    map[string]string{},
+			UserData:     &UserItemData{Key: key},
+		}
+
+		if sr := s.tmdbClient.LookupSeries(key); sr != nil {
+			item.Overview = sr.Overview
+			item.CommunityRating = sr.Rating
+			item.OfficialRating = sr.Certification
+			item.Genres = sr.Genres
+			if sr.Year != "" {
+				if yr, err := strconv.Atoi(sr.Year); err == nil {
+					item.ProductionYear = yr
+				}
+			}
+			if sr.PosterPath != "" {
+				item.ImageTags["Primary"] = "tmdb"
+			}
+		}
+
+		seriesMap[key] = item
+	}
+
+	var items []BaseItemDto
+	for _, item := range seriesMap {
+		items = append(items, *item)
+	}
+	if items == nil {
+		items = []BaseItemDto{}
+	}
+
+	s.respondJSON(w, http.StatusOK, BaseItemDtoQueryResult{
+		Items:            items,
+		TotalRecordCount: len(items),
+	})
+}
+
+func (s *Server) getItem(w http.ResponseWriter, r *http.Request) {
+	itemID := chi.URLParam(r, "itemId")
+	ctx := r.Context()
+
+	if itemID == viewMoviesID || itemID == viewTVID || itemID == viewLiveTVID {
+		s.userViews(w, r)
+		return
+	}
+
+	stream, err := s.streams.GetByID(ctx, addDashes(itemID))
+	if err == nil && stream != nil {
+		item := s.streamToItem(stream)
+		s.respondJSON(w, http.StatusOK, item)
+		return
+	}
+
+	s.respondJSON(w, http.StatusOK, BaseItemDto{
+		Name:     "Unknown",
+		ServerID: s.serverID,
+		ID:       itemID,
+		Type:     "Video",
+	})
+}
+
+func (s *Server) getLatest(w http.ResponseWriter, r *http.Request) {
+	s.respondJSON(w, http.StatusOK, []BaseItemDto{})
+}
+
+func (s *Server) getResume(w http.ResponseWriter, r *http.Request) {
+	s.respondJSON(w, http.StatusOK, BaseItemDtoQueryResult{
+		Items:            []BaseItemDto{},
+		TotalRecordCount: 0,
+	})
+}
+
+func (s *Server) getSeasons(w http.ResponseWriter, r *http.Request) {
+	s.respondJSON(w, http.StatusOK, BaseItemDtoQueryResult{
+		Items:            []BaseItemDto{},
+		TotalRecordCount: 0,
+	})
+}
+
+func (s *Server) getEpisodes(w http.ResponseWriter, r *http.Request) {
+	s.respondJSON(w, http.StatusOK, BaseItemDtoQueryResult{
+		Items:            []BaseItemDto{},
+		TotalRecordCount: 0,
+	})
+}
+
+func (s *Server) getImage(w http.ResponseWriter, r *http.Request) {
+	itemID := chi.URLParam(r, "itemId")
+	ctx := r.Context()
+
+	stream, err := s.streams.GetByID(ctx, addDashes(itemID))
+	if err != nil || stream == nil {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+
+	lookupName := stream.Name
+	if stream.VODType == "series" && stream.VODSeries != "" {
+		lookupName = stream.VODSeries
+	}
+
+	posterURL := s.tmdbClient.LookupPoster(lookupName, stream.VODType)
+	if posterURL == "" && s.logoService != nil && stream.Logo != "" {
+		posterURL = s.logoService.Resolve(stream.Logo)
+	}
+
+	if posterURL != "" {
+		http.Redirect(w, r, posterURL, http.StatusTemporaryRedirect)
+		return
+	}
+
+	http.Error(w, "not found", http.StatusNotFound)
+}
+
+func (s *Server) playbackInfo(w http.ResponseWriter, r *http.Request) {
+	itemID := chi.URLParam(r, "itemId")
+
+	streamURL := fmt.Sprintf("%s/channel/%s?profile=Browser", s.baseURL, addDashes(itemID))
+
+	s.respondJSON(w, http.StatusOK, map[string]any{
+		"MediaSources": []MediaSource{
+			{
+				Protocol:             "Http",
+				ID:                   itemID,
+				Type:                 "Default",
+				Name:                 "Default",
+				IsRemote:             true,
+				SupportsTranscoding:  false,
+				SupportsDirectStream: true,
+				SupportsDirectPlay:   true,
+				IsInfiniteStream:     false,
+				TranscodingURL:       streamURL,
+			},
+		},
+		"PlaySessionId": itemID[:16],
+	})
+}
+
+func (s *Server) videoStream(w http.ResponseWriter, r *http.Request) {
+	itemID := chi.URLParam(r, "itemId")
+	streamURL := fmt.Sprintf("%s/channel/%s", s.baseURL, addDashes(itemID))
+	http.Redirect(w, r, streamURL, http.StatusTemporaryRedirect)
+}
+
+func (s *Server) liveTvInfo(w http.ResponseWriter, r *http.Request) {
+	s.respondJSON(w, http.StatusOK, map[string]any{
+		"Services":     []any{},
+		"IsEnabled":    true,
+		"EnabledUsers": []string{},
+	})
+}
+
+func (s *Server) liveTvChannels(w http.ResponseWriter, r *http.Request) {
+	channels, err := s.channels.List(r.Context())
+	if err != nil {
+		s.respondJSON(w, http.StatusOK, BaseItemDtoQueryResult{Items: []BaseItemDto{}, TotalRecordCount: 0})
+		return
+	}
+
+	var items []BaseItemDto
+	for _, ch := range channels {
+		item := BaseItemDto{
+			Name:          ch.Name,
+			ServerID:      s.serverID,
+			ID:            strings.ReplaceAll(ch.ID, "-", ""),
+			Type:          "LiveTvChannel",
+			MediaType:     "Video",
+			IsFolder:      false,
+			ChannelNumber: ch.ID[:8],
+			ImageTags:     map[string]string{},
+			UserData:      &UserItemData{Key: ch.ID},
+		}
+
+		if ch.Logo != "" {
+			item.ImageTags["Primary"] = "logo"
+		}
+
+		items = append(items, item)
+	}
+
+	if items == nil {
+		items = []BaseItemDto{}
+	}
+
+	s.respondJSON(w, http.StatusOK, BaseItemDtoQueryResult{
+		Items:            items,
+		TotalRecordCount: len(items),
+	})
+}
+
+func (s *Server) liveTvPrograms(w http.ResponseWriter, r *http.Request) {
+	s.respondJSON(w, http.StatusOK, BaseItemDtoQueryResult{
+		Items:            []BaseItemDto{},
+		TotalRecordCount: 0,
+	})
+}
+
+func (s *Server) liveTvGuideInfo(w http.ResponseWriter, r *http.Request) {
+	now := time.Now().UTC()
+	s.respondJSON(w, http.StatusOK, map[string]any{
+		"StartDate": now.Format(time.RFC3339),
+		"EndDate":   now.Add(7 * 24 * time.Hour).Format(time.RFC3339),
+	})
+}
+
+func (s *Server) streamToItem(st *models.Stream) BaseItemDto {
+	item := BaseItemDto{
+		Name:         st.Name,
+		ServerID:     s.serverID,
+		ID:           strings.ReplaceAll(st.ID, "-", ""),
+		Type:         "Video",
+		MediaType:    "Video",
+		IsFolder:     false,
+		LocationType: "FileSystem",
+		ImageTags:    map[string]string{},
+		UserData:     &UserItemData{Key: st.ID},
+	}
+	if st.VODType == "movie" {
+		item.Type = "Movie"
+	}
+	if st.VODDuration > 0 {
+		item.RunTimeTicks = int64(st.VODDuration * 10000000)
+	}
+	return item
+}
+
+func hashString(s string) uint32 {
+	var h uint32
+	for _, c := range s {
+		h = h*31 + uint32(c)
+	}
+	return h
+}
+
+func addDashes(id string) string {
+	id = strings.ReplaceAll(id, "-", "")
+	if len(id) == 32 {
+		return id[:8] + "-" + id[8:12] + "-" + id[12:16] + "-" + id[16:20] + "-" + id[20:]
+	}
+	return id
+}
+

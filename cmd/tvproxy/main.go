@@ -25,6 +25,7 @@ import (
 	"github.com/gavinmcnair/tvproxy/pkg/logocache"
 	"github.com/gavinmcnair/tvproxy/pkg/middleware"
 	"github.com/gavinmcnair/tvproxy/pkg/service"
+	"github.com/gavinmcnair/tvproxy/pkg/jellyfin"
 	"github.com/gavinmcnair/tvproxy/pkg/tmdb"
 	"github.com/gavinmcnair/tvproxy/pkg/session"
 	"github.com/gavinmcnair/tvproxy/pkg/store"
@@ -273,6 +274,31 @@ func main() {
 	versionedIndexBytes := buildVersionedIndex(distFS)
 	staticRoot := filepath.Join(filepath.Dir(cfg.DatabasePath), "static")
 	registerStaticRoutes(r, staticRoot, distFS, versionedIndexBytes)
+
+	jellyfinServer := jellyfin.NewServer("TVProxy", cfg.BaseURL, authService, channelStore, streamStore, epgStore, logoService, tmdbClient, log)
+	go func() {
+		jfRouter := chi.NewRouter()
+		jfRouter.Use(func(next http.Handler) http.Handler {
+			return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				auth := r.Header.Get("Authorization")
+				if len(auth) > 60 {
+					auth = auth[:60]
+				}
+				log.Info().Str("method", r.Method).Str("path", r.URL.Path).Str("query", r.URL.RawQuery).Str("auth", auth).Msg("jellyfin request")
+				next.ServeHTTP(w, r)
+			})
+		})
+		jfRouter.NotFound(func(w http.ResponseWriter, r *http.Request) {
+			log.Warn().Str("method", r.Method).Str("path", r.URL.Path).Msg("jellyfin 404 - unhandled endpoint")
+			http.Error(w, "not found", http.StatusNotFound)
+		})
+		jfRouter.Mount("/", jellyfinServer.Router())
+		jfAddr := ":8096"
+		log.Info().Str("addr", jfAddr).Msg("Jellyfin API server listening")
+		if err := http.ListenAndServe(jfAddr, jfRouter); err != nil {
+			log.Error().Err(err).Msg("Jellyfin API server error")
+		}
+	}()
 
 	syncTMDB := func() {
 		streams, err := streamStore.List(ctx)
