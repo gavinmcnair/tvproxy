@@ -187,6 +187,7 @@
       state.refreshToken = null;
       localStorage.removeItem('access_token');
       localStorage.removeItem('refresh_token');
+      tmdbClearQueue();
       auth.invalidateCaches();
       render();
     },
@@ -860,18 +861,27 @@
 
   var tmdbQueue = [];
   var tmdbRunning = false;
+  var tmdbErrors = 0;
   function tmdbSearch(query, callback, mediaType) {
+    if (!state.accessToken || tmdbErrors > 3) return;
     tmdbQueue.push({ query: query, callback: callback, type: mediaType || '' });
     if (!tmdbRunning) tmdbDrain();
   }
+  function tmdbClearQueue() { tmdbQueue = []; tmdbRunning = false; tmdbErrors = 0; }
   function tmdbDrain() {
-    if (tmdbQueue.length === 0) { tmdbRunning = false; return; }
+    if (tmdbQueue.length === 0 || !state.accessToken || tmdbErrors > 3) {
+      tmdbRunning = false;
+      if (tmdbErrors > 3) tmdbQueue = [];
+      return;
+    }
     tmdbRunning = true;
     var item = tmdbQueue.shift();
     var typeParam = item.type ? '&type=' + encodeURIComponent(item.type) : '';
     api.get('/api/tmdb/search?query=' + encodeURIComponent(item.query) + typeParam).then(function(data) {
+      tmdbErrors = 0;
       item.callback(data);
     }).catch(function() {
+      tmdbErrors++;
       item.callback(null);
     }).finally(function() {
       setTimeout(tmdbDrain, 250);
