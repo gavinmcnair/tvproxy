@@ -10,7 +10,6 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
-	"regexp"
 	"strings"
 	"time"
 
@@ -514,6 +513,21 @@ func (h *VODHandler) PlayCompletedRecording(w http.ResponseWriter, r *http.Reque
 	})
 }
 
+func (h *VODHandler) resolveVODDuration(channelID string, sessDuration float64) float64 {
+	_, _, duration := h.vodService.GetProbeInfo(channelID)
+	if duration > 0 && duration < 30 {
+		duration = 0
+	}
+	if duration == 0 && sessDuration >= 30 {
+		duration = sessDuration
+	}
+	return duration
+}
+
+func (h *VODHandler) isVODSession(channelID string, sessDuration float64) bool {
+	return h.resolveVODDuration(channelID, sessDuration) >= 30
+}
+
 func (h *VODHandler) DASHManifest(w http.ResponseWriter, r *http.Request) {
 	channelID := chi.URLParam(r, "sessionID")
 
@@ -528,12 +542,49 @@ func (h *VODHandler) DASHManifest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if h.isVODSession(channelID, sess.Duration) {
+		h.dashManifestMP4(w, r, channelID, sess.FilePath, sess.Duration)
+		return
+	}
+
+	h.dashManifestShaka(w, r, channelID, sess.FilePath, sess.Duration)
+}
+
+func (h *VODHandler) dashManifestMP4(w http.ResponseWriter, r *http.Request, channelID, filePath string, sessDuration float64) {
+	duration := h.resolveVODDuration(channelID, sessDuration)
+
+	segmenter, err := h.dashManager.GetOrStartMP4(context.Background(), channelID, filePath, duration)
+	if err != nil {
+		h.log.Error().Err(err).Str("channel_id", channelID).Msg("failed to start mp4 segmenter")
+		respondError(w, http.StatusInternalServerError, "mp4 segmenter failed")
+		return
+	}
+
+	waitCtx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+	if err := segmenter.WaitReady(waitCtx); err != nil {
+		h.log.Error().Err(err).Str("channel_id", channelID).Msg("mp4 segmenter not ready")
+		respondError(w, http.StatusServiceUnavailable, "dash not ready")
+		return
+	}
+
+	buffered := h.vodService.GetBufferedSecs(channelID)
+	data := segmenter.GenerateManifest(duration, buffered)
+
+	w.Header().Set("Content-Type", "application/dash+xml")
+	w.Header().Set("Content-Length", fmt.Sprintf("%d", len(data)))
+	w.Header().Set("Cache-Control", "no-cache, no-store")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Write(data)
+}
+
+func (h *VODHandler) dashManifestShaka(w http.ResponseWriter, r *http.Request, channelID, filePath string, sessDuration float64) {
 	dashDir := dash.ChannelDir(channelID)
 	_, _, duration := h.vodService.GetProbeInfo(channelID)
 	if duration > 0 && duration < 30 {
 		duration = 0
 	}
-	remuxer, err := h.dashManager.GetOrStart(context.Background(), channelID, sess.FilePath, dashDir, false, duration)
+	remuxer, err := h.dashManager.GetOrStart(context.Background(), channelID, filePath, dashDir, false, duration)
 	if err != nil {
 		h.log.Error().Err(err).Str("channel_id", channelID).Msg("failed to start dash remuxer")
 		respondError(w, http.StatusInternalServerError, "dash remuxer failed")
@@ -558,10 +609,9 @@ func (h *VODHandler) DASHManifest(w http.ResponseWriter, r *http.Request) {
 	if duration > 0 && duration < 30 {
 		duration = 0
 	}
-	if duration == 0 && sess.Duration >= 30 {
-		duration = sess.Duration
+	if duration == 0 && sessDuration >= 30 {
+		duration = sessDuration
 	}
-	isVOD := duration > 0
 
 	if duration == 0 {
 		if epgDurStr := r.URL.Query().Get("epg_duration"); epgDurStr != "" {
@@ -588,15 +638,6 @@ func (h *VODHandler) DASHManifest(w http.ResponseWriter, r *http.Request) {
 		mpd = strings.Replace(mpd, `minimumUpdatePeriod="PT5S"`, `minimumUpdatePeriod="PT2S"`, 1)
 	}
 
-	if isVOD {
-		buffered := h.vodService.GetBufferedSecs(channelID)
-		if buffered > 0 {
-			newAST := time.Now().UTC().Add(-time.Duration(buffered+30) * time.Second)
-			astRe := regexp.MustCompile(`availabilityStartTime="[^"]*"`)
-			mpd = astRe.ReplaceAllString(mpd, `availabilityStartTime="`+newAST.Format(time.RFC3339)+`"`)
-		}
-	}
-
 	data = []byte(mpd)
 
 	w.Header().Set("Content-Type", "application/dash+xml")
@@ -621,6 +662,54 @@ func (h *VODHandler) DASHSegment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if h.isVODSession(channelID, sess.Duration) {
+		h.dashSegmentMP4(w, r, channelID, segment)
+		return
+	}
+
+	h.dashSegmentShaka(w, r, channelID, segment)
+}
+
+func (h *VODHandler) dashSegmentMP4(w http.ResponseWriter, r *http.Request, channelID, segment string) {
+	segmenter := h.dashManager.GetMP4Segmenter(channelID)
+	if segmenter == nil {
+		respondError(w, http.StatusNotFound, "segmenter not found")
+		return
+	}
+
+	w.Header().Set("Cache-Control", "no-cache, no-store")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+
+	if segment == "init.mp4" {
+		data, err := segmenter.ServeInit()
+		if err != nil {
+			respondError(w, http.StatusInternalServerError, "init segment error")
+			return
+		}
+		w.Header().Set("Content-Type", "video/mp4")
+		w.Header().Set("Content-Length", fmt.Sprintf("%d", len(data)))
+		w.Write(data)
+		return
+	}
+
+	var segNum int
+	if _, err := fmt.Sscanf(segment, "seg_%d.m4s", &segNum); err != nil {
+		respondError(w, http.StatusBadRequest, "invalid segment name")
+		return
+	}
+
+	data, err := segmenter.ServeSegment(segNum)
+	if err != nil {
+		w.WriteHeader(http.StatusNotFound)
+		return
+	}
+
+	w.Header().Set("Content-Type", "video/mp4")
+	w.Header().Set("Content-Length", fmt.Sprintf("%d", len(data)))
+	w.Write(data)
+}
+
+func (h *VODHandler) dashSegmentShaka(w http.ResponseWriter, r *http.Request, channelID, segment string) {
 	segPath := filepath.Join(dash.ChannelDir(channelID), segment)
 	if _, err := os.Stat(segPath); err != nil {
 		w.WriteHeader(http.StatusNotFound)
