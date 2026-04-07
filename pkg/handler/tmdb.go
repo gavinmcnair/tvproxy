@@ -1,77 +1,21 @@
 package handler
 
 import (
-	"encoding/json"
-	"fmt"
 	"net/http"
-	"net/url"
-	"os"
-	"path/filepath"
-	"strings"
-	"sync"
-	"time"
 
-	"github.com/rs/zerolog"
-
-	"github.com/gavinmcnair/tvproxy/pkg/service"
+	"github.com/gavinmcnair/tvproxy/pkg/tmdb"
 )
 
 type TMDBHandler struct {
-	settings *service.SettingsService
-	client   *http.Client
-	log      zerolog.Logger
-	cache    sync.Map
-	cacheDir string
+	client *tmdb.Client
 }
 
-func NewTMDBHandler(settings *service.SettingsService, cacheDir string, log zerolog.Logger) *TMDBHandler {
-	h := &TMDBHandler{
-		settings: settings,
-		client:   &http.Client{Timeout: 10 * time.Second},
-		log:      log,
-		cacheDir: cacheDir,
-	}
-	h.loadDiskCache()
-	return h
+func NewTMDBHandler(client *tmdb.Client) *TMDBHandler {
+	return &TMDBHandler{client: client}
 }
 
-func (h *TMDBHandler) loadDiskCache() {
-	if h.cacheDir == "" {
-		return
-	}
-	entries, err := os.ReadDir(h.cacheDir)
-	if err != nil {
-		return
-	}
-	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
-			continue
-		}
-		data, err := os.ReadFile(filepath.Join(h.cacheDir, e.Name()))
-		if err != nil {
-			continue
-		}
-		var result any
-		if json.Unmarshal(data, &result) == nil {
-			key := strings.TrimSuffix(e.Name(), ".json")
-			h.cache.Store(key, result)
-		}
-	}
-}
-
-func (h *TMDBHandler) saveToDisk(key string, data any) {
-	if h.cacheDir == "" {
-		return
-	}
-	os.MkdirAll(h.cacheDir, 0755)
-	safe := strings.Map(func(r rune) rune {
-		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-' || r == '_' {
-			return r
-		}
-		return '_'
-	}, key)
-	raw, _ := json.Marshal(data)
-	os.WriteFile(filepath.Join(h.cacheDir, safe+".json"), raw, 0644)
+func (h *TMDBHandler) Client() *tmdb.Client {
+	return h.client
 }
 
 func (h *TMDBHandler) Search(w http.ResponseWriter, r *http.Request) {
@@ -81,59 +25,10 @@ func (h *TMDBHandler) Search(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	apiKey, _ := h.settings.Get(r.Context(), "tmdb_api_key")
-	if apiKey == "" {
-		respondJSON(w, http.StatusOK, map[string]any{"results": []any{}})
-		return
-	}
-
-	mediaHint := r.URL.Query().Get("type")
-
-	cacheKey := "search_" + query
-	if mediaHint != "" {
-		cacheKey += "_" + mediaHint
-	}
-	if cached, ok := h.cache.Load(cacheKey); ok {
-		respondJSON(w, http.StatusOK, cached)
-		return
-	}
-
-	searchQuery := query
-	yearParam := ""
-	if idx := strings.LastIndex(query, "("); idx > 0 {
-		end := strings.Index(query[idx:], ")")
-		if end > 0 {
-			year := strings.TrimSpace(query[idx+1 : idx+end])
-			if len(year) == 4 && year[0] >= '1' && year[0] <= '2' {
-				yearParam = "&year=" + year
-				searchQuery = strings.TrimSpace(query[:idx])
-			}
-		}
-	}
-
-	searchEndpoint := "search/multi"
-	if mediaHint == "movie" {
-		searchEndpoint = "search/movie"
-	} else if mediaHint == "tv" || mediaHint == "series" {
-		searchEndpoint = "search/tv"
-	}
-
-	searchURL := fmt.Sprintf("https://api.themoviedb.org/3/%s?api_key=%s&query=%s&language=en-GB%s",
-		searchEndpoint, url.QueryEscape(apiKey), url.QueryEscape(searchQuery), yearParam)
-
-	resp, err := h.client.Get(searchURL)
+	result, err := h.client.Search(query, r.URL.Query().Get("type"))
 	if err != nil {
 		respondError(w, http.StatusBadGateway, "tmdb request failed")
 		return
-	}
-	defer resp.Body.Close()
-
-	var result map[string]any
-	json.NewDecoder(resp.Body).Decode(&result)
-
-	if results, ok := result["results"].([]any); ok && len(results) > 0 {
-		h.cache.Store(cacheKey, result)
-		h.saveToDisk(cacheKey, result)
 	}
 
 	respondJSON(w, http.StatusOK, result)
@@ -147,52 +42,27 @@ func (h *TMDBHandler) Details(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	apiKey, _ := h.settings.Get(r.Context(), "tmdb_api_key")
-	if apiKey == "" {
-		respondJSON(w, http.StatusOK, map[string]any{})
-		return
-	}
-
-	cacheKey := "detail_" + mediaType + "_" + id
-	if cached, ok := h.cache.Load(cacheKey); ok {
-		respondJSON(w, http.StatusOK, cached)
-		return
-	}
-
-	detailURL := fmt.Sprintf("https://api.themoviedb.org/3/%s/%s?api_key=%s&language=en-GB&append_to_response=images,credits",
-		url.PathEscape(mediaType), url.PathEscape(id), url.QueryEscape(apiKey))
-
-	resp, err := h.client.Get(detailURL)
+	result, err := h.client.Details(mediaType, id)
 	if err != nil {
 		respondError(w, http.StatusBadGateway, "tmdb request failed")
 		return
 	}
-	defer resp.Body.Close()
-
-	var result any
-	json.NewDecoder(resp.Body).Decode(&result)
-
-	h.cache.Store(cacheKey, result)
-	h.saveToDisk(cacheKey, result)
 
 	respondJSON(w, http.StatusOK, result)
 }
 
 func (h *TMDBHandler) InvalidateCache(w http.ResponseWriter, r *http.Request) {
 	query := r.URL.Query().Get("query")
-	if query == "" {
-		w.WriteHeader(http.StatusNoContent)
-		return
-	}
-	h.cache.Delete("search_" + query)
-	if h.cacheDir != "" {
-		safe := strings.Map(func(r rune) rune {
-			if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-' || r == '_' {
-				return r
-			}
-			return '_'
-		}, "search_"+query)
-		os.Remove(filepath.Join(h.cacheDir, safe+".json"))
+	if query != "" {
+		h.client.Invalidate(query)
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *TMDBHandler) ServeImage(w http.ResponseWriter, r *http.Request) {
+	h.client.ServeImage(w, r)
+}
+
+func (h *TMDBHandler) SyncStatus(w http.ResponseWriter, r *http.Request) {
+	respondJSON(w, http.StatusOK, h.client.Status())
 }
