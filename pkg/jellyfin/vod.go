@@ -19,6 +19,44 @@ const (
 	viewTVID     = "f0000000-0000-0000-0000-000000000002"
 )
 
+func (s *Server) listFavoriteItems(w http.ResponseWriter, r *http.Request) {
+	userID := s.authenticatedUserID(r)
+	if userID == "" || s.favorites == nil {
+		s.respondJSON(w, http.StatusOK, emptyResult())
+		return
+	}
+
+	ids, _ := s.favorites.ListByUser(r.Context(), userID)
+	if len(ids) == 0 {
+		s.respondJSON(w, http.StatusOK, emptyResult())
+		return
+	}
+
+	ctx := r.Context()
+	var items []BaseItemDto
+	for _, id := range ids {
+		if stream, err := s.streams.GetByID(ctx, id); err == nil && stream != nil {
+			item := s.enrichMovieItem(stream)
+			if item.UserData != nil {
+				item.UserData.IsFavorite = true
+			}
+			items = append(items, item)
+		}
+		if channel, err := s.channels.GetByID(ctx, id); err == nil && channel != nil {
+			item := newChannelItem(channel, s.serverID)
+			if item.UserData != nil {
+				item.UserData.IsFavorite = true
+			}
+			items = append(items, item)
+		}
+	}
+
+	if items == nil {
+		items = []BaseItemDto{}
+	}
+	s.paginateAndRespond(w, r, items)
+}
+
 func (s *Server) listItems(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	parentID := firstOf(q, "parentId", "ParentId")
@@ -32,7 +70,7 @@ func (s *Server) listItems(w http.ResponseWriter, r *http.Request) {
 
 	filters := strings.Join(append(q["filters"], q["Filters"]...), ",")
 	if strings.Contains(filters, "IsFavorite") {
-		s.respondJSON(w, http.StatusOK, emptyResult())
+		s.listFavoriteItems(w, r)
 		return
 	}
 
@@ -99,6 +137,9 @@ func (s *Server) itemDetail(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		item.People = s.lookupCast(stream.Name, stream.VODType)
+		if item.UserData != nil {
+			item.UserData.IsFavorite = s.isFavorite(r, stream.ID)
+		}
 		s.respondJSON(w, http.StatusOK, item)
 		return
 	}

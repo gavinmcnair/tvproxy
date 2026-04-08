@@ -12,6 +12,17 @@ import (
 	"github.com/gavinmcnair/tvproxy/pkg/models"
 )
 
+func (s *Server) isFavorite(r *http.Request, itemID string) bool {
+	if s.favorites == nil {
+		return false
+	}
+	userID := s.authenticatedUserID(r)
+	if userID == "" {
+		return false
+	}
+	return s.favorites.IsFavorite(r.Context(), userID, itemID)
+}
+
 func stripDashes(id string) string {
 	return strings.ReplaceAll(id, "-", "")
 }
