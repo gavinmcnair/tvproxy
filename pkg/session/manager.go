@@ -38,6 +38,7 @@ type StartOpts struct {
 	OutputAudioCodec string
 	OutputContainer  string
 	OutputHWAccel    string
+	UseWireGuard     bool
 	KnownDuration    float64
 	SeekOffset       float64
 	Command          string
@@ -88,7 +89,7 @@ func (m *Manager) cleanupDoneSession(channelID string, s *Session) {
 }
 
 
-func (m *Manager) buildArgs(argsStr string, inputURL string, outputPath string) []string {
+func (m *Manager) buildArgs(argsStr string, inputURL string, outputPath string, useWireGuard bool) []string {
 	var args []string
 	if argsStr == "" {
 		args = ffmpeg.ShellSplit("-hide_banner -loglevel warning -i {input} -c copy -f mp4 -movflags frag_keyframe+empty_moov+default_base_moof {output}")
@@ -96,12 +97,12 @@ func (m *Manager) buildArgs(argsStr string, inputURL string, outputPath string) 
 		args = ffmpeg.ShellSplit(argsStr)
 	}
 
-	httpInput := ffmpeg.IsHTTPURL(inputURL)
+	pipeInput := ffmpeg.IsHTTPURL(inputURL) && useWireGuard
 
 	for i, arg := range args {
 		switch arg {
 		case "{input}":
-			if httpInput {
+			if pipeInput {
 				args[i] = "pipe:0"
 			} else {
 				args[i] = inputURL
@@ -409,6 +410,7 @@ func (m *Manager) GetOrCreateWithConsumer(ctx context.Context, opts StartOpts, c
 		OutputAudioCodec: opts.OutputAudioCodec,
 		OutputContainer:  opts.OutputContainer,
 		OutputHWAccel:    opts.OutputHWAccel,
+		UseWireGuard:     opts.UseWireGuard,
 		Duration:         opts.KnownDuration,
 		SeekOffset:       opts.SeekOffset,
 		FilePath:         filePath,
@@ -462,7 +464,7 @@ func (m *Manager) GetOrCreateWithConsumer(ctx context.Context, opts StartOpts, c
 	m.mu.Unlock()
 
 	if !opts.MetadataOnly {
-		args := m.buildArgs(opts.Args, opts.StreamURL, filePath)
+		args := m.buildArgs(opts.Args, opts.StreamURL, filePath, opts.UseWireGuard)
 		command := opts.Command
 		if command == "" {
 			command = "ffmpeg"
@@ -658,7 +660,7 @@ func (m *Manager) run(ctx context.Context, s *Session, command string, args []st
 	cmd.WaitDelay = waitDelay
 
 	var httpResp *http.Response
-	if ffmpeg.IsHTTPURL(inputURL) {
+	if ffmpeg.IsHTTPURL(inputURL) && s.UseWireGuard {
 		m.log.Debug().Str("session_id", s.ID).Str("user_agent", m.config.UserAgent).Str("url", inputURL).Msg("connecting to upstream")
 		resp, err := httputil.Fetch(ctx, m.httpClient, m.config, inputURL)
 		if err != nil {

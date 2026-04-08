@@ -526,10 +526,11 @@ func (h *VODHandler) HLSMaster(w http.ResponseWriter, r *http.Request) {
 	}
 
 	profile := hls.ProfileSettings{
-		VideoCodec: sess.OutputVideoCodec,
-		AudioCodec: sess.OutputAudioCodec,
-		HWAccel:    sess.OutputHWAccel,
-		Container:  sess.OutputContainer,
+		VideoCodec:   sess.OutputVideoCodec,
+		AudioCodec:   sess.OutputAudioCodec,
+		HWAccel:      sess.OutputHWAccel,
+		Container:    sess.OutputContainer,
+		UseWireGuard: sess.UseWireGuard,
 	}
 	if profile.VideoCodec == "" {
 		profile.VideoCodec = "copy"

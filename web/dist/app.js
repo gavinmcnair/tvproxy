@@ -4453,6 +4453,7 @@
         { key: 'username', label: 'Username (Xtream)', placeholder: 'Optional for Xtream' },
         { key: 'password', label: 'Password (Xtream)', type: 'password', placeholder: 'Optional for Xtream' },
         { key: 'max_streams', label: 'Max Concurrent Streams', type: 'number', default: 1 },
+        { key: 'use_wireguard', label: 'Route via WireGuard', type: 'checkbox' },
       ],
       rowActions: (item, reload) => [
         {

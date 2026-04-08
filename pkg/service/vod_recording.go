@@ -50,7 +50,7 @@ func (s *VODService) startRecordingInternal(ctx context.Context, sessionKey, tit
 		return s.finalizeRecordingStart(sess, sessionKey, consumerID, title, channelName, userID, stopAt)
 	}
 
-	streamURL, streamName, resolvedChannelName, streamID, _, err := s.resolveStreamForChannel(ctx, sessionKey)
+	streamURL, streamName, resolvedChannelName, streamID, _, useWG, err := s.resolveStreamForChannel(ctx, sessionKey)
 	if err != nil {
 		return err
 	}
@@ -79,10 +79,11 @@ func (s *VODService) startRecordingInternal(ctx context.Context, sessionKey, tit
 		StreamURL:   streamURL,
 		StreamName:  streamName,
 		ChannelName: channelName,
-		ProfileName: session.ConsumerRecording,
-		Command:     command,
-		Args:        args,
-		OutputDir:   s.config.VODOutputDir,
+		ProfileName:  session.ConsumerRecording,
+		UseWireGuard: useWG,
+		Command:      command,
+		Args:         args,
+		OutputDir:    s.config.VODOutputDir,
 	}, session.ConsumerRecording)
 	if err != nil {
 		return err

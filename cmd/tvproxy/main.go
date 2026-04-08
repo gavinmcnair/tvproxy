@@ -216,7 +216,7 @@ func main() {
 
 	authMW := middleware.NewAuthMiddleware(authService, activityService, cfg.APIKey, adminUserID)
 
-	hlsManager := hls.NewManager(hls.TempDir(), log)
+	hlsManager := hls.NewManager(hls.TempDir(), wgHTTPClient, cfg, log)
 	go hlsManager.StartCleanupWorker(ctx)
 
 	exportService := service.NewExportService(channelStore, channelGroupStore, profileStore, clientStore, m3uAccountStore, epgSourceStore, settingsService, authService)

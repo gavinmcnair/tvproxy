@@ -3,23 +3,29 @@ package hls
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
 
 	"github.com/rs/zerolog"
+
+	"github.com/gavinmcnair/tvproxy/pkg/config"
+	"github.com/gavinmcnair/tvproxy/pkg/httputil"
 )
 
 type ProfileSettings struct {
-	VideoCodec  string
-	AudioCodec  string
-	HWAccel     string
-	Container   string
-	Deinterlace bool
-	AutoDetect  bool
+	VideoCodec   string
+	AudioCodec   string
+	HWAccel      string
+	Container    string
+	Deinterlace  bool
+	AutoDetect   bool
+	UseWireGuard bool
 }
 
 type Session struct {
@@ -30,8 +36,11 @@ type Session struct {
 	DurationTicks int64
 	IsLive        bool
 	Profile       ProfileSettings
+	httpClient    *http.Client
+	httpConfig    *config.Config
 	mu            sync.Mutex
 	cmd           *exec.Cmd
+	httpResp      *http.Response
 	cancel        context.CancelFunc
 	done          chan struct{}
 	startNumber   int
@@ -68,12 +77,14 @@ func (s *Session) StartTranscode(ctx context.Context, startNumber int, startTime
 	s.startNumber = startNumber
 	s.done = make(chan struct{})
 
-	args := s.buildFFmpegArgs(startNumber, startTimeTicks)
+	pipeHTTP := s.shouldPipeHTTP()
+	args := s.buildFFmpegArgs(startNumber, startTimeTicks, pipeHTTP)
 
 	s.log.Info().
 		Str("session", s.ID).
 		Int("start_number", startNumber).
 		Int64("start_ticks", startTimeTicks).
+		Bool("pipe_http", pipeHTTP).
 		Msg("starting hls transcode")
 
 	s.cmd = exec.CommandContext(rctx, "ffmpeg", args...)
@@ -83,7 +94,26 @@ func (s *Session) StartTranscode(ctx context.Context, startNumber int, startTime
 	s.cmd.WaitDelay = 5 * time.Second
 	s.cmd.Stderr = os.Stderr
 
+	if pipeHTTP {
+		resp, err := httputil.Fetch(rctx, s.httpClient, s.httpConfig, s.StreamURL)
+		if err != nil {
+			cancel()
+			return fmt.Errorf("upstream connection failed: %w", err)
+		}
+		if resp.StatusCode != http.StatusOK {
+			resp.Body.Close()
+			cancel()
+			return fmt.Errorf("upstream returned %d", resp.StatusCode)
+		}
+		s.httpResp = resp
+		s.cmd.Stdin = resp.Body
+	}
+
 	if err := s.cmd.Start(); err != nil {
+		if s.httpResp != nil {
+			s.httpResp.Body.Close()
+			s.httpResp = nil
+		}
 		cancel()
 		return fmt.Errorf("starting ffmpeg: %w", err)
 	}
@@ -92,9 +122,20 @@ func (s *Session) StartTranscode(ctx context.Context, startNumber int, startTime
 	go func() {
 		defer close(done)
 		s.cmd.Wait()
+		if s.httpResp != nil {
+			s.httpResp.Body.Close()
+			s.httpResp = nil
+		}
 	}()
 
 	return nil
+}
+
+func (s *Session) shouldPipeHTTP() bool {
+	if s.httpClient == nil {
+		return false
+	}
+	return isHTTPURL(s.StreamURL)
 }
 
 func (s *Session) segmentExt() string {
@@ -104,7 +145,7 @@ func (s *Session) segmentExt() string {
 	return ".mp4"
 }
 
-func (s *Session) buildFFmpegArgs(startNumber int, startTimeTicks int64) []string {
+func (s *Session) buildFFmpegArgs(startNumber int, startTimeTicks int64, pipeHTTP bool) []string {
 	var args []string
 
 	args = append(args, "-hide_banner", "-loglevel", "warning")
@@ -134,26 +175,29 @@ func (s *Session) buildFFmpegArgs(startNumber int, startTimeTicks int64) []strin
 		args = append(args, "-ss", fmt.Sprintf("%.3f", secs))
 	}
 
-	if isRTSP(s.StreamURL) {
+	if pipeHTTP {
+		args = append(args,
+			"-analyzeduration", "3000000",
+			"-probesize", "3000000",
+			"-i", "pipe:0",
+		)
+	} else if isRTSP(s.StreamURL) {
 		args = append(args,
 			"-rtsp_transport", "tcp",
 			"-analyzeduration", "3000000",
 			"-probesize", "2000000",
 			"-max_delay", "500000",
+			"-i", s.StreamURL,
 		)
 	} else {
 		args = append(args,
 			"-analyzeduration", "3000000",
 			"-probesize", "3000000",
+			"-i", s.StreamURL,
 		)
 	}
 
-	args = append(args, "-i", s.StreamURL)
-
-	videoCodec := s.Profile.VideoCodec
-	if videoCodec == "" || videoCodec == "copy" {
-		videoCodec = "copy"
-	}
+	videoCodec := mapEncoder(s.Profile.VideoCodec)
 	audioCodec := s.Profile.AudioCodec
 	if audioCodec == "" || audioCodec == "copy" {
 		audioCodec = "copy"
@@ -261,58 +305,23 @@ func (s *Session) WaitForSegment(index int, timeout time.Duration) error {
 	return fmt.Errorf("segment %d not ready after %v", index, timeout)
 }
 
-func isRTSP(url string) bool {
-	return len(url) > 7 && (url[:7] == "rtsp://" || url[:8] == "rtsps://")
-}
-
-func isHEVC(codec string) bool {
-	switch codec {
-	case "libx265", "hevc", "hevc_vaapi", "hevc_qsv", "hevc_nvenc", "hevc_videotoolbox":
-		return true
-	}
-	return false
-}
-
-func (s *Session) CurrentTranscodeIndex() int {
+func (s *Session) Stop() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-
-	highest := -1
-	entries, err := os.ReadDir(s.OutputDir)
-	if err != nil {
-		return -1
-	}
-	ext := s.segmentExt()
-	pattern := "seg%d" + ext
-	for _, e := range entries {
-		if e.IsDir() {
-			continue
-		}
-		var idx int
-		if _, err := fmt.Sscanf(e.Name(), pattern, &idx); err == nil {
-			if idx > highest {
-				highest = idx
-			}
-		}
-	}
-	return highest
+	s.stopLocked()
 }
 
-func (s *Session) Touch() {
-	s.mu.Lock()
-	s.lastAccess = time.Now()
-	s.mu.Unlock()
-}
-
-func (s *Session) IdleSince() time.Duration {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return time.Since(s.lastAccess)
+func (s *Session) stopLocked() {
+	if s.cancel != nil {
+		s.cancel()
+		if s.done != nil {
+			<-s.done
+		}
+		s.cancel = nil
+	}
 }
 
 func (s *Session) IsDone() bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	if s.done == nil {
 		return true
 	}
@@ -324,20 +333,53 @@ func (s *Session) IsDone() bool {
 	}
 }
 
-func (s *Session) Stop() {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.stopLocked()
+func (s *Session) CurrentTranscodeIndex() int {
+	if s.IsDone() {
+		return -1
+	}
+	return s.startNumber
 }
 
-func (s *Session) stopLocked() {
-	if s.cancel != nil {
-		s.cancel()
-		s.cancel = nil
+func (s *Session) Touch() {
+	s.mu.Lock()
+	s.lastAccess = time.Now()
+	s.mu.Unlock()
+}
+
+func (s *Session) IdleSince() time.Duration {
+	s.mu.Lock()
+	d := time.Since(s.lastAccess)
+	s.mu.Unlock()
+	return d
+}
+
+func mapEncoder(codec string) string {
+	switch codec {
+	case "", "copy":
+		return "copy"
+	case "h264":
+		return "libx264"
+	case "h265":
+		return "libx265"
+	case "av1":
+		return "libsvtav1"
+	default:
+		return codec
 	}
-	if s.done != nil {
-		<-s.done
-		s.done = nil
+}
+
+func isHTTPURL(url string) bool {
+	return strings.HasPrefix(url, "http://") || strings.HasPrefix(url, "https://")
+}
+
+func isRTSP(url string) bool {
+	return strings.HasPrefix(url, "rtsp://") || strings.HasPrefix(url, "rtsps://")
+}
+
+func isHEVC(codec string) bool {
+	switch codec {
+	case "libx265", "hevc", "hevc_vaapi", "hevc_qsv", "hevc_nvenc", "hevc_videotoolbox":
+		return true
 	}
-	s.cmd = nil
+	return false
 }

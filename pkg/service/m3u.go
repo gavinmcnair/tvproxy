@@ -162,6 +162,7 @@ func (s *M3UService) refreshXtreamAccount(ctx context.Context, account *models.M
 			Logo:         xs.StreamIcon,
 			TvgID:        xs.EPGChannelID,
 			ContentHash:  hash,
+			UseWireGuard: account.UseWireGuard,
 			IsActive:     true,
 		})
 	}
@@ -217,6 +218,7 @@ func (s *M3UService) refreshM3UAccount(ctx context.Context, account *models.M3UA
 			TvgID:        entry.TvgID,
 			TvgName:      entry.TvgName,
 			ContentHash:  hash,
+			UseWireGuard: account.UseWireGuard,
 			IsActive:     true,
 			VODType:       entry.TVPType,
 			VODSeries:     entry.TVPSeries,

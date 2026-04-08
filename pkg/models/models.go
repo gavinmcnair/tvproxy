@@ -26,6 +26,7 @@ type M3UAccount struct {
 	StreamCount     int        `json:"stream_count"`
 	RefreshInterval int        `json:"refresh_interval"`
 	LastError       string     `json:"last_error"`
+	UseWireGuard    bool       `json:"use_wireguard"`
 	ETag            string     `json:"etag,omitempty"`
 	CreatedAt       time.Time  `json:"created_at"`
 	UpdatedAt       time.Time  `json:"updated_at"`
@@ -78,6 +79,7 @@ type Stream struct {
 	VODAudio      string        `json:"vod_audio,omitempty"`
 	VODDuration   float64       `json:"vod_duration,omitempty"`
 	TMDBID        int           `json:"tmdb_id,omitempty"`
+	UseWireGuard  bool          `json:"use_wireguard,omitempty"`
 	IsActive      bool          `json:"is_active"`
 	Tracks        []StreamTrack `json:"tracks,omitempty"`
 	CreatedAt     time.Time     `json:"created_at"`

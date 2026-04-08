@@ -24,6 +24,7 @@ type Session struct {
 	OutputAudioCodec string
 	OutputContainer  string
 	OutputHWAccel    string
+	UseWireGuard     bool
 	FilePath        string
 	TempDir         string
 	BufferedSecs    float64

@@ -68,18 +68,18 @@ func NewVODService(
 	}
 }
 
-func (s *VODService) resolveStreamForChannel(ctx context.Context, channelID string) (streamURL, streamName, channelName, streamID, streamGroup string, err error) {
+func (s *VODService) resolveStreamForChannel(ctx context.Context, channelID string) (streamURL, streamName, channelName, streamID, streamGroup string, useWireGuard bool, err error) {
 	channel, err := s.channelStore.GetByID(ctx, channelID)
 	if err != nil {
-		return "", "", "", "", "", fmt.Errorf("channel not found: %w", err)
+		return "", "", "", "", "", false, fmt.Errorf("channel not found: %w", err)
 	}
 	if !channel.IsEnabled {
-		return "", "", "", "", "", fmt.Errorf("channel %s is disabled", channelID)
+		return "", "", "", "", "", false, fmt.Errorf("channel %s is disabled", channelID)
 	}
 
 	channelStreams, err := s.channelStore.GetStreams(ctx, channelID)
 	if err != nil {
-		return "", "", "", "", "", fmt.Errorf("getting channel streams: %w", err)
+		return "", "", "", "", "", false, fmt.Errorf("getting channel streams: %w", err)
 	}
 
 	for _, cs := range channelStreams {
@@ -87,10 +87,10 @@ func (s *VODService) resolveStreamForChannel(ctx context.Context, channelID stri
 		if err != nil || !stream.IsActive {
 			continue
 		}
-		return stream.URL, stream.Name, channel.Name, cs.StreamID, stream.Group, nil
+		return stream.URL, stream.Name, channel.Name, cs.StreamID, stream.Group, stream.UseWireGuard, nil
 	}
 
-	return "", "", "", "", "", fmt.Errorf("no active streams for channel %s", channelID)
+	return "", "", "", "", "", false, fmt.Errorf("no active streams for channel %s", channelID)
 }
 
 type sessionArgs struct {
@@ -155,7 +155,7 @@ func (s *VODService) composeSessionArgs(ctx context.Context, profileName, stream
 }
 
 func (s *VODService) StartWatching(ctx context.Context, channelID string, profileName string, userAgent string, remoteAddr string) (string, string, string, bool, error) {
-	streamURL, streamName, channelName, streamID, streamGroup, err := s.resolveStreamForChannel(ctx, channelID)
+	streamURL, streamName, channelName, streamID, streamGroup, useWG, err := s.resolveStreamForChannel(ctx, channelID)
 	if err != nil {
 		return "", "", "", false, err
 	}
@@ -174,6 +174,7 @@ func (s *VODService) StartWatching(ctx context.Context, channelID string, profil
 		OutputAudioCodec: sa.OutputAudioCodec,
 		OutputContainer:  sa.Container,
 		OutputHWAccel:    sa.OutputHWAccel,
+		UseWireGuard:     useWG,
 		Command:          sa.Command,
 		Args:             sa.Args,
 		OutputDir:        s.config.VODOutputDir,
@@ -227,6 +228,7 @@ func (s *VODService) StartWatchingStream(ctx context.Context, streamID string, p
 		OutputAudioCodec: sa.OutputAudioCodec,
 		OutputContainer:  sa.Container,
 		OutputHWAccel:    sa.OutputHWAccel,
+		UseWireGuard:     stream.UseWireGuard,
 		Command:          sa.Command,
 		Args:             sa.Args,
 		OutputDir:        s.config.VODOutputDir,

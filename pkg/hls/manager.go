@@ -2,12 +2,15 @@ package hls
 
 import (
 	"context"
+	"net/http"
 	"os"
 	"path/filepath"
 	"sync"
 	"time"
 
 	"github.com/rs/zerolog"
+
+	"github.com/gavinmcnair/tvproxy/pkg/config"
 )
 
 type Manager struct {
@@ -15,12 +18,16 @@ type Manager struct {
 	sessions map[string]*Session
 	baseDir  string
 	log      zerolog.Logger
+	wgClient *http.Client
+	config   *config.Config
 }
 
-func NewManager(baseDir string, log zerolog.Logger) *Manager {
+func NewManager(baseDir string, wgClient *http.Client, cfg *config.Config, log zerolog.Logger) *Manager {
 	return &Manager{
 		sessions: make(map[string]*Session),
 		baseDir:  baseDir,
+		wgClient: wgClient,
+		config:   cfg,
 		log:      log.With().Str("component", "hls").Logger(),
 	}
 }
@@ -36,6 +43,10 @@ func (m *Manager) GetOrCreateSession(sessionID, streamURL string, segmentLength 
 
 	outputDir := filepath.Join(m.baseDir, sessionID)
 	sess := NewSession(sessionID, streamURL, outputDir, segmentLength, durationTicks, isLive, profile, m.log)
+	if profile.UseWireGuard && m.wgClient != nil {
+		sess.httpClient = m.wgClient
+		sess.httpConfig = m.config
+	}
 	m.sessions[sessionID] = sess
 	return sess
 }
