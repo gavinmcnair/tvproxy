@@ -3734,27 +3734,17 @@
       var dur = videoEl.duration;
       var knownDur = dvr.duration || epgDuration || (isFinite(dur) ? dur : 0);
 
-      if (hlsInstance && knownDur > 0) {
-        var effectiveDur = knownDur;
-        if (effectiveDur > 0) {
-          seekPlayed.style.width = ((cur / effectiveDur) * 100) + '%';
-          seekThumb.style.left = ((cur / effectiveDur) * 100) + '%';
-          seekTranscoded.style.width = '100%';
-          var bufEnd = 0;
-          if (videoEl.buffered.length > 0) bufEnd = videoEl.buffered.end(videoEl.buffered.length - 1);
-          seekBuffered.style.width = ((bufEnd / effectiveDur) * 100) + '%';
-          timeDisplay.textContent = fmtCtrlTime(cur) + ' / ' + fmtCtrlTime(effectiveDur);
-        } else {
-          timeDisplay.textContent = fmtCtrlTime(cur);
-        }
+      var effectiveDur = knownDur > 0 ? knownDur : (isFinite(dur) ? dur : 0);
+      if (effectiveDur > 0) {
+        seekPlayed.style.width = ((cur / effectiveDur) * 100) + '%';
+        seekThumb.style.left = ((cur / effectiveDur) * 100) + '%';
+        seekTranscoded.style.width = '100%';
+        var bufEnd = 0;
+        if (videoEl.buffered.length > 0) bufEnd = videoEl.buffered.end(videoEl.buffered.length - 1);
+        seekBuffered.style.width = ((bufEnd / effectiveDur) * 100) + '%';
+        timeDisplay.textContent = fmtCtrlTime(cur) + ' / ' + fmtCtrlTime(effectiveDur);
       } else {
-        if (isFinite(dur) && dur > 0) {
-          seekPlayed.style.width = ((cur / dur) * 100) + '%';
-          seekThumb.style.left = ((cur / dur) * 100) + '%';
-          timeDisplay.textContent = fmtCtrlTime(cur) + ' / ' + fmtCtrlTime(dur);
-        } else {
-          timeDisplay.textContent = fmtCtrlTime(cur);
-        }
+        timeDisplay.textContent = fmtCtrlTime(cur);
       }
     }, 250);
 
