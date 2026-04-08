@@ -179,6 +179,7 @@ func (s *Server) Router() chi.Router {
 		})
 
 		r.Get("/Sessions", s.sessionsGet)
+		r.Get("/System/ActivityLog/Entries", s.emptyQueryResult)
 		r.Get("/LiveTv/Info", s.liveTvInfo)
 		r.Get("/LiveTv/Channels", s.liveTvChannels)
 		r.Get("/LiveTv/Programs", s.liveTvPrograms)
