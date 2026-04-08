@@ -4455,6 +4455,7 @@
         fields: [
           { key: 'name', label: 'Group Name', placeholder: 'Entertainment' },
           { key: 'sort_order', label: 'Sort Order', type: 'number', default: 0 },
+          { key: 'jellyfin_enabled', label: 'Show in Jellyfin', type: 'checkbox', default: false },
         ],
       },
       columns: [

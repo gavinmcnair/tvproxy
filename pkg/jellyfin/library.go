@@ -1140,6 +1140,19 @@ func (s *Server) liveTvChannels(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) liveTvPrograms(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	isAiring := q.Get("isAiring") == "true"
+	hasAired := q.Get("hasAired")
+	isMovie := q.Get("isMovie")
+	isSeries := q.Get("isSeries")
+	isNews := q.Get("isNews")
+	isKids := q.Get("isKids")
+	isSports := q.Get("isSports")
+	limit := 50
+	if l := q.Get("limit"); l != "" {
+		limit, _ = strconv.Atoi(l)
+	}
+
 	ctx := r.Context()
 	channels, _ := s.channels.List(ctx)
 	epgData, _ := s.epg.ListEPGData(ctx)
@@ -1151,30 +1164,64 @@ func (s *Server) liveTvPrograms(w http.ResponseWriter, r *http.Request) {
 		epgIDs = append(epgIDs, e.ID)
 	}
 
-	programs, _ := s.epg.ListProgramsByEPGDataIDs(ctx, epgIDs)
-
-	var items []BaseItemDto
+	programsByEPG, _ := s.epg.ListProgramsByEPGDataIDs(ctx, epgIDs)
 	now := time.Now()
 
+	chNameMap := make(map[string]string)
+	chLogoMap := make(map[string]string)
+	for _, ch := range channels {
+		chNameMap[ch.ID] = ch.Name
+		chLogoMap[ch.ID] = ch.Logo
+	}
+
+	var items []BaseItemDto
 	for _, ch := range channels {
 		epgID := epgByChannel[ch.TvgID]
 		if epgID == "" {
 			continue
 		}
-		progs := programs[epgID]
-		for _, p := range progs {
-			if p.Stop.Before(now.Add(-2*time.Hour)) || p.Start.After(now.Add(24*time.Hour)) {
+		for _, p := range programsByEPG[epgID] {
+			if isAiring && !(now.After(p.Start) && now.Before(p.Stop)) {
+				continue
+			}
+			if hasAired == "false" && p.Stop.Before(now) {
+				continue
+			}
+			if p.Stop.Before(now.Add(-1*time.Hour)) || p.Start.After(now.Add(24*time.Hour)) {
+				continue
+			}
+
+			cat := strings.ToLower(p.Category)
+			if isMovie == "true" && !strings.Contains(cat, "movie") && !strings.Contains(cat, "film") {
+				continue
+			}
+			if isSeries == "true" && !strings.Contains(cat, "series") && !strings.Contains(cat, "drama") && !strings.Contains(cat, "soap") {
+				continue
+			}
+			if isNews == "true" && !strings.Contains(cat, "news") {
+				continue
+			}
+			if isKids == "true" && !strings.Contains(cat, "kid") && !strings.Contains(cat, "child") && !strings.Contains(cat, "cartoon") && !strings.Contains(cat, "animation") {
+				continue
+			}
+			if isSports == "true" && !strings.Contains(cat, "sport") {
 				continue
 			}
 
 			chID := strings.ReplaceAll(ch.ID, "-", "")
 			item := BaseItemDto{
-				Name:     p.Title,
-				ServerID: s.serverID,
-				ID:       fmt.Sprintf("prog_%s_%d", chID, p.Start.Unix()),
-				Type:     "LiveTvProgram",
-				Overview: p.Description,
-				ParentID: chID,
+				Name:          p.Title,
+				ServerID:      s.serverID,
+				ID:            fmt.Sprintf("prog_%s_%d", chID, p.Start.Unix()),
+				Type:          "LiveTvProgram",
+				Overview:      p.Description,
+				ParentID:      chID,
+				ChannelNumber: ch.Name,
+				ImageTags:     map[string]string{},
+			}
+
+			if ch.Logo != "" {
+				item.ChannelPrimaryImageTag = "logo"
 			}
 
 			if !p.Start.IsZero() {
@@ -1185,6 +1232,12 @@ func (s *Server) liveTvPrograms(w http.ResponseWriter, r *http.Request) {
 			}
 
 			items = append(items, item)
+			if len(items) >= limit {
+				break
+			}
+		}
+		if len(items) >= limit {
+			break
 		}
 	}
 
