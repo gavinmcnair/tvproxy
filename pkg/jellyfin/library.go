@@ -39,18 +39,17 @@ func (s *Server) userViews(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		groupID := "group_" + strings.ReplaceAll(g.ID, "-", "")
+		colType := g.JellyfinType
+		if colType == "" {
+			colType = "folders"
+		}
 		views = append(views, BaseItemDto{
 			Name: g.Name, ServerID: s.serverID, ID: groupID,
-			Type: "CollectionFolder", CollectionType: "folders",
+			Type: "CollectionFolder", CollectionType: colType,
 			IsFolder: true, ImageTags: map[string]string{},
 		})
 	}
 
-	views = append(views, BaseItemDto{
-		Name: "Live TV", ServerID: s.serverID, ID: viewLiveTVID,
-		Type: "CollectionFolder", CollectionType: "livetv",
-		IsFolder: true, ImageTags: map[string]string{},
-	})
 
 	s.respondJSON(w, http.StatusOK, BaseItemDtoQueryResult{
 		Items: views, TotalRecordCount: len(views),
@@ -1026,11 +1025,22 @@ func (s *Server) musicChannels(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) groupChannels(w http.ResponseWriter, r *http.Request, groupID string) {
-	channels, err := s.channels.List(r.Context())
+	ctx := r.Context()
+	channels, err := s.channels.List(ctx)
 	if err != nil {
 		s.respondJSON(w, http.StatusOK, BaseItemDtoQueryResult{Items: []BaseItemDto{}, TotalRecordCount: 0})
 		return
 	}
+
+	epgData, _ := s.epg.ListEPGData(ctx)
+	epgByChannel := make(map[string]string)
+	var epgIDs []string
+	for _, e := range epgData {
+		epgByChannel[e.ChannelID] = e.ID
+		epgIDs = append(epgIDs, e.ID)
+	}
+	programsByEPG, _ := s.epg.ListProgramsByEPGDataIDs(ctx, epgIDs)
+	now := time.Now()
 
 	var items []BaseItemDto
 	for _, ch := range channels {
@@ -1040,7 +1050,7 @@ func (s *Server) groupChannels(w http.ResponseWriter, r *http.Request, groupID s
 		chID := strings.ReplaceAll(ch.ID, "-", "")
 		item := BaseItemDto{
 			Name: ch.Name, ServerID: s.serverID,
-			ID: chID, Type: "LiveTvChannel",
+			ID: chID, Type: "Video",
 			MediaType: "Video", IsFolder: false,
 			ImageTags: map[string]string{}, UserData: &UserItemData{Key: ch.ID},
 			MediaSources: []MediaSource{
@@ -1054,8 +1064,17 @@ func (s *Server) groupChannels(w http.ResponseWriter, r *http.Request, groupID s
 		}
 		if ch.Logo != "" {
 			item.ImageTags["Primary"] = "logo"
-			item.ChannelPrimaryImageTag = "logo"
 		}
+
+		if epgID, ok := epgByChannel[ch.TvgID]; ok {
+			for _, p := range programsByEPG[epgID] {
+				if now.After(p.Start) && now.Before(p.Stop) {
+					item.Overview = p.Title + " — " + p.Description
+					break
+				}
+			}
+		}
+
 		items = append(items, item)
 	}
 	if items == nil {

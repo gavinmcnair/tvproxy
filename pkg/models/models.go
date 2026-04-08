@@ -108,6 +108,7 @@ type ChannelGroup struct {
 	Name            string    `json:"name"`
 	IsEnabled       bool      `json:"is_enabled"`
 	JellyfinEnabled bool      `json:"jellyfin_enabled"`
+	JellyfinType    string    `json:"jellyfin_type,omitempty"`
 	SortOrder       int       `json:"sort_order"`
 	CreatedAt       time.Time `json:"created_at"`
 	UpdatedAt       time.Time `json:"updated_at"`

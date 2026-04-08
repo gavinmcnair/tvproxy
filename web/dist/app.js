@@ -2367,6 +2367,14 @@
             cb.checked = !!group[f.key];
             inputs[f.key] = cb;
             formEl.appendChild(h('div', { className: 'form-check', style: 'display:flex;align-items:center;gap:6px;margin:8px 0' }, cb, h('label', { for: 'gf-' + f.key, style: 'cursor:pointer;margin:0' }, f.label)));
+          } else if (f.type === 'select' && f.options) {
+            const sel = h('select', { id: 'gf-' + f.key }, ...f.options.map(o => {
+              const opt = h('option', { value: String(o.value) }, o.label);
+              if (String(group[f.key] || f.default) === String(o.value)) opt.selected = true;
+              return opt;
+            }));
+            inputs[f.key] = sel;
+            formEl.appendChild(h('div', { className: 'form-group' }, h('label', null, f.label), sel));
           } else {
             const inp = h('input', { type: f.type || 'text', placeholder: f.placeholder || '' });
             inp.value = group[f.key] != null ? String(group[f.key]) : (f.default != null ? String(f.default) : '');
@@ -4465,6 +4473,16 @@
           { key: 'name', label: 'Group Name', placeholder: 'Entertainment' },
           { key: 'sort_order', label: 'Sort Order', type: 'number', default: 0 },
           { key: 'jellyfin_enabled', label: 'Show in Jellyfin', type: 'checkbox', default: false },
+          { key: 'jellyfin_type', label: 'Jellyfin Style', type: 'select', default: 'folders', options: [
+            { value: 'folders', label: 'Channels (Grid)' },
+            { value: 'livetv', label: 'Live TV (Guide)' },
+            { value: 'movies', label: 'Movies' },
+            { value: 'tvshows', label: 'TV Shows' },
+            { value: 'music', label: 'Music' },
+            { value: 'musicvideos', label: 'Music Videos' },
+            { value: 'playlists', label: 'Playlists' },
+            { value: 'homevideos', label: 'Home Videos' },
+          ]},
         ],
       },
       columns: [
@@ -4709,6 +4727,16 @@
         { key: 'name', label: 'Group Name', placeholder: 'Entertainment' },
         { key: 'sort_order', label: 'Sort Order', type: 'number', default: 0 },
         { key: 'jellyfin_enabled', label: 'Show in Jellyfin', type: 'checkbox', default: false },
+        { key: 'jellyfin_type', label: 'Jellyfin Style', type: 'select', default: 'folders', options: [
+          { value: 'folders', label: 'Channels (Grid)' },
+          { value: 'livetv', label: 'Live TV (Guide)' },
+          { value: 'movies', label: 'Movies' },
+          { value: 'tvshows', label: 'TV Shows' },
+          { value: 'music', label: 'Music' },
+          { value: 'musicvideos', label: 'Music Videos' },
+          { value: 'playlists', label: 'Playlists' },
+          { value: 'homevideos', label: 'Home Videos' },
+        ]},
       ],
     }),
 

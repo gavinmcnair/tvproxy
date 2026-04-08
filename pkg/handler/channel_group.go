@@ -37,6 +37,7 @@ func (h *ChannelGroupHandler) Create(w http.ResponseWriter, r *http.Request) {
 		Name            string `json:"name"`
 		IsEnabled       bool   `json:"is_enabled"`
 		JellyfinEnabled bool   `json:"jellyfin_enabled"`
+		JellyfinType    string `json:"jellyfin_type"`
 		SortOrder       int    `json:"sort_order"`
 	}
 	if err := decodeJSON(r, &req); err != nil {
@@ -54,6 +55,7 @@ func (h *ChannelGroupHandler) Create(w http.ResponseWriter, r *http.Request) {
 		Name:            req.Name,
 		IsEnabled:       req.IsEnabled,
 		JellyfinEnabled: req.JellyfinEnabled,
+		JellyfinType:    req.JellyfinType,
 		SortOrder:       req.SortOrder,
 	}
 
@@ -92,6 +94,7 @@ func (h *ChannelGroupHandler) Update(w http.ResponseWriter, r *http.Request) {
 		Name            string `json:"name"`
 		IsEnabled       bool   `json:"is_enabled"`
 		JellyfinEnabled bool   `json:"jellyfin_enabled"`
+		JellyfinType    string `json:"jellyfin_type"`
 		SortOrder       int    `json:"sort_order"`
 	}
 	if err := decodeJSON(r, &req); err != nil {
@@ -104,6 +107,7 @@ func (h *ChannelGroupHandler) Update(w http.ResponseWriter, r *http.Request) {
 	}
 	group.IsEnabled = req.IsEnabled
 	group.JellyfinEnabled = req.JellyfinEnabled
+	group.JellyfinType = req.JellyfinType
 	group.SortOrder = req.SortOrder
 
 	if err := h.channelService.UpdateChannelGroupForUser(r.Context(), group, user.UserID); err != nil {
