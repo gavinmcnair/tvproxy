@@ -1082,6 +1082,9 @@ func sortItems(items []BaseItemDto, sortBy, sortOrder string) {
 	if sortBy == "" {
 		sortBy = "SortName"
 	}
+	if strings.Contains(sortBy, ",") {
+		sortBy = strings.Split(sortBy, ",")[0]
+	}
 	desc := strings.EqualFold(sortOrder, "Descending")
 
 	sort.Slice(items, func(i, j int) bool {
