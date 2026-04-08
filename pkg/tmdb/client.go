@@ -20,10 +20,14 @@ type SyncStatus struct {
 }
 
 type VODItem struct {
+	StreamID   string
 	Name       string
 	MediaType  string
 	Collection string
+	TMDBID     int
 }
+
+type ResolvedFunc func(streamID string, tmdbID int)
 
 type Client struct {
 	http     *http.Client
@@ -173,69 +177,46 @@ func (c *Client) Invalidate(query string) {
 	c.cache.Delete("search_" + query + "_tv")
 }
 
-func (c *Client) LookupPoster(name, mediaType string) string {
+func (c *Client) LookupMovie(tmdbID int) *MovieMeta {
+	return c.meta.GetMovie(tmdbID)
+}
+
+func (c *Client) LookupSeries(tmdbID int) *SeriesMeta {
+	return c.meta.GetSeries(tmdbID)
+}
+
+func (c *Client) LookupEpisode(tmdbID int, season, episode int) *EpisodeMeta {
+	return c.meta.GetEpisode(tmdbID, season, episode)
+}
+
+func (c *Client) LookupCollection(tmdbID int) *CollectionMeta {
+	return c.meta.GetCollection(tmdbID)
+}
+
+func (c *Client) LookupPoster(tmdbID int, mediaType string) string {
 	if mediaType == "movie" {
-		if m := c.LookupMovie(name); m != nil && m.PosterPath != "" {
+		if m := c.LookupMovie(tmdbID); m != nil && m.PosterPath != "" {
 			return PosterURL(m.PosterPath)
 		}
 	} else {
-		if s := c.LookupSeries(name); s != nil && s.PosterPath != "" {
+		if s := c.LookupSeries(tmdbID); s != nil && s.PosterPath != "" {
 			return PosterURL(s.PosterPath)
 		}
 	}
 	return ""
 }
 
-func (c *Client) LookupCollection(name string) *CollectionMeta {
-	if col := c.meta.GetCollection(name); col != nil {
-		return col
-	}
-	return c.meta.GetCollection(name + " Collection")
-}
-
-func (c *Client) LookupBackdrop(name, mediaType string) string {
+func (c *Client) LookupBackdrop(tmdbID int, mediaType string) string {
 	if mediaType == "movie" {
-		if m := c.LookupMovie(name); m != nil && m.BackdropPath != "" {
+		if m := c.LookupMovie(tmdbID); m != nil && m.BackdropPath != "" {
 			return m.BackdropPath
 		}
 	} else {
-		if s := c.LookupSeries(name); s != nil && s.BackdropPath != "" {
+		if s := c.LookupSeries(tmdbID); s != nil && s.BackdropPath != "" {
 			return s.BackdropPath
 		}
 	}
 	return ""
-}
-
-func metaKey(name string) string {
-	clean, year := CleanVODName(name)
-	if year != "" {
-		return clean + " (" + year + ")"
-	}
-	return clean
-}
-
-func (c *Client) LookupMovie(name string) *MovieMeta {
-	if m := c.meta.GetMovie(metaKey(name)); m != nil {
-		return m
-	}
-	clean, _ := CleanVODName(name)
-	return c.meta.GetMovie(clean)
-}
-
-func (c *Client) LookupSeries(name string) *SeriesMeta {
-	if s := c.meta.GetSeries(metaKey(name)); s != nil {
-		return s
-	}
-	clean, _ := CleanVODName(name)
-	return c.meta.GetSeries(clean)
-}
-
-func (c *Client) LookupEpisode(seriesName string, season, episode int) *EpisodeMeta {
-	if e := c.meta.GetEpisode(metaKey(seriesName), season, episode); e != nil {
-		return e
-	}
-	clean, _ := CleanVODName(seriesName)
-	return c.meta.GetEpisode(clean, season, episode)
 }
 
 func (c *Client) ServeImage(w http.ResponseWriter, r *http.Request) {
@@ -250,10 +231,88 @@ func (c *Client) Status() SyncStatus {
 	}
 }
 
+func (c *Client) Rematch(tmdbID int, mediaType string) error {
+	if tmdbID == 0 {
+		return fmt.Errorf("tmdb_id required")
+	}
+
+	idStr := fmt.Sprintf("%d", tmdbID)
+	apiMediaType := mediaType
+	if mediaType == "series" {
+		apiMediaType = "tv"
+	}
+
+	details, err := c.Details(apiMediaType, idStr)
+	if err != nil {
+		return fmt.Errorf("fetching details: %w", err)
+	}
+
+	dm, ok := details.(map[string]any)
+	if !ok {
+		return fmt.Errorf("invalid details response")
+	}
+
+	if mediaType == "movie" {
+		m := &MovieMeta{TMDBID: tmdbID}
+		m.PosterPath, _ = dm["poster_path"].(string)
+		m.BackdropPath, _ = dm["backdrop_path"].(string)
+		m.Overview, _ = dm["overview"].(string)
+		m.Rating, _ = dm["vote_average"].(float64)
+		if date, _ := dm["release_date"].(string); len(date) >= 4 {
+			m.Year = date[:4]
+		}
+		m.Genres = extractDetailGenres(dm)
+		m.Certification = extractCertification(details, "GB", "US")
+
+		if btc, ok := dm["belongs_to_collection"].(map[string]any); ok {
+			colID := intVal(btc, "id")
+			if colID > 0 {
+				m.CollectionID = colID
+				poster, _ := btc["poster_path"].(string)
+				backdrop, _ := btc["backdrop_path"].(string)
+				c.meta.SetCollection(colID, &CollectionMeta{
+					TMDBID:       colID,
+					PosterPath:   poster,
+					BackdropPath: backdrop,
+				})
+			}
+		}
+
+		c.meta.SetMovie(tmdbID, m)
+	} else {
+		s := &SeriesMeta{
+			TMDBID:  tmdbID,
+			Seasons: make(map[int]*SeasonMeta),
+		}
+		s.PosterPath, _ = dm["poster_path"].(string)
+		s.BackdropPath, _ = dm["backdrop_path"].(string)
+		s.Overview, _ = dm["overview"].(string)
+		s.Rating, _ = dm["vote_average"].(float64)
+		if date, _ := dm["first_air_date"].(string); len(date) >= 4 {
+			s.Year = date[:4]
+		}
+		s.Genres = extractDetailGenres(dm)
+		s.Certification = extractCertification(details, "GB", "US")
+		c.meta.SetSeries(tmdbID, s)
+
+		c.fetchSeriesEpisodes(tmdbID)
+	}
+
+	return nil
+}
+
 func (c *Client) PopulateMetadataFromCache(items []VODItem) {
 	populated := 0
 	for _, item := range items {
-		key := metaKey(item.Name)
+		if item.TMDBID > 0 {
+			if item.MediaType == "movie" && c.meta.GetMovie(item.TMDBID) != nil {
+				continue
+			}
+			if item.MediaType != "movie" && c.meta.GetSeries(item.TMDBID) != nil {
+				continue
+			}
+		}
+
 		clean, year := CleanVODName(item.Name)
 		query := clean
 		if year != "" {
@@ -261,24 +320,18 @@ func (c *Client) PopulateMetadataFromCache(items []VODItem) {
 		}
 
 		if item.MediaType == "movie" {
-			if c.meta.GetMovie(key) != nil {
-				continue
-			}
 			cacheKey := SearchCacheKey(query, "movie")
 			if cached, ok := c.cache.Get(cacheKey); ok {
 				if result, ok := cached.(map[string]any); ok {
-					c.resolveMovieFromCache(key, result)
+					c.resolveMovieFromCache(result)
 					populated++
 				}
 			}
 		} else {
-			if c.meta.GetSeries(key) != nil {
-				continue
-			}
 			cacheKey := SearchCacheKey(query, "tv")
 			if cached, ok := c.cache.Get(cacheKey); ok {
 				if result, ok := cached.(map[string]any); ok {
-					c.resolveSeriesFromCache(key, result)
+					c.resolveSeriesFromCache(result)
 					populated++
 				}
 			}
@@ -289,16 +342,25 @@ func (c *Client) PopulateMetadataFromCache(items []VODItem) {
 	}
 }
 
-func (c *Client) resolveSeriesFromCache(cleanName string, searchResult map[string]any) {
+func (c *Client) resolveSeriesFromCache(searchResult map[string]any) int {
 	first := firstResult(searchResult)
 	if first == nil {
-		return
+		return 0
+	}
+
+	tmdbID := intVal(first, "id")
+	if tmdbID == 0 {
+		return 0
+	}
+
+	if c.meta.GetSeries(tmdbID) != nil {
+		return tmdbID
 	}
 
 	s := &SeriesMeta{
 		Seasons: make(map[int]*SeasonMeta),
 	}
-	s.TMDBID = intVal(first, "id")
+	s.TMDBID = tmdbID
 	s.PosterPath, _ = first["poster_path"].(string)
 	s.BackdropPath, _ = first["backdrop_path"].(string)
 	s.Overview, _ = first["overview"].(string)
@@ -308,26 +370,21 @@ func (c *Client) resolveSeriesFromCache(cleanName string, searchResult map[strin
 	}
 	s.Genres = extractGenres(first)
 
-	c.meta.SetSeries(cleanName, s)
+	c.meta.SetSeries(tmdbID, s)
 
-	if s.TMDBID == 0 {
-		return
-	}
-
-	tvID := fmt.Sprintf("%d", s.TMDBID)
-
+	tvID := fmt.Sprintf("%d", tmdbID)
 	detailKey := DetailCacheKey("tv", tvID)
 	detailCached, ok := c.cache.Get(detailKey)
 	if !ok {
-		return
+		return tmdbID
 	}
 	detailMap, ok := detailCached.(map[string]any)
 	if !ok {
-		return
+		return tmdbID
 	}
 	seasons, ok := detailMap["seasons"].([]any)
 	if !ok {
-		return
+		return tmdbID
 	}
 
 	for _, raw := range seasons {
@@ -371,11 +428,13 @@ func (c *Client) resolveSeriesFromCache(cleanName string, searchResult map[strin
 			em.AirDate, _ = ep["air_date"].(string)
 			episodes[epNum] = em
 		}
-		c.meta.SetSeasonEpisodes(cleanName, num, episodes)
+		c.meta.SetSeasonEpisodes(tmdbID, num, episodes)
 	}
+
+	return tmdbID
 }
 
-func (c *Client) Sync(items []VODItem) {
+func (c *Client) Sync(items []VODItem, onResolved ResolvedFunc) {
 	if c.syncing.Load() {
 		return
 	}
@@ -383,28 +442,28 @@ func (c *Client) Sync(items []VODItem) {
 	var toSync []VODItem
 	seen := make(map[string]bool)
 	for _, item := range items {
-		key := metaKey(item.Name)
-		if item.MediaType == "movie" {
-			if c.meta.GetMovie(key) != nil {
+		if item.TMDBID > 0 {
+			if item.MediaType == "movie" && c.meta.GetMovie(item.TMDBID) != nil {
 				continue
 			}
-		} else {
-			if c.meta.GetSeries(key) != nil {
+			if item.MediaType != "movie" && c.meta.GetSeries(item.TMDBID) != nil {
 				continue
 			}
 		}
-		if seen[key+"_"+item.MediaType] {
+
+		key := item.Name + "_" + item.MediaType
+		if seen[key] {
 			continue
 		}
-		seen[key+"_"+item.MediaType] = true
+		seen[key] = true
 		toSync = append(toSync, item)
 	}
 
-	var seriesNeedEpisodes []string
+	var seriesNeedEpisodes []int
 	c.meta.mu.RLock()
-	for name, s := range c.meta.Series {
+	for id, s := range c.meta.Series {
 		if s.TMDBID > 0 && len(s.Seasons) == 0 {
-			seriesNeedEpisodes = append(seriesNeedEpisodes, name)
+			seriesNeedEpisodes = append(seriesNeedEpisodes, id)
 		}
 	}
 	c.meta.mu.RUnlock()
@@ -442,22 +501,26 @@ func (c *Client) Sync(items []VODItem) {
 				continue
 			}
 
-			storeKey := metaKey(item.Name)
+			var resolvedID int
 			if item.MediaType == "movie" {
-				c.resolveMovie(storeKey, result)
+				resolvedID = c.resolveMovie(result)
 			} else {
-				c.resolveSeries(storeKey, result)
+				resolvedID = c.resolveSeries(result)
+			}
+
+			if resolvedID > 0 && onResolved != nil && item.StreamID != "" {
+				onResolved(item.StreamID, resolvedID)
 			}
 
 			c.syncDone.Add(1)
 			time.Sleep(250 * time.Millisecond)
 		}
 
-		for _, name := range seriesNeedEpisodes {
+		for _, tmdbID := range seriesNeedEpisodes {
 			if c.apiKeyFn() == "" {
 				break
 			}
-			c.fetchSeriesEpisodes(name)
+			c.fetchSeriesEpisodes(tmdbID)
 			c.syncDone.Add(1)
 		}
 
@@ -468,8 +531,8 @@ func (c *Client) Sync(items []VODItem) {
 	}()
 }
 
-func (c *Client) fetchSeriesEpisodes(cleanName string) {
-	s := c.meta.GetSeries(cleanName)
+func (c *Client) fetchSeriesEpisodes(tmdbID int) {
+	s := c.meta.GetSeries(tmdbID)
 	if s == nil || s.TMDBID == 0 {
 		return
 	}
@@ -532,18 +595,26 @@ func (c *Client) fetchSeriesEpisodes(cleanName string) {
 			em.AirDate, _ = ep["air_date"].(string)
 			episodes[epNum] = em
 		}
-		c.meta.SetSeasonEpisodes(cleanName, num, episodes)
+		c.meta.SetSeasonEpisodes(tmdbID, num, episodes)
 	}
 }
 
-func (c *Client) resolveMovieFromCache(cleanName string, searchResult map[string]any) {
+func (c *Client) resolveMovieFromCache(searchResult map[string]any) int {
 	first := firstResult(searchResult)
 	if first == nil {
-		return
+		return 0
 	}
 
-	m := &MovieMeta{}
-	m.TMDBID = intVal(first, "id")
+	tmdbID := intVal(first, "id")
+	if tmdbID == 0 {
+		return 0
+	}
+
+	if c.meta.GetMovie(tmdbID) != nil {
+		return tmdbID
+	}
+
+	m := &MovieMeta{TMDBID: tmdbID}
 	m.PosterPath, _ = first["poster_path"].(string)
 	m.BackdropPath, _ = first["backdrop_path"].(string)
 	m.Overview, _ = first["overview"].(string)
@@ -553,38 +624,42 @@ func (c *Client) resolveMovieFromCache(cleanName string, searchResult map[string
 	}
 	m.Genres = extractGenres(first)
 
-	if m.TMDBID > 0 {
-		detailKey := DetailCacheKey("movie", fmt.Sprintf("%d", m.TMDBID))
-		if details, ok := c.cache.Get(detailKey); ok {
-			m.Certification = extractCertification(details, "GB", "US")
-			if dm, ok := details.(map[string]any); ok {
-				if btc, ok := dm["belongs_to_collection"].(map[string]any); ok {
-					colName, _ := btc["name"].(string)
-					if colName != "" {
-						poster, _ := btc["poster_path"].(string)
-						backdrop, _ := btc["backdrop_path"].(string)
-						c.meta.SetCollection(colName, &CollectionMeta{
-							TMDBID:       intVal(btc, "id"),
-							PosterPath:   poster,
-							BackdropPath: backdrop,
-						})
-					}
+	detailKey := DetailCacheKey("movie", fmt.Sprintf("%d", tmdbID))
+	if details, ok := c.cache.Get(detailKey); ok {
+		m.Certification = extractCertification(details, "GB", "US")
+		if dm, ok := details.(map[string]any); ok {
+			if btc, ok := dm["belongs_to_collection"].(map[string]any); ok {
+				colID := intVal(btc, "id")
+				if colID > 0 {
+					m.CollectionID = colID
+					poster, _ := btc["poster_path"].(string)
+					backdrop, _ := btc["backdrop_path"].(string)
+					c.meta.SetCollection(colID, &CollectionMeta{
+						TMDBID:       colID,
+						PosterPath:   poster,
+						BackdropPath: backdrop,
+					})
 				}
 			}
 		}
 	}
 
-	c.meta.SetMovie(cleanName, m)
+	c.meta.SetMovie(tmdbID, m)
+	return tmdbID
 }
 
-func (c *Client) resolveMovie(cleanName string, searchResult map[string]any) {
+func (c *Client) resolveMovie(searchResult map[string]any) int {
 	first := firstResult(searchResult)
 	if first == nil {
-		return
+		return 0
 	}
 
-	m := &MovieMeta{}
-	m.TMDBID = intVal(first, "id")
+	tmdbID := intVal(first, "id")
+	if tmdbID == 0 {
+		return 0
+	}
+
+	m := &MovieMeta{TMDBID: tmdbID}
 	m.PosterPath, _ = first["poster_path"].(string)
 	m.BackdropPath, _ = first["backdrop_path"].(string)
 	m.Overview, _ = first["overview"].(string)
@@ -594,39 +669,44 @@ func (c *Client) resolveMovie(cleanName string, searchResult map[string]any) {
 	}
 	m.Genres = extractGenres(first)
 
-	if m.TMDBID > 0 {
-		if details, err := c.Details("movie", fmt.Sprintf("%d", m.TMDBID)); err == nil {
-			m.Certification = extractCertification(details, "GB", "US")
-			if dm, ok := details.(map[string]any); ok {
-				if btc, ok := dm["belongs_to_collection"].(map[string]any); ok {
-					colName, _ := btc["name"].(string)
-					if colName != "" {
-						poster, _ := btc["poster_path"].(string)
-						backdrop, _ := btc["backdrop_path"].(string)
-						c.meta.SetCollection(colName, &CollectionMeta{
-							TMDBID:       intVal(btc, "id"),
-							PosterPath:   poster,
-							BackdropPath: backdrop,
-						})
-					}
+	if details, err := c.Details("movie", fmt.Sprintf("%d", tmdbID)); err == nil {
+		m.Certification = extractCertification(details, "GB", "US")
+		if dm, ok := details.(map[string]any); ok {
+			if btc, ok := dm["belongs_to_collection"].(map[string]any); ok {
+				colID := intVal(btc, "id")
+				if colID > 0 {
+					m.CollectionID = colID
+					poster, _ := btc["poster_path"].(string)
+					backdrop, _ := btc["backdrop_path"].(string)
+					c.meta.SetCollection(colID, &CollectionMeta{
+						TMDBID:       colID,
+						PosterPath:   poster,
+						BackdropPath: backdrop,
+					})
 				}
 			}
 		}
 	}
 
-	c.meta.SetMovie(cleanName, m)
+	c.meta.SetMovie(tmdbID, m)
+	return tmdbID
 }
 
-func (c *Client) resolveSeries(cleanName string, searchResult map[string]any) {
+func (c *Client) resolveSeries(searchResult map[string]any) int {
 	first := firstResult(searchResult)
 	if first == nil {
-		return
+		return 0
+	}
+
+	tmdbID := intVal(first, "id")
+	if tmdbID == 0 {
+		return 0
 	}
 
 	s := &SeriesMeta{
+		TMDBID:  tmdbID,
 		Seasons: make(map[int]*SeasonMeta),
 	}
-	s.TMDBID = intVal(first, "id")
 	s.PosterPath, _ = first["poster_path"].(string)
 	s.BackdropPath, _ = first["backdrop_path"].(string)
 	s.Overview, _ = first["overview"].(string)
@@ -636,29 +716,24 @@ func (c *Client) resolveSeries(cleanName string, searchResult map[string]any) {
 	}
 	s.Genres = extractGenres(first)
 
-	if s.TMDBID == 0 {
-		c.meta.SetSeries(cleanName, s)
-		return
-	}
-
-	tvID := fmt.Sprintf("%d", s.TMDBID)
+	tvID := fmt.Sprintf("%d", tmdbID)
 	details, err := c.Details("tv", tvID)
 	if err != nil {
-		c.meta.SetSeries(cleanName, s)
-		return
+		c.meta.SetSeries(tmdbID, s)
+		return tmdbID
 	}
 	time.Sleep(250 * time.Millisecond)
 
 	s.Certification = extractCertification(details, "GB", "US")
-	c.meta.SetSeries(cleanName, s)
+	c.meta.SetSeries(tmdbID, s)
 
 	detailMap, ok := details.(map[string]any)
 	if !ok {
-		return
+		return tmdbID
 	}
 	seasons, ok := detailMap["seasons"].([]any)
 	if !ok {
-		return
+		return tmdbID
 	}
 
 	for _, raw := range seasons {
@@ -703,8 +778,10 @@ func (c *Client) resolveSeries(cleanName string, searchResult map[string]any) {
 			em.AirDate, _ = ep["air_date"].(string)
 			episodes[epNum] = em
 		}
-		c.meta.SetSeasonEpisodes(cleanName, num, episodes)
+		c.meta.SetSeasonEpisodes(tmdbID, num, episodes)
 	}
+
+	return tmdbID
 }
 
 func firstResult(searchResult map[string]any) map[string]any {
@@ -735,6 +812,24 @@ func extractGenres(m map[string]any) []string {
 			if name, exists := genreMap[int(gid)]; exists {
 				genres = append(genres, name)
 			}
+		}
+	}
+	return genres
+}
+
+func extractDetailGenres(m map[string]any) []string {
+	raw, ok := m["genres"].([]any)
+	if !ok {
+		return nil
+	}
+	var genres []string
+	for _, g := range raw {
+		gm, ok := g.(map[string]any)
+		if !ok {
+			continue
+		}
+		if name, ok := gm["name"].(string); ok && name != "" {
+			genres = append(genres, name)
 		}
 	}
 	return genres

@@ -270,6 +270,19 @@ func (s *StreamStoreImpl) Delete(_ context.Context, id string) error {
 	return nil
 }
 
+func (s *StreamStoreImpl) UpdateTMDBID(_ context.Context, id string, tmdbID int) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	st, ok := s.items[id]
+	if !ok {
+		return fmt.Errorf("stream not found: %s", id)
+	}
+	st.TMDBID = tmdbID
+	st.UpdatedAt = time.Now()
+	s.items[id] = st
+	return nil
+}
+
 func (s *StreamStoreImpl) Clear() error {
 	s.mu.Lock()
 	s.items = make(map[string]models.Stream)

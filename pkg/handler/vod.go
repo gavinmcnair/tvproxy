@@ -525,7 +525,18 @@ func (h *VODHandler) HLSMaster(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	profile := hls.ProfileSettings{VideoCodec: "copy", AudioCodec: "aac"}
+	profile := hls.ProfileSettings{
+		VideoCodec: sess.OutputVideoCodec,
+		AudioCodec: sess.OutputAudioCodec,
+		HWAccel:    sess.OutputHWAccel,
+		Container:  sess.OutputContainer,
+	}
+	if profile.VideoCodec == "" {
+		profile.VideoCodec = "copy"
+	}
+	if profile.AudioCodec == "" {
+		profile.AudioCodec = "aac"
+	}
 	hlsSess := h.hlsManager.GetOrCreateSession(channelID, streamURL, 6, durationTicks, sess.Duration == 0, profile)
 	playlistURL := fmt.Sprintf("/vod/%s/hls/playlist.m3u8", channelID)
 	hls.ServeMasterPlaylist(w, hlsSess, playlistURL)

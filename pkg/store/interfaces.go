@@ -29,6 +29,7 @@ type StreamWriter interface {
 	DeleteOrphanedM3UStreams(ctx context.Context, knownAccountIDs []string) ([]string, error)
 	DeleteOrphanedSatIPStreams(ctx context.Context, knownSourceIDs []string) ([]string, error)
 	Delete(ctx context.Context, id string) error
+	UpdateTMDBID(ctx context.Context, id string, tmdbID int) error
 	Clear() error
 }
 

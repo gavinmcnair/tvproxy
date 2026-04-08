@@ -127,7 +127,7 @@ func (s *Server) itemDetail(w http.ResponseWriter, r *http.Request) {
 			item.SeriesID = seriesIDFromName(key)
 			item.IndexNumber = stream.VODEpisode
 			item.ParentIndexNumber = stream.VODSeason
-			if ep := s.tmdbClient.LookupEpisode(key, stream.VODSeason, stream.VODEpisode); ep != nil {
+			if ep := s.tmdbClient.LookupEpisode(stream.TMDBID, stream.VODSeason, stream.VODEpisode); ep != nil {
 				if ep.Name != "" {
 					item.Name = ep.Name
 				}
@@ -172,7 +172,7 @@ func (s *Server) findSeriesItem(ctx context.Context, seriesID string) (BaseItemD
 		if seriesIDFromName(key) != seriesID {
 			continue
 		}
-		item := s.enrichSeriesItem(key)
+		item := s.enrichSeriesItem(key, st.TMDBID)
 		var childCount int
 		for _, s2 := range streams {
 			if s2.VODType == "series" && seriesKey(&s2) == key {
@@ -356,15 +356,17 @@ func (s *Server) listEpisodes(w http.ResponseWriter, r *http.Request) {
 		item.IndexNumber = st.VODEpisode
 		item.ParentIndexNumber = st.VODSeason
 
-		if ep := s.tmdbClient.LookupEpisode(key, st.VODSeason, st.VODEpisode); ep != nil {
-			if ep.Name != "" {
-				item.Name = ep.Name
-			}
-			if ep.Overview != "" {
-				item.Overview = ep.Overview
-			}
-			if ep.StillPath != "" {
-				item.ImageTags["Primary"] = "tmdb_ep"
+		if st.TMDBID > 0 {
+			if ep := s.tmdbClient.LookupEpisode(st.TMDBID, st.VODSeason, st.VODEpisode); ep != nil {
+				if ep.Name != "" {
+					item.Name = ep.Name
+				}
+				if ep.Overview != "" {
+					item.Overview = ep.Overview
+				}
+				if ep.StillPath != "" {
+					item.ImageTags["Primary"] = "tmdb_ep"
+				}
 			}
 		}
 
@@ -395,17 +397,19 @@ func (s *Server) listFilters(w http.ResponseWriter, r *http.Request) {
 		if st.VODType != "movie" {
 			continue
 		}
-		if m := s.tmdbClient.LookupMovie(st.Name); m != nil {
-			for _, g := range m.Genres {
-				genreSet[g] = true
-			}
-			if m.Year != "" {
-				if yr, _ := strconv.Atoi(m.Year); yr > 0 {
-					yearSet[yr] = true
+		if st.TMDBID > 0 {
+			if m := s.tmdbClient.LookupMovie(st.TMDBID); m != nil {
+				for _, g := range m.Genres {
+					genreSet[g] = true
 				}
-			}
-			if m.Certification != "" {
-				ratingSet[m.Certification] = true
+				if m.Year != "" {
+					if yr, _ := strconv.Atoi(m.Year); yr > 0 {
+						yearSet[yr] = true
+					}
+				}
+				if m.Certification != "" {
+					ratingSet[m.Certification] = true
+				}
 			}
 		}
 	}
@@ -447,8 +451,10 @@ func (s *Server) listSimilarItems(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var sourceGenres []string
-	if m := s.tmdbClient.LookupMovie(stream.Name); m != nil {
-		sourceGenres = m.Genres
+	if stream.TMDBID > 0 {
+		if m := s.tmdbClient.LookupMovie(stream.TMDBID); m != nil {
+			sourceGenres = m.Genres
+		}
 	}
 	if len(sourceGenres) == 0 {
 		s.respondJSON(w, http.StatusOK, emptyResult())
@@ -541,7 +547,7 @@ func (s *Server) buildSeriesItems(ctx context.Context, searchTerm, genres string
 			continue
 		}
 
-		item := s.enrichSeriesItem(key)
+		item := s.enrichSeriesItem(key, st.TMDBID)
 		item.ChildCount = 1
 		if len(genreFilter) > 0 && !matchesGenres(item.Genres, genreFilter) {
 			continue
@@ -611,24 +617,26 @@ func (s *Server) enrichMovieItem(st *models.Stream) BaseItemDto {
 		}
 	}
 
-	if m := s.tmdbClient.LookupMovie(st.Name); m != nil {
-		item.Overview = m.Overview
-		item.CommunityRating = m.Rating
-		item.OfficialRating = m.Certification
-		item.Genres = m.Genres
-		item.GenreItems = genreItems(m.Genres)
-		if m.Year != "" {
-			if yr, _ := strconv.Atoi(m.Year); yr > 0 {
-				item.ProductionYear = yr
-				item.PremiereDate = m.Year + "-01-01T00:00:00.0000000Z"
-				item.DateCreated = m.Year + "-01-01T00:00:00.0000000Z"
+	if st.TMDBID > 0 {
+		if m := s.tmdbClient.LookupMovie(st.TMDBID); m != nil {
+			item.Overview = m.Overview
+			item.CommunityRating = m.Rating
+			item.OfficialRating = m.Certification
+			item.Genres = m.Genres
+			item.GenreItems = genreItems(m.Genres)
+			if m.Year != "" {
+				if yr, _ := strconv.Atoi(m.Year); yr > 0 {
+					item.ProductionYear = yr
+					item.PremiereDate = m.Year + "-01-01T00:00:00.0000000Z"
+					item.DateCreated = m.Year + "-01-01T00:00:00.0000000Z"
+				}
 			}
-		}
-		if m.PosterPath != "" {
-			item.ImageTags["Primary"] = "tmdb"
-		}
-		if m.BackdropPath != "" {
-			item.BackdropImageTags = []string{"tmdb"}
+			if m.PosterPath != "" {
+				item.ImageTags["Primary"] = "tmdb"
+			}
+			if m.BackdropPath != "" {
+				item.BackdropImageTags = []string{"tmdb"}
+			}
 		}
 	}
 
@@ -640,7 +648,7 @@ func (s *Server) enrichMovieItem(st *models.Stream) BaseItemDto {
 	return item
 }
 
-func (s *Server) enrichSeriesItem(name string) BaseItemDto {
+func (s *Server) enrichSeriesItem(name string, tmdbID int) BaseItemDto {
 	item := BaseItemDto{
 		Name:         name,
 		SortName:     sortName(name),
@@ -654,7 +662,8 @@ func (s *Server) enrichSeriesItem(name string) BaseItemDto {
 		UserData:     &UserItemData{Key: name},
 	}
 
-	if sr := s.tmdbClient.LookupSeries(name); sr != nil {
+	if tmdbID > 0 {
+	if sr := s.tmdbClient.LookupSeries(tmdbID); sr != nil {
 		item.Overview = sr.Overview
 		item.CommunityRating = sr.Rating
 		item.OfficialRating = sr.Certification
@@ -672,6 +681,7 @@ func (s *Server) enrichSeriesItem(name string) BaseItemDto {
 		if sr.BackdropPath != "" {
 			item.BackdropImageTags = []string{"tmdb"}
 		}
+	}
 	}
 
 	return item

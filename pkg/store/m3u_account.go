@@ -22,6 +22,7 @@ type M3UAccountStore interface {
 	UpdateLastRefreshed(ctx context.Context, id string, lastRefreshed time.Time) error
 	UpdateLastError(ctx context.Context, id, lastError string) error
 	UpdateStreamCount(ctx context.Context, id string, count int) error
+	UpdateETag(ctx context.Context, id, etag string) error
 }
 
 type M3UAccountStoreImpl struct {
@@ -146,6 +147,19 @@ func (s *M3UAccountStoreImpl) UpdateStreamCount(_ context.Context, id string, co
 	for i := range s.accounts {
 		if s.accounts[i].ID == id {
 			s.accounts[i].StreamCount = count
+			s.accounts[i].UpdatedAt = time.Now()
+			return s.save()
+		}
+	}
+	return fmt.Errorf("m3u account not found")
+}
+
+func (s *M3UAccountStoreImpl) UpdateETag(_ context.Context, id, etag string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i := range s.accounts {
+		if s.accounts[i].ID == id {
+			s.accounts[i].ETag = etag
 			s.accounts[i].UpdatedAt = time.Now()
 			return s.save()
 		}

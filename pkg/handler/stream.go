@@ -100,6 +100,7 @@ func (h *StreamHandler) VODLibrary(w http.ResponseWriter, r *http.Request) {
 		URL             string   `json:"url"`
 		Logo            string   `json:"logo,omitempty"`
 		PosterURL       string   `json:"poster_url,omitempty"`
+		TMDBID          int      `json:"tmdb_id,omitempty"`
 		Type            string   `json:"type"`
 		Series          string   `json:"series,omitempty"`
 		Collection         string `json:"collection,omitempty"`
@@ -124,7 +125,7 @@ func (h *StreamHandler) VODLibrary(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var items []vodItem
-	var uncached []struct{ Name, MediaType string }
+	var uncached []tmdb.VODItem
 	seen := make(map[string]bool)
 
 	for _, s := range streams {
@@ -148,12 +149,12 @@ func (h *StreamHandler) VODLibrary(w http.ResponseWriter, r *http.Request) {
 		}
 
 		posterURL := ""
-		if h.tmdb != nil {
-			posterURL = h.tmdb.LookupPoster(lookupName, mediaType)
-			if posterURL == "" && !seen[lookupName+"_"+mediaType] {
-				seen[lookupName+"_"+mediaType] = true
-				uncached = append(uncached, struct{ Name, MediaType string }{lookupName, mediaType})
-			}
+		if h.tmdb != nil && s.TMDBID > 0 {
+			posterURL = h.tmdb.LookupPoster(s.TMDBID, mediaType)
+		}
+		if h.tmdb != nil && posterURL == "" && !seen[lookupName+"_"+mediaType] {
+			seen[lookupName+"_"+mediaType] = true
+			uncached = append(uncached, tmdb.VODItem{StreamID: s.ID, Name: lookupName, MediaType: mediaType, TMDBID: s.TMDBID})
 		}
 
 		item := vodItem{
@@ -162,6 +163,7 @@ func (h *StreamHandler) VODLibrary(w http.ResponseWriter, r *http.Request) {
 			URL:        s.URL,
 			Logo:       h.logoService.Resolve(s.Logo),
 			PosterURL:  posterURL,
+			TMDBID:     s.TMDBID,
 			Type:       s.VODType,
 			Series:     s.VODSeries,
 			Collection: s.VODCollection,
@@ -175,17 +177,27 @@ func (h *StreamHandler) VODLibrary(w http.ResponseWriter, r *http.Request) {
 			Duration:  s.VODDuration,
 		}
 
-		if h.tmdb != nil {
+		if h.tmdb != nil && s.TMDBID > 0 {
 			if s.VODType == "movie" {
-				if m := h.tmdb.LookupMovie(lookupName); m != nil {
+				if m := h.tmdb.LookupMovie(s.TMDBID); m != nil {
 					item.Overview = m.Overview
 					item.Rating = m.Rating
 					item.Year = m.Year
 					item.Genres = m.Genres
 					item.Certification = m.Certification
+					if m.CollectionID > 0 {
+						if col := h.tmdb.LookupCollection(m.CollectionID); col != nil {
+							if col.PosterPath != "" {
+								item.CollectionPoster = tmdb.PosterURL(col.PosterPath)
+							}
+							if col.BackdropPath != "" {
+								item.CollectionBackdrop = tmdb.PosterURL(col.BackdropPath) + "&size=w1280"
+							}
+						}
+					}
 				}
 			} else if s.VODType == "series" {
-				if sr := h.tmdb.LookupSeries(lookupName); sr != nil {
+				if sr := h.tmdb.LookupSeries(s.TMDBID); sr != nil {
 					item.Overview = sr.Overview
 					item.Rating = sr.Rating
 					item.Year = sr.Year
@@ -193,23 +205,12 @@ func (h *StreamHandler) VODLibrary(w http.ResponseWriter, r *http.Request) {
 					item.Certification = sr.Certification
 				}
 				if s.VODSeason > 0 && s.VODEpisode > 0 {
-					if ep := h.tmdb.LookupEpisode(lookupName, s.VODSeason, s.VODEpisode); ep != nil {
+					if ep := h.tmdb.LookupEpisode(s.TMDBID, s.VODSeason, s.VODEpisode); ep != nil {
 						item.EpisodeName = ep.Name
 						item.EpisodeOverview = ep.Overview
 						if ep.StillPath != "" {
 							item.EpisodeStill = tmdb.PosterURL(ep.StillPath) + "&size=w300"
 						}
-					}
-				}
-			}
-
-			if s.VODCollection != "" {
-				if col := h.tmdb.LookupCollection(s.VODCollection); col != nil {
-					if col.PosterPath != "" {
-						item.CollectionPoster = tmdb.PosterURL(col.PosterPath)
-					}
-					if col.BackdropPath != "" {
-						item.CollectionBackdrop = tmdb.PosterURL(col.BackdropPath) + "&size=w1280"
 					}
 				}
 			}
@@ -219,11 +220,7 @@ func (h *StreamHandler) VODLibrary(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if h.tmdb != nil && len(uncached) > 0 {
-		var items []tmdb.VODItem
-		for _, u := range uncached {
-			items = append(items, tmdb.VODItem{Name: u.Name, MediaType: u.MediaType})
-		}
-		h.tmdb.Sync(items)
+		h.tmdb.Sync(uncached, nil)
 	}
 
 	if items == nil {

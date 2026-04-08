@@ -1546,7 +1546,7 @@ func TestIntegration_HDHRDiscovery(t *testing.T) {
 		assert.Equal(t, http.StatusOK, rec.Code)
 		var resp map[string]any
 		decodeResponse(t, rec, &resp)
-		assert.Equal(t, "Antenna", resp["Source"])
+		assert.Equal(t, "Cable", resp["Source"])
 	})
 
 	t.Run("discover without devices fails", func(t *testing.T) {
@@ -2639,10 +2639,11 @@ func TestIntegration_HDHR_LineupStatus(t *testing.T) {
 	decodeResponse(t, rec, &status)
 	assert.Equal(t, float64(0), status["ScanInProgress"])
 	assert.Equal(t, float64(1), status["ScanPossible"])
-	assert.Equal(t, "Antenna", status["Source"])
+	assert.Equal(t, "Cable", status["Source"])
 	sourceList := status["SourceList"].([]any)
-	require.Len(t, sourceList, 3)
-	assert.Equal(t, "Antenna", sourceList[0])
+	require.Len(t, sourceList, 2)
+	assert.Equal(t, "Cable", sourceList[0])
+	assert.Equal(t, "Antenna", sourceList[1])
 }
 
 func TestIntegration_HDHR_DeviceXML(t *testing.T) {

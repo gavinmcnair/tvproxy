@@ -26,6 +26,7 @@ type M3UAccount struct {
 	StreamCount     int        `json:"stream_count"`
 	RefreshInterval int        `json:"refresh_interval"`
 	LastError       string     `json:"last_error"`
+	ETag            string     `json:"etag,omitempty"`
 	CreatedAt       time.Time  `json:"created_at"`
 	UpdatedAt       time.Time  `json:"updated_at"`
 }
@@ -76,6 +77,7 @@ type Stream struct {
 	VODRes        string        `json:"vod_resolution,omitempty"`
 	VODAudio      string        `json:"vod_audio,omitempty"`
 	VODDuration   float64       `json:"vod_duration,omitempty"`
+	TMDBID        int           `json:"tmdb_id,omitempty"`
 	IsActive      bool          `json:"is_active"`
 	Tracks        []StreamTrack `json:"tracks,omitempty"`
 	CreatedAt     time.Time     `json:"created_at"`
@@ -262,6 +264,7 @@ type StreamSummary struct {
 	VODSeasonName string `json:"vod_season_name,omitempty"`
 	VODEpisode    int    `json:"vod_episode,omitempty"`
 	VODYear       int    `json:"vod_year,omitempty"`
+	TMDBID        int    `json:"tmdb_id,omitempty"`
 }
 
 type GuideProgram struct {

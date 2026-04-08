@@ -16,6 +16,7 @@ type MovieMeta struct {
 	Rating        float64  `json:"rating,omitempty"`
 	Genres        []string `json:"genres,omitempty"`
 	Certification string   `json:"certification,omitempty"`
+	CollectionID  int      `json:"collection_id,omitempty"`
 }
 
 type SeriesMeta struct {
@@ -27,7 +28,7 @@ type SeriesMeta struct {
 	Rating        float64                `json:"rating,omitempty"`
 	Genres        []string               `json:"genres,omitempty"`
 	Certification string                 `json:"certification,omitempty"`
-	Seasons     map[int]*SeasonMeta    `json:"seasons,omitempty"`
+	Seasons       map[int]*SeasonMeta    `json:"seasons,omitempty"`
 }
 
 type SeasonMeta struct {
@@ -48,53 +49,60 @@ type CollectionMeta struct {
 }
 
 type MetadataStore struct {
-	Movies      map[string]*MovieMeta      `json:"movies"`
-	Series      map[string]*SeriesMeta     `json:"series"`
-	Collections map[string]*CollectionMeta `json:"collections,omitempty"`
-	mu     sync.RWMutex
-	path   string
+	Movies      map[int]*MovieMeta      `json:"movies"`
+	Series      map[int]*SeriesMeta     `json:"series"`
+	Collections map[int]*CollectionMeta `json:"collections,omitempty"`
+	mu          sync.RWMutex
+	path        string
 }
 
 func NewMetadataStore(baseDir string) *MetadataStore {
 	ms := &MetadataStore{
-		Movies: make(map[string]*MovieMeta),
-		Series: make(map[string]*SeriesMeta),
-		path:   filepath.Join(baseDir, "metadata.json"),
+		Movies:      make(map[int]*MovieMeta),
+		Series:      make(map[int]*SeriesMeta),
+		Collections: make(map[int]*CollectionMeta),
+		path:        filepath.Join(baseDir, "metadata.json"),
 	}
 	ms.load()
 	return ms
 }
 
-func (ms *MetadataStore) GetMovie(name string) *MovieMeta {
+func (ms *MetadataStore) GetMovie(tmdbID int) *MovieMeta {
 	ms.mu.RLock()
 	defer ms.mu.RUnlock()
-	return ms.Movies[name]
+	return ms.Movies[tmdbID]
 }
 
-func (ms *MetadataStore) SetMovie(name string, m *MovieMeta) {
+func (ms *MetadataStore) SetMovie(tmdbID int, m *MovieMeta) {
+	if tmdbID == 0 {
+		return
+	}
 	ms.mu.Lock()
-	ms.Movies[name] = m
+	ms.Movies[tmdbID] = m
 	ms.mu.Unlock()
 	ms.save()
 }
 
-func (ms *MetadataStore) GetSeries(name string) *SeriesMeta {
+func (ms *MetadataStore) GetSeries(tmdbID int) *SeriesMeta {
 	ms.mu.RLock()
 	defer ms.mu.RUnlock()
-	return ms.Series[name]
+	return ms.Series[tmdbID]
 }
 
-func (ms *MetadataStore) SetSeries(name string, s *SeriesMeta) {
+func (ms *MetadataStore) SetSeries(tmdbID int, s *SeriesMeta) {
+	if tmdbID == 0 {
+		return
+	}
 	ms.mu.Lock()
-	ms.Series[name] = s
+	ms.Series[tmdbID] = s
 	ms.mu.Unlock()
 	ms.save()
 }
 
-func (ms *MetadataStore) GetEpisode(seriesName string, season, episode int) *EpisodeMeta {
+func (ms *MetadataStore) GetEpisode(tmdbID int, season, episode int) *EpisodeMeta {
 	ms.mu.RLock()
 	defer ms.mu.RUnlock()
-	s := ms.Series[seriesName]
+	s := ms.Series[tmdbID]
 	if s == nil || s.Seasons == nil {
 		return nil
 	}
@@ -105,9 +113,12 @@ func (ms *MetadataStore) GetEpisode(seriesName string, season, episode int) *Epi
 	return sm.Episodes[episode]
 }
 
-func (ms *MetadataStore) SetSeasonEpisodes(seriesName string, seasonNum int, episodes map[int]*EpisodeMeta) {
+func (ms *MetadataStore) SetSeasonEpisodes(tmdbID int, seasonNum int, episodes map[int]*EpisodeMeta) {
+	if tmdbID == 0 {
+		return
+	}
 	ms.mu.Lock()
-	s := ms.Series[seriesName]
+	s := ms.Series[tmdbID]
 	if s == nil {
 		ms.mu.Unlock()
 		return
@@ -120,23 +131,26 @@ func (ms *MetadataStore) SetSeasonEpisodes(seriesName string, seasonNum int, epi
 	ms.save()
 }
 
-func (ms *MetadataStore) GetCollection(name string) *CollectionMeta {
+func (ms *MetadataStore) GetCollection(tmdbID int) *CollectionMeta {
 	ms.mu.RLock()
 	defer ms.mu.RUnlock()
-	if ms.Collections == nil {
-		return nil
-	}
-	return ms.Collections[name]
+	return ms.Collections[tmdbID]
 }
 
-func (ms *MetadataStore) SetCollection(name string, c *CollectionMeta) {
-	ms.mu.Lock()
-	if ms.Collections == nil {
-		ms.Collections = make(map[string]*CollectionMeta)
+func (ms *MetadataStore) SetCollection(tmdbID int, c *CollectionMeta) {
+	if tmdbID == 0 {
+		return
 	}
-	ms.Collections[name] = c
+	ms.mu.Lock()
+	ms.Collections[tmdbID] = c
 	ms.mu.Unlock()
 	ms.save()
+}
+
+type legacyMetadata struct {
+	Movies      map[string]*MovieMeta      `json:"movies"`
+	Series      map[string]*SeriesMeta     `json:"series"`
+	Collections map[string]*CollectionMeta `json:"collections,omitempty"`
 }
 
 func (ms *MetadataStore) load() {
@@ -146,15 +160,44 @@ func (ms *MetadataStore) load() {
 	}
 	ms.mu.Lock()
 	defer ms.mu.Unlock()
-	json.Unmarshal(data, ms)
+
+	if err := json.Unmarshal(data, ms); err != nil || len(ms.Movies) == 0 {
+		ms.Movies = make(map[int]*MovieMeta)
+		ms.Series = make(map[int]*SeriesMeta)
+		ms.Collections = make(map[int]*CollectionMeta)
+
+		var legacy legacyMetadata
+		if err := json.Unmarshal(data, &legacy); err == nil {
+			ms.migrateLegacy(&legacy)
+		}
+	}
+
 	if ms.Movies == nil {
-		ms.Movies = make(map[string]*MovieMeta)
+		ms.Movies = make(map[int]*MovieMeta)
 	}
 	if ms.Series == nil {
-		ms.Series = make(map[string]*SeriesMeta)
+		ms.Series = make(map[int]*SeriesMeta)
 	}
 	if ms.Collections == nil {
-		ms.Collections = make(map[string]*CollectionMeta)
+		ms.Collections = make(map[int]*CollectionMeta)
+	}
+}
+
+func (ms *MetadataStore) migrateLegacy(legacy *legacyMetadata) {
+	for _, m := range legacy.Movies {
+		if m.TMDBID > 0 {
+			ms.Movies[m.TMDBID] = m
+		}
+	}
+	for _, s := range legacy.Series {
+		if s.TMDBID > 0 {
+			ms.Series[s.TMDBID] = s
+		}
+	}
+	for _, c := range legacy.Collections {
+		if c.TMDBID > 0 {
+			ms.Collections[c.TMDBID] = c
+		}
 	}
 }
 

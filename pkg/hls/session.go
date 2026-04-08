@@ -162,7 +162,7 @@ func (s *Session) buildFFmpegArgs(startNumber int, startTimeTicks int64) []strin
 		"-c:v", videoCodec,
 	)
 
-	if videoCodec != "copy" && videoCodec != "libx264" {
+	if isHEVC(videoCodec) {
 		args = append(args, "-tag:v:0", "hvc1")
 	}
 
@@ -246,6 +246,14 @@ func (s *Session) WaitForSegment(index int, timeout time.Duration) error {
 	}
 
 	return fmt.Errorf("segment %d not ready after %v", index, timeout)
+}
+
+func isHEVC(codec string) bool {
+	switch codec {
+	case "libx265", "hevc", "hevc_vaapi", "hevc_qsv", "hevc_nvenc", "hevc_videotoolbox":
+		return true
+	}
+	return false
 }
 
 func (s *Session) CurrentTranscodeIndex() int {

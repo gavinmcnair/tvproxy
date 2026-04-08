@@ -1,17 +1,20 @@
 package handler
 
 import (
+	"context"
 	"net/http"
 
+	"github.com/gavinmcnair/tvproxy/pkg/store"
 	"github.com/gavinmcnair/tvproxy/pkg/tmdb"
 )
 
 type TMDBHandler struct {
-	client *tmdb.Client
+	client      *tmdb.Client
+	streamStore store.StreamStore
 }
 
-func NewTMDBHandler(client *tmdb.Client) *TMDBHandler {
-	return &TMDBHandler{client: client}
+func NewTMDBHandler(client *tmdb.Client, streamStore store.StreamStore) *TMDBHandler {
+	return &TMDBHandler{client: client, streamStore: streamStore}
 }
 
 func (h *TMDBHandler) Search(w http.ResponseWriter, r *http.Request) {
@@ -78,4 +81,64 @@ func (h *TMDBHandler) ServeImage(w http.ResponseWriter, r *http.Request) {
 
 func (h *TMDBHandler) SyncStatus(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, http.StatusOK, h.client.Status())
+}
+
+func (h *TMDBHandler) Rematch(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		StreamID  string `json:"stream_id"`
+		TMDBID    int    `json:"tmdb_id"`
+		MediaType string `json:"media_type"`
+	}
+	if err := decodeJSON(r, &req); err != nil {
+		respondError(w, http.StatusBadRequest, "invalid request")
+		return
+	}
+	if req.StreamID == "" || req.TMDBID == 0 || req.MediaType == "" {
+		respondError(w, http.StatusBadRequest, "stream_id, tmdb_id, and media_type required")
+		return
+	}
+
+	if err := h.streamStore.UpdateTMDBID(r.Context(), req.StreamID, req.TMDBID); err != nil {
+		respondError(w, http.StatusNotFound, "stream not found")
+		return
+	}
+	if err := h.streamStore.Save(); err != nil {
+		respondError(w, http.StatusInternalServerError, "failed to save")
+		return
+	}
+
+	if err := h.client.Rematch(req.TMDBID, req.MediaType); err != nil {
+		respondError(w, http.StatusBadGateway, "tmdb fetch failed")
+		return
+	}
+
+	h.updateRelatedStreams(r.Context(), req.StreamID, req.TMDBID, req.MediaType)
+
+	respondJSON(w, http.StatusOK, map[string]any{"tmdb_id": req.TMDBID})
+}
+
+func (h *TMDBHandler) updateRelatedStreams(ctx context.Context, sourceStreamID string, tmdbID int, mediaType string) {
+	if mediaType != "series" {
+		return
+	}
+
+	source, err := h.streamStore.GetByID(ctx, sourceStreamID)
+	if err != nil || source == nil || source.VODSeries == "" {
+		return
+	}
+
+	streams, err := h.streamStore.List(ctx)
+	if err != nil {
+		return
+	}
+
+	for _, st := range streams {
+		if st.ID == sourceStreamID || st.VODType != "series" {
+			continue
+		}
+		if st.VODSeries == source.VODSeries && st.TMDBID == 0 {
+			h.streamStore.UpdateTMDBID(ctx, st.ID, tmdbID)
+		}
+	}
+	h.streamStore.Save()
 }

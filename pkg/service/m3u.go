@@ -173,14 +173,22 @@ func (s *M3UService) refreshM3UAccount(ctx context.Context, account *models.M3UA
 	s.log.Info().Str("account_id", account.ID).Str("name", account.Name).Msg("refreshing m3u account")
 	s.Set(account.ID, RefreshStatus{State: "running", Message: "Downloading playlist..."})
 
-	body, err := httputil.FetchAndDecompress(ctx, s.httpClient, s.config, account.URL, s.log)
+	result, err := httputil.FetchConditional(ctx, s.httpClient, s.config, account.URL, account.ETag, s.log)
 	if err != nil {
 		return fmt.Errorf("fetching m3u url: %w", err)
 	}
-	defer body.Close()
+	if !result.Changed {
+		s.log.Info().Str("account_id", account.ID).Msg("m3u unchanged (etag match)")
+		return nil
+	}
+	defer result.Body.Close()
+
+	if result.ETag != account.ETag {
+		s.m3uAccountStore.UpdateETag(ctx, account.ID, result.ETag)
+	}
 
 	s.Set(account.ID, RefreshStatus{State: "running", Message: "Parsing entries..."})
-	entries, err := m3u.Parse(body)
+	entries, err := m3u.Parse(result.Body)
 	if err != nil {
 		return fmt.Errorf("parsing m3u: %w", err)
 	}
@@ -264,12 +272,10 @@ func (s *M3UService) upsertAndFinalize(ctx context.Context, account *models.M3UA
 	if err := s.m3uAccountStore.UpdateStreamCount(ctx, account.ID, len(streams)); err != nil {
 		return fmt.Errorf("updating stream count: %w", err)
 	}
-
 	s.log.Info().
 		Str("account_id", account.ID).
 		Int("total", len(streams)).
 		Msg("account refresh complete")
-
 
 	return nil
 }

@@ -1091,6 +1091,19 @@
       actionIcons.appendChild(favIcon);
     }
 
+    if (opts.vodStreamID && opts.mediaType) {
+      var rematchIcon = document.createElement('button');
+      rematchIcon.style.cssText = iconBtnStyle + 'font-size:15px;';
+      rematchIcon.title = opts.tmdbID ? 'Rematch TMDB' : 'Match TMDB';
+      rematchIcon.textContent = '\uD83D\uDD0D';
+      rematchIcon.onmouseenter = function() { rematchIcon.style.background = 'rgba(255,255,255,0.2)'; };
+      rematchIcon.onmouseleave = function() { rematchIcon.style.background = 'rgba(0,0,0,0.5)'; };
+      rematchIcon.onclick = function() {
+        showRematchModal(opts.vodStreamID, opts.mediaType, opts.title, function() { overlay.remove(); });
+      };
+      actionIcons.appendChild(rematchIcon);
+    }
+
     if ((opts.isLive || opts.isFuture) && opts.stop) {
       var recIcon = document.createElement('button');
       recIcon.style.cssText = iconBtnStyle;
@@ -1283,6 +1296,109 @@
         }
       }).catch(function() {});
     }).catch(function() {});
+  }
+
+  function showRematchModal(streamID, mediaType, currentTitle, onDone) {
+    var tmdbType = mediaType === 'series' ? 'tv' : 'movie';
+    var overlay = document.createElement('div');
+    overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.85);z-index:10000;display:flex;align-items:center;justify-content:center;backdrop-filter:blur(6px);';
+    overlay.onclick = function(e) { if (e.target === overlay) overlay.remove(); };
+    document.addEventListener('keydown', function onKey(e) { if (e.key === 'Escape') { overlay.remove(); document.removeEventListener('keydown', onKey); } });
+
+    var modal = document.createElement('div');
+    modal.style.cssText = 'width:90%;max-width:600px;max-height:80vh;background:#1a1d23;border-radius:16px;overflow:hidden;display:flex;flex-direction:column;box-shadow:0 24px 80px rgba(0,0,0,0.6);';
+
+    var header = document.createElement('div');
+    header.style.cssText = 'padding:20px 24px;border-bottom:1px solid var(--border);';
+    header.appendChild(Object.assign(document.createElement('div'), { style: 'font-size:18px;font-weight:700;color:var(--text-primary);margin-bottom:12px;', textContent: 'TMDB Match' }));
+
+    var searchRow = document.createElement('div');
+    searchRow.style.cssText = 'display:flex;gap:8px;';
+    var searchInput = document.createElement('input');
+    searchInput.type = 'text';
+    searchInput.value = currentTitle;
+    searchInput.placeholder = 'Search TMDB...';
+    searchInput.style.cssText = 'flex:1;padding:8px 12px;border-radius:8px;border:1px solid var(--border);background:var(--bg-input);color:var(--text-primary);font-size:14px;';
+    var searchBtn = document.createElement('button');
+    searchBtn.textContent = 'Search';
+    searchBtn.style.cssText = 'padding:8px 16px;border-radius:8px;border:none;background:#3b82f6;color:#fff;cursor:pointer;font-size:14px;';
+    searchRow.appendChild(searchInput);
+    searchRow.appendChild(searchBtn);
+    header.appendChild(searchRow);
+    modal.appendChild(header);
+
+    var resultsArea = document.createElement('div');
+    resultsArea.style.cssText = 'overflow-y:auto;flex:1;padding:12px;';
+    modal.appendChild(resultsArea);
+
+    function doSearch() {
+      resultsArea.innerHTML = '<div style="text-align:center;padding:24px;color:var(--text-muted)">Searching...</div>';
+      api.get('/api/tmdb/search?query=' + encodeURIComponent(searchInput.value) + '&type=' + tmdbType).then(function(data) {
+        resultsArea.innerHTML = '';
+        if (!data || !data.results || data.results.length === 0) {
+          resultsArea.innerHTML = '<div style="text-align:center;padding:24px;color:var(--text-muted)">No results found</div>';
+          return;
+        }
+        data.results.slice(0, 10).forEach(function(r) {
+          var row = document.createElement('div');
+          row.style.cssText = 'display:flex;align-items:center;gap:12px;padding:10px 12px;border-radius:8px;cursor:pointer;transition:background 0.15s;';
+          row.onmouseenter = function() { row.style.background = 'rgba(255,255,255,0.05)'; };
+          row.onmouseleave = function() { row.style.background = ''; };
+
+          if (r.poster_path) {
+            row.appendChild(Object.assign(document.createElement('img'), { src: '/api/tmdb/image?size=w92&path=' + encodeURIComponent(r.poster_path), style: 'width:46px;height:69px;object-fit:cover;border-radius:6px;flex-shrink:0;' }));
+          } else {
+            row.appendChild(Object.assign(document.createElement('div'), { style: 'width:46px;height:69px;background:rgba(255,255,255,0.05);border-radius:6px;flex-shrink:0;display:flex;align-items:center;justify-content:center;font-size:20px;color:var(--text-muted);', textContent: '\uD83C\uDFAC' }));
+          }
+
+          var info = document.createElement('div');
+          info.style.cssText = 'flex:1;min-width:0;';
+          var title = r.title || r.name || '';
+          var year = '';
+          if (r.release_date) year = r.release_date.substring(0, 4);
+          else if (r.first_air_date) year = r.first_air_date.substring(0, 4);
+          info.appendChild(Object.assign(document.createElement('div'), { style: 'font-size:14px;font-weight:600;color:var(--text-primary);', textContent: title + (year ? ' (' + year + ')' : '') }));
+          if (r.overview) {
+            var desc = document.createElement('div');
+            desc.style.cssText = 'font-size:12px;color:var(--text-muted);margin-top:2px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;line-height:1.4;';
+            desc.textContent = r.overview;
+            info.appendChild(desc);
+          }
+          row.appendChild(info);
+
+          var selectBtn = document.createElement('button');
+          selectBtn.textContent = 'Select';
+          selectBtn.style.cssText = 'padding:6px 14px;border-radius:6px;border:none;background:#22c55e;color:#fff;cursor:pointer;font-size:13px;flex-shrink:0;';
+          selectBtn.onclick = function(e) {
+            e.stopPropagation();
+            selectBtn.disabled = true;
+            selectBtn.textContent = '...';
+            api.post('/api/tmdb/rematch', { stream_id: streamID, tmdb_id: r.id, media_type: mediaType }).then(function() {
+              toast.success('Matched to: ' + title);
+              overlay.remove();
+              if (onDone) onDone();
+            }).catch(function() {
+              selectBtn.disabled = false;
+              selectBtn.textContent = 'Select';
+              toast.error('Rematch failed');
+            });
+          };
+          row.appendChild(selectBtn);
+
+          resultsArea.appendChild(row);
+        });
+      }).catch(function() {
+        resultsArea.innerHTML = '<div style="text-align:center;padding:24px;color:var(--text-muted)">Search failed</div>';
+      });
+    }
+
+    searchBtn.onclick = doSearch;
+    searchInput.onkeydown = function(e) { if (e.key === 'Enter') doSearch(); };
+
+    overlay.appendChild(modal);
+    document.body.appendChild(overlay);
+    searchInput.focus();
+    doSearch();
   }
 
   function buildEpgGuidePage() {
@@ -5666,6 +5782,7 @@
               rating: item.rating, genres: item.genres,
               channelName: '', channelID: null, tvgId: null,
               isLive: false, isFuture: false, vodStreamURL: item.url, vodStreamID: item.id,
+              tmdbID: item.tmdb_id,
             });
           };
           parent.appendChild(card);

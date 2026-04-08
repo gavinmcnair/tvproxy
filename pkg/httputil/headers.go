@@ -46,19 +46,6 @@ func Fetch(ctx context.Context, client *http.Client, cfg *config.Config, url str
 	return client.Do(req)
 }
 
-func FetchAndDecompress(ctx context.Context, client *http.Client, cfg *config.Config, url string, log zerolog.Logger) (io.ReadCloser, error) {
-	resp, err := Fetch(ctx, client, cfg, url)
-	if err != nil {
-		return nil, err
-	}
-	if resp.StatusCode != http.StatusOK {
-		LogUpstreamFailure(log, resp, url)
-		resp.Body.Close()
-		return nil, fmt.Errorf("unexpected status code: %d", resp.StatusCode)
-	}
-	return DecompressReader(resp.Body, url)
-}
-
 type ConditionalResult struct {
 	Body    io.ReadCloser
 	ETag    string

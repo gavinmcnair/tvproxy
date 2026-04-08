@@ -234,7 +234,7 @@ func main() {
 		func() string { v, _ := settingsService.Get(ctx, "tmdb_api_key"); return v },
 		log,
 	)
-	tmdbHandler := handler.NewTMDBHandler(tmdbClient)
+	tmdbHandler := handler.NewTMDBHandler(tmdbClient, streamStore)
 	registerRoutes(r, routeHandlers{
 		auth:         handler.NewAuthHandler(authService),
 		user:         handler.NewUserHandler(authService),
@@ -323,6 +323,12 @@ func main() {
 		}
 	}()
 
+	onTMDBResolved := func(streamID string, tmdbID int) {
+		if err := streamStore.UpdateTMDBID(ctx, streamID, tmdbID); err != nil {
+			log.Debug().Err(err).Str("stream_id", streamID).Int("tmdb_id", tmdbID).Msg("failed to update stream TMDB ID")
+		}
+	}
+
 	syncTMDB := func() {
 		streams, err := streamStore.List(ctx)
 		if err != nil {
@@ -348,11 +354,11 @@ func main() {
 				continue
 			}
 			seen[key] = true
-			items = append(items, tmdb.VODItem{Name: name, MediaType: mediaType})
+			items = append(items, tmdb.VODItem{StreamID: s.ID, Name: name, MediaType: mediaType, TMDBID: s.TMDBID})
 		}
 		if len(items) > 0 {
 			tmdbClient.PopulateMetadataFromCache(items)
-			tmdbClient.Sync(items)
+			tmdbClient.Sync(items, onTMDBResolved)
 		}
 	}
 
