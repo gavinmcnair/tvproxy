@@ -35,7 +35,7 @@ func GenerateVODPlaylist(sess *Session, endpointPrefix string) string {
 		lengthTicks := int64(dur * 10000000)
 
 		result += fmt.Sprintf("#EXTINF:%.6f,\n", dur)
-		result += fmt.Sprintf("%s%d.ts?runtimeTicks=%d&actualSegmentLengthTicks=%d\n",
+		result += fmt.Sprintf("%sseg%d.ts?runtimeTicks=%d&actualSegmentLengthTicks=%d\n",
 			endpointPrefix, i, currentTicks, lengthTicks)
 
 		currentTicks += lengthTicks
@@ -58,7 +58,7 @@ func GenerateLivePlaylist(sess *Session) string {
 
 	for i := 0; i <= current; i++ {
 		result += fmt.Sprintf("#EXTINF:%d.000000,\n", sess.SegmentLength)
-		result += fmt.Sprintf("%s%d.ts\n", sess.ID, i)
+		result += fmt.Sprintf("seg%d.ts\n", i)
 	}
 
 	return result
@@ -85,7 +85,7 @@ func ServeMediaPlaylist(w http.ResponseWriter, sess *Session) {
 
 	var playlist string
 	if sess.DurationTicks > 0 && !sess.IsLive {
-		endpointPrefix := fmt.Sprintf("hls1/main/%s", sess.ID)
+		endpointPrefix := "hls1/main/"
 		playlist = GenerateVODPlaylist(sess, endpointPrefix)
 	} else {
 		playlist = GenerateLivePlaylist(sess)

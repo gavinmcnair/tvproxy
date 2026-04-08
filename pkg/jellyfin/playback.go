@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"net/url"
 	"os/exec"
-	"strconv"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
@@ -120,23 +119,13 @@ func (s *Server) hlsMediaPlaylist(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) hlsSegment(w http.ResponseWriter, r *http.Request) {
-	playlistID := chi.URLParam(r, "playlistId")
+	itemID := chi.URLParam(r, "itemId")
 	segmentFile := chi.URLParam(r, "segment")
 
-	_ = playlistID
-
-	var sessionID string
 	var segmentIndex int
-	parts := strings.TrimSuffix(segmentFile, ".ts")
-	for i := len(parts) - 1; i >= 0; i-- {
-		if parts[i] < '0' || parts[i] > '9' {
-			sessionID = parts[:i+1]
-			segmentIndex, _ = strconv.Atoi(parts[i+1:])
-			break
-		}
-	}
+	fmt.Sscanf(strings.TrimSuffix(segmentFile, ".ts"), "seg%d", &segmentIndex)
 
-	sess := s.hlsManager.GetSession(sessionID)
+	sess := s.hlsManager.GetSession(itemID)
 	if sess == nil {
 		http.Error(w, "session not found", http.StatusNotFound)
 		return
@@ -148,7 +137,7 @@ func (s *Server) hlsSegment(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := s.hlsManager.RequestSegment(context.Background(), sess, segmentIndex, runtimeTicks); err != nil {
-		s.log.Error().Err(err).Int("segment", segmentIndex).Str("session", sessionID).Msg("segment not available")
+		s.log.Error().Err(err).Int("segment", segmentIndex).Str("session", itemID).Msg("segment not available")
 		http.Error(w, "segment not available", http.StatusNotFound)
 		return
 	}

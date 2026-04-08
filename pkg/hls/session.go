@@ -109,6 +109,7 @@ func (s *Session) buildFFmpegArgs(startNumber int, startTimeTicks int64) []strin
 		"-map", "0:v:0?",
 		"-map", "0:a:0?",
 		"-c:v", "copy",
+		"-tag:v:0", "hvc1",
 		"-c:a", "aac",
 		"-b:a", "192k",
 		"-ac", "2",
@@ -128,7 +129,7 @@ func (s *Session) buildFFmpegArgs(startNumber int, startTimeTicks int64) []strin
 		"-hls_list_size", "0",
 	)
 
-	segPattern := filepath.Join(s.OutputDir, s.ID+"%d.ts")
+	segPattern := filepath.Join(s.OutputDir, "seg%d.ts")
 	playlistPath := filepath.Join(s.OutputDir, "playlist.m3u8")
 
 	args = append(args,
@@ -140,7 +141,7 @@ func (s *Session) buildFFmpegArgs(startNumber int, startTimeTicks int64) []strin
 }
 
 func (s *Session) SegmentPath(index int) string {
-	return filepath.Join(s.OutputDir, fmt.Sprintf("%s%d.ts", s.ID, index))
+	return filepath.Join(s.OutputDir, fmt.Sprintf("seg%d.ts", index))
 }
 
 func (s *Session) WaitForSegment(index int, timeout time.Duration) error {
@@ -181,7 +182,7 @@ func (s *Session) CurrentTranscodeIndex() int {
 			continue
 		}
 		var idx int
-		if _, err := fmt.Sscanf(e.Name(), s.ID+"%d.ts", &idx); err == nil {
+		if _, err := fmt.Sscanf(e.Name(), "seg%d.ts", &idx); err == nil {
 			if idx > highest {
 				highest = idx
 			}
