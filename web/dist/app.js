@@ -1041,6 +1041,26 @@
       actionIcons.appendChild(playIcon);
     }
 
+    var favItemId = opts.vodStreamID || opts.channelID;
+    if (favItemId) {
+      var favIcon = document.createElement('button');
+      favIcon.style.cssText = iconBtnStyle;
+      favIcon.title = 'Favorite';
+      var favIsFav = _favoriteIds && _favoriteIds.has(favItemId);
+      favIcon.textContent = favIsFav ? '\u2B50' : '\u2606';
+      favIcon.onmouseenter = function() { favIcon.style.background = '#eab308'; };
+      favIcon.onmouseleave = function() { favIcon.style.background = 'rgba(0,0,0,0.5)'; };
+      favIcon.onclick = function() {
+        var isFav = _favoriteIds && _favoriteIds.has(favItemId);
+        (isFav ? api.del('/api/favorites/' + favItemId) : api.post('/api/favorites/' + favItemId)).then(function() {
+          if (isFav) { _favoriteIds.delete(favItemId); } else { _favoriteIds.add(favItemId); }
+          favIcon.textContent = isFav ? '\u2606' : '\u2B50';
+          toast.success(isFav ? 'Removed from favorites' : 'Added to favorites');
+        }).catch(function() {});
+      };
+      actionIcons.appendChild(favIcon);
+    }
+
     if ((opts.isLive || opts.isFuture) && opts.stop) {
       var recIcon = document.createElement('button');
       recIcon.style.cssText = iconBtnStyle;
@@ -5496,7 +5516,7 @@
         });
 
         var titleCount = standalone.length + Object.keys(collections).length;
-        var header = h('div', { style: 'display:flex;align-items:center;justify-content:space-between;margin-bottom:24px;position:sticky;top:0;z-index:10;background:var(--bg-main);padding:12px 0;' });
+        var header = h('div', { style: 'display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;' });
         header.appendChild(h('h2', { style: 'margin:0' }, 'Movies'));
         var headerRight = h('div', { style: 'display:flex;align-items:center;gap:16px' });
         var syncSpan = h('span', { id: 'tmdb-sync-movies', style: 'display:none;font-size:0.85em;color:var(--accent)' });
@@ -5536,7 +5556,7 @@
         var decadeList = Object.keys(decades).sort();
 
         var activeFilters = {};
-        var filterBar = h('div', { style: 'display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px;position:sticky;top:52px;z-index:9;background:var(--bg-main);padding:8px 0;' });
+        var filterBar = h('div', { style: 'display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px;' });
 
         var pillBase = 'padding:5px 14px;border-radius:20px;cursor:pointer;font-size:12px;font-weight:500;transition:all 0.15s;';
         var pillGroups = {
@@ -5558,6 +5578,9 @@
           return btn;
         }
 
+        if (!_favoriteIds) await loadFavorites();
+
+        makePill('\u2B50 Favorites', 'fav:yes', filterBar, 'collection');
         makePill('Kids', 'kids', null, 'age');
         makePill('15+', 'adult', null, 'age');
         makePill('Collections', 'collections', null, 'collection');
@@ -5573,7 +5596,7 @@
         var genreNames = Object.keys(genreCounts).sort(function(a, b) { return genreCounts[b] - genreCounts[a]; });
 
         if (genreNames.length > 0) {
-          var genreBar = h('div', { style: 'display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px;position:sticky;top:92px;z-index:8;background:var(--bg-main);padding:8px 0;' });
+          var genreBar = h('div', { style: 'display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px;' });
           genreNames.forEach(function(g) { makePill(g, 'genre_' + g, genreBar, 'genre'); });
           container.appendChild(genreBar);
         }
@@ -5583,6 +5606,10 @@
         var grid = h('div', { style: 'display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:20px;' });
 
         function matchesFilters(di) {
+          if (activeFilters['fav:yes']) {
+            if (di.type === 'movie') { if (!_favoriteIds || !_favoriteIds.has(di.item.id)) return false; }
+            else if (di.type === 'collection') { var anyFav = di.collection.movies.some(function(m) { return _favoriteIds && _favoriteIds.has(m.id); }); if (!anyFav) return false; }
+          }
           var hasAge = activeFilters.kids || activeFilters.adult;
           var hasDecade = Object.keys(activeFilters).some(function(k) { return k.startsWith('decade_'); });
           var hasColl = activeFilters.collections;
@@ -5770,6 +5797,10 @@
 
             row.appendChild(info);
 
+            var favBtn = favoriteButton(movie.id);
+            favBtn.style.cssText += 'flex-shrink:0;margin-top:2px;';
+            row.appendChild(favBtn);
+
             var playBtn = document.createElement('button');
             playBtn.style.cssText = 'background:#3b82f6;border:none;color:#fff;width:36px;height:36px;border-radius:50%;cursor:pointer;font-size:16px;flex-shrink:0;margin-top:2px;';
             playBtn.textContent = '\u25B6';
@@ -5840,7 +5871,7 @@
           return;
         }
 
-        var header = h('div', { style: 'display:flex;align-items:center;justify-content:space-between;margin-bottom:24px;position:sticky;top:0;z-index:10;background:var(--bg-main);padding:12px 0;' });
+        var header = h('div', { style: 'display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;' });
         header.appendChild(h('h2', { style: 'margin:0' }, 'TV Series'));
         var headerRight2 = h('div', { style: 'display:flex;align-items:center;gap:16px' });
         var syncSpan2 = h('span', { id: 'tmdb-sync-tv', style: 'display:none;font-size:0.85em;color:var(--accent)' });
@@ -5877,41 +5908,123 @@
           }).catch(function() {});
         }, 2000);
 
+        if (!_favoriteIds) await loadFavorites();
+
+        var tvDecades = {};
+        var tvGenreCounts = {};
+        seriesList.forEach(function(show) {
+          var yr = show.episodes[0] && show.episodes[0].year;
+          if (!yr) show.episodes.some(function(ep) { if (ep.year) { yr = ep.year; return true; } return false; });
+          show._year = yr;
+          if (yr && yr.length === 4) tvDecades[yr.substring(0, 3) + '0s'] = true;
+          show.episodes.forEach(function(ep) {
+            (ep.genres || []).forEach(function(g) { tvGenreCounts[g] = (tvGenreCounts[g] || 0) + 1; });
+          });
+        });
+        var tvDecadeList = Object.keys(tvDecades).sort();
+        var tvGenreNames = Object.keys(tvGenreCounts).sort(function(a, b) { return tvGenreCounts[b] - tvGenreCounts[a]; });
+
+        var tvActiveFilters = {};
+        var tvFilterBar = h('div', { style: 'display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px;' });
+
+        var tvPillBase = 'padding:5px 14px;border-radius:20px;cursor:pointer;font-size:12px;font-weight:500;transition:all 0.15s;';
+        var tvPillGroups = {
+          collection: { off: tvPillBase + 'border:1px solid rgba(234,179,8,0.3);background:rgba(234,179,8,0.08);color:#eab308;', on: tvPillBase + 'border:1px solid #eab308;background:#eab308;color:#000;' },
+          decade:     { off: tvPillBase + 'border:1px solid rgba(34,197,94,0.3);background:rgba(34,197,94,0.08);color:#22c55e;', on: tvPillBase + 'border:1px solid #22c55e;background:#22c55e;color:#fff;' },
+          genre:      { off: tvPillBase + 'border:1px solid rgba(59,130,246,0.3);background:rgba(59,130,246,0.08);color:#3b82f6;', on: tvPillBase + 'border:1px solid #3b82f6;background:#3b82f6;color:#fff;' },
+        };
+
+        function makeTvPill(label, key, parent, group) {
+          var styles = tvPillGroups[group] || tvPillGroups.genre;
+          var btn = h('button', { style: styles.off }, label);
+          btn.onclick = function() {
+            if (tvActiveFilters[key]) { delete tvActiveFilters[key]; btn.style.cssText = styles.off; }
+            else { tvActiveFilters[key] = true; btn.style.cssText = styles.on; }
+            renderTvGrid();
+          };
+          (parent || tvFilterBar).appendChild(btn);
+          return btn;
+        }
+
+        makeTvPill('\u2B50 Favorites', 'fav:yes', tvFilterBar, 'collection');
+        if (tvDecadeList.length > 0) {
+          tvFilterBar.appendChild(h('span', { style: 'width:1px;height:20px;background:var(--border);align-self:center;' }));
+          tvDecadeList.forEach(function(dec) { makeTvPill(dec, 'decade_' + dec, null, 'decade'); });
+        }
+
+        container.appendChild(tvFilterBar);
+
+        if (tvGenreNames.length > 0) {
+          var tvGenreBar = h('div', { style: 'display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px;' });
+          tvGenreNames.forEach(function(g) { makeTvPill(g, 'genre_' + g, tvGenreBar, 'genre'); });
+          container.appendChild(tvGenreBar);
+        }
+
+        var countSpan2 = headerRight2.querySelector('span:last-child');
+
         var grid = h('div', { style: 'display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:20px;' });
 
-        seriesList.forEach(function(show) {
-          var card = h('div', { style: 'cursor:pointer;border-radius:12px;overflow:hidden;background:var(--bg-card);border:1px solid var(--border);transition:transform 0.2s,box-shadow 0.2s;' });
-          card.dataset.sortName = show.name;
-          card.onmouseenter = function() { card.style.transform = 'scale(1.03)'; card.style.boxShadow = '0 8px 30px rgba(0,0,0,0.3)'; };
-          card.onmouseleave = function() { card.style.transform = ''; card.style.boxShadow = ''; };
-
-          var posterWrap = h('div', { style: 'width:100%;aspect-ratio:2/3;background:linear-gradient(135deg,#1a1a2e,#0f3460);display:flex;align-items:center;justify-content:center;position:relative;' });
-          var showPoster = '';
-          show.episodes.some(function(ep) { if (ep.poster_url) { showPoster = ep.poster_url; return true; } return false; });
-          if (showPoster) {
-            posterWrap.appendChild(h('img', { src: showPoster, style: 'width:100%;height:100%;object-fit:cover;' }));
-          } else {
-            posterWrap.appendChild(h('div', { style: 'padding:12px;text-align:center;color:#fff;font-size:14px;font-weight:600;' }, show.name));
+        function matchesTvFilters(show) {
+          if (tvActiveFilters['fav:yes']) {
+            var anyFav = show.episodes.some(function(ep) { return _favoriteIds && _favoriteIds.has(ep.id); });
+            if (!anyFav) return false;
           }
-          card.appendChild(posterWrap);
+          var hasDecade = Object.keys(tvActiveFilters).some(function(k) { return k.startsWith('decade_'); });
+          if (hasDecade) {
+            var activeDecades = {};
+            Object.keys(tvActiveFilters).forEach(function(k) { if (k.startsWith('decade_')) activeDecades[k.replace('decade_', '')] = true; });
+            if (!show._year || !activeDecades[show._year.substring(0, 3) + '0s']) return false;
+          }
+          var activeGenres = [];
+          Object.keys(tvActiveFilters).forEach(function(k) { if (k.startsWith('genre_')) activeGenres.push(k.replace('genre_', '')); });
+          if (activeGenres.length > 0) {
+            var showGenres = [];
+            show.episodes.forEach(function(ep) { (ep.genres || []).forEach(function(g) { if (showGenres.indexOf(g) === -1) showGenres.push(g); }); });
+            var allMatch = activeGenres.every(function(g) { return showGenres.indexOf(g) >= 0; });
+            if (!allMatch) return false;
+          }
+          return true;
+        }
 
-          var info = h('div', { style: 'padding:10px 12px;' });
-          info.appendChild(h('div', { style: 'font-size:13px;font-weight:600;color:var(--text-primary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;' }, show.name));
-          var seasonCount = Object.keys(show.seasons).length;
-          var epCount = show.episodes.length;
-          info.appendChild(h('div', { style: 'font-size:11px;color:var(--text-muted);margin-top:2px;' },
-            (seasonCount > 0 ? seasonCount + ' season' + (seasonCount > 1 ? 's' : '') + ' \u2022 ' : '') + epCount + ' episode' + (epCount > 1 ? 's' : '')));
-          card.appendChild(info);
+        function renderTvGrid() {
+          grid.innerHTML = '';
+          var filtered = seriesList.filter(matchesTvFilters);
+          filtered.forEach(function(show) {
+            var card = h('div', { style: 'cursor:pointer;border-radius:12px;overflow:hidden;background:var(--bg-card);border:1px solid var(--border);transition:transform 0.2s,box-shadow 0.2s;' });
+            card.dataset.sortName = show.name;
+            card.onmouseenter = function() { card.style.transform = 'scale(1.03)'; card.style.boxShadow = '0 8px 30px rgba(0,0,0,0.3)'; };
+            card.onmouseleave = function() { card.style.transform = ''; card.style.boxShadow = ''; };
 
-          card.onclick = function() {
-            showSeriesDetail(show);
-          };
+            var posterWrap = h('div', { style: 'width:100%;aspect-ratio:2/3;background:linear-gradient(135deg,#1a1a2e,#0f3460);display:flex;align-items:center;justify-content:center;position:relative;' });
+            var showPoster = '';
+            show.episodes.some(function(ep) { if (ep.poster_url) { showPoster = ep.poster_url; return true; } return false; });
+            if (showPoster) {
+              posterWrap.appendChild(h('img', { src: showPoster, style: 'width:100%;height:100%;object-fit:cover;' }));
+            } else {
+              posterWrap.appendChild(h('div', { style: 'padding:12px;text-align:center;color:#fff;font-size:14px;font-weight:600;' }, show.name));
+            }
+            card.appendChild(posterWrap);
 
-          grid.appendChild(card);
-        });
+            var info = h('div', { style: 'padding:10px 12px;' });
+            info.appendChild(h('div', { style: 'font-size:13px;font-weight:600;color:var(--text-primary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;' }, show.name));
+            var seasonCount = Object.keys(show.seasons).length;
+            var epCount = show.episodes.length;
+            info.appendChild(h('div', { style: 'font-size:11px;color:var(--text-muted);margin-top:2px;' },
+              (seasonCount > 0 ? seasonCount + ' season' + (seasonCount > 1 ? 's' : '') + ' \u2022 ' : '') + epCount + ' episode' + (epCount > 1 ? 's' : '')));
+            card.appendChild(info);
+
+            card.onclick = function() {
+              showSeriesDetail(show);
+            };
+
+            grid.appendChild(card);
+          });
+          countSpan2.textContent = filtered.length + ' / ' + seriesList.length + ' series';
+          setupGridKeyJump(grid);
+        }
 
         container.appendChild(grid);
-        setupGridKeyJump(grid);
+        renderTvGrid();
       } catch(err) {
         container.innerHTML = '';
         container.appendChild(h('p', { style: 'color:var(--danger)' }, 'Failed to load: ' + err.message));
