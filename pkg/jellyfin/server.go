@@ -3,6 +3,7 @@ package jellyfin
 import (
 	"context"
 	"crypto/rand"
+	"fmt"
 	"encoding/hex"
 	"encoding/json"
 	"net/http"
@@ -160,6 +161,13 @@ func (s *Server) Router() chi.Router {
 		r.Get("/Studios", s.emptyQueryResult)
 		r.Get("/Artists", s.emptyQueryResult)
 		r.Get("/Genres", s.emptyQueryResult)
+		r.Get("/Genres/{genreName}", func(w http.ResponseWriter, r *http.Request) {
+			name := chi.URLParam(r, "genreName")
+			s.respondJSON(w, http.StatusOK, BaseItemDto{
+				Name: name, ServerID: s.serverID,
+				ID: fmt.Sprintf("genre_%x", hashString(name)), Type: "Genre",
+			})
+		})
 
 		r.Get("/Sessions", s.sessionsGet)
 		r.Get("/LiveTv/Info", s.liveTvInfo)
