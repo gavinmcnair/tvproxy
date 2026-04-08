@@ -97,7 +97,11 @@ func (s *Server) hlsMasterPlaylist(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	sess := s.hlsManager.GetOrCreateSession(itemID, streamURL, 6, durationTicks, isLive)
+	profile := hls.ProfileSettings{
+		VideoCodec: "copy",
+		AudioCodec: "aac",
+	}
+	sess := s.hlsManager.GetOrCreateSession(itemID, streamURL, 6, durationTicks, isLive, profile)
 	hls.ServeMasterPlaylist(w, sess, "")
 }
 

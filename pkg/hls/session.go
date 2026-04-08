@@ -13,6 +13,15 @@ import (
 	"github.com/rs/zerolog"
 )
 
+type ProfileSettings struct {
+	VideoCodec  string
+	AudioCodec  string
+	HWAccel     string
+	Container   string
+	Deinterlace bool
+	AutoDetect  bool
+}
+
 type Session struct {
 	ID            string
 	StreamURL     string
@@ -20,6 +29,7 @@ type Session struct {
 	SegmentLength int
 	DurationTicks int64
 	IsLive        bool
+	Profile       ProfileSettings
 	mu            sync.Mutex
 	cmd           *exec.Cmd
 	cancel        context.CancelFunc
@@ -29,7 +39,7 @@ type Session struct {
 	log           zerolog.Logger
 }
 
-func NewSession(id, streamURL, outputDir string, segmentLength int, durationTicks int64, isLive bool, log zerolog.Logger) *Session {
+func NewSession(id, streamURL, outputDir string, segmentLength int, durationTicks int64, isLive bool, profile ProfileSettings, log zerolog.Logger) *Session {
 	return &Session{
 		ID:            id,
 		StreamURL:     streamURL,
@@ -37,6 +47,7 @@ func NewSession(id, streamURL, outputDir string, segmentLength int, durationTick
 		SegmentLength: segmentLength,
 		DurationTicks: durationTicks,
 		IsLive:        isLive,
+		Profile:       profile,
 		lastAccess:    time.Now(),
 		log:           log,
 	}
@@ -102,19 +113,33 @@ func (s *Session) buildFFmpegArgs(startNumber int, startTimeTicks int64) []strin
 		"-i", s.StreamURL,
 	)
 
+	videoCodec := s.Profile.VideoCodec
+	if videoCodec == "" {
+		videoCodec = "copy"
+	}
+	audioCodec := s.Profile.AudioCodec
+	if audioCodec == "" {
+		audioCodec = "aac"
+	}
+
 	args = append(args,
 		"-map_metadata", "-1",
 		"-map_chapters", "-1",
 		"-threads", "0",
 		"-map", "0:v:0?",
 		"-map", "0:a:0?",
-		"-c:v", "copy",
+		"-c:v", videoCodec,
 		"-tag:v:0", "hvc1",
-		"-c:a", "aac",
-		"-b:a", "192k",
-		"-ac", "2",
-		"-start_at_zero",
 	)
+
+	if videoCodec == "copy" {
+		args = append(args, "-start_at_zero")
+	}
+
+	args = append(args, "-c:a", audioCodec)
+	if audioCodec != "copy" {
+		args = append(args, "-b:a", "192k", "-ac", "2")
+	}
 
 	args = append(args,
 		"-copyts",

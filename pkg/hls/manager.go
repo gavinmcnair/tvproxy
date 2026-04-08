@@ -25,7 +25,7 @@ func NewManager(baseDir string, log zerolog.Logger) *Manager {
 	}
 }
 
-func (m *Manager) GetOrCreateSession(sessionID, streamURL string, segmentLength int, durationTicks int64, isLive bool) *Session {
+func (m *Manager) GetOrCreateSession(sessionID, streamURL string, segmentLength int, durationTicks int64, isLive bool, profile ProfileSettings) *Session {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -35,7 +35,7 @@ func (m *Manager) GetOrCreateSession(sessionID, streamURL string, segmentLength 
 	}
 
 	outputDir := filepath.Join(m.baseDir, sessionID)
-	sess := NewSession(sessionID, streamURL, outputDir, segmentLength, durationTicks, isLive, m.log)
+	sess := NewSession(sessionID, streamURL, outputDir, segmentLength, durationTicks, isLive, profile, m.log)
 	m.sessions[sessionID] = sess
 	return sess
 }
