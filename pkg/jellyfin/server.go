@@ -119,6 +119,7 @@ func (s *Server) registerMediaRoutes(r chi.Router) {
 	r.Get("/Items/{itemId}/Images/{imageType}/{imageIndex}", s.serveImage)
 	r.Head("/Items/{itemId}/Images/{imageType}", s.serveImage)
 	r.Head("/Items/{itemId}/Images/{imageType}/{imageIndex}", s.serveImage)
+	r.Get("/Persons/{personId}/Images/{imageType}", s.servePersonImage)
 	r.Get("/Videos/{itemId}/stream", s.videoStream)
 	r.Get("/Videos/{itemId}/stream.{container}", s.videoStream)
 	r.Head("/Videos/{itemId}/stream", s.videoStream)
@@ -161,7 +162,6 @@ func (s *Server) registerLibraryRoutes(r chi.Router) {
 	r.Get("/Playback/BitrateTest", s.bitrateTest)
 
 	r.Get("/Persons", s.emptyQueryResult)
-	r.Get("/Persons/{personId}/Images/{imageType}", notFound)
 	r.Get("/Persons/{personId}", func(w http.ResponseWriter, r *http.Request) {
 		s.respondJSON(w, http.StatusOK, BaseItemDto{
 			Name: chi.URLParam(r, "personId"), ServerID: s.serverID,

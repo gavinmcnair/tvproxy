@@ -656,12 +656,17 @@ func (s *Server) lookupCast(name, mediaType string) []PersonDto {
 		if v, ok := cm["id"].(float64); ok {
 			pid = int(v)
 		}
-		people = append(people, PersonDto{
+		profilePath, _ := cm["profile_path"].(string)
+		person := PersonDto{
 			Name: actorName,
 			ID:   fmt.Sprintf("person_%d", pid),
 			Role: character,
 			Type: "Actor",
-		})
+		}
+		if profilePath != "" {
+			person.ImageTag = "tmdb"
+		}
+		people = append(people, person)
 		if len(people) >= 20 {
 			break
 		}

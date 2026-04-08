@@ -174,13 +174,12 @@ func (c *Client) Invalidate(query string) {
 }
 
 func (c *Client) LookupPoster(name, mediaType string) string {
-	clean, _ := CleanVODName(name)
 	if mediaType == "movie" {
-		if m := c.meta.GetMovie(clean); m != nil && m.PosterPath != "" {
+		if m := c.LookupMovie(name); m != nil && m.PosterPath != "" {
 			return PosterURL(m.PosterPath)
 		}
 	} else {
-		if s := c.meta.GetSeries(clean); s != nil && s.PosterPath != "" {
+		if s := c.LookupSeries(name); s != nil && s.PosterPath != "" {
 			return PosterURL(s.PosterPath)
 		}
 	}
@@ -195,13 +194,12 @@ func (c *Client) LookupCollection(name string) *CollectionMeta {
 }
 
 func (c *Client) LookupBackdrop(name, mediaType string) string {
-	clean, _ := CleanVODName(name)
 	if mediaType == "movie" {
-		if m := c.meta.GetMovie(clean); m != nil && m.BackdropPath != "" {
+		if m := c.LookupMovie(name); m != nil && m.BackdropPath != "" {
 			return m.BackdropPath
 		}
 	} else {
-		if s := c.meta.GetSeries(clean); s != nil && s.BackdropPath != "" {
+		if s := c.LookupSeries(name); s != nil && s.BackdropPath != "" {
 			return s.BackdropPath
 		}
 	}
@@ -217,15 +215,27 @@ func metaKey(name string) string {
 }
 
 func (c *Client) LookupMovie(name string) *MovieMeta {
-	return c.meta.GetMovie(metaKey(name))
+	if m := c.meta.GetMovie(metaKey(name)); m != nil {
+		return m
+	}
+	clean, _ := CleanVODName(name)
+	return c.meta.GetMovie(clean)
 }
 
 func (c *Client) LookupSeries(name string) *SeriesMeta {
-	return c.meta.GetSeries(metaKey(name))
+	if s := c.meta.GetSeries(metaKey(name)); s != nil {
+		return s
+	}
+	clean, _ := CleanVODName(name)
+	return c.meta.GetSeries(clean)
 }
 
 func (c *Client) LookupEpisode(seriesName string, season, episode int) *EpisodeMeta {
-	return c.meta.GetEpisode(metaKey(seriesName), season, episode)
+	if e := c.meta.GetEpisode(metaKey(seriesName), season, episode); e != nil {
+		return e
+	}
+	clean, _ := CleanVODName(seriesName)
+	return c.meta.GetEpisode(clean, season, episode)
 }
 
 func (c *Client) ServeImage(w http.ResponseWriter, r *http.Request) {
@@ -243,6 +253,7 @@ func (c *Client) Status() SyncStatus {
 func (c *Client) PopulateMetadataFromCache(items []VODItem) {
 	populated := 0
 	for _, item := range items {
+		key := metaKey(item.Name)
 		clean, year := CleanVODName(item.Name)
 		query := clean
 		if year != "" {
@@ -250,24 +261,24 @@ func (c *Client) PopulateMetadataFromCache(items []VODItem) {
 		}
 
 		if item.MediaType == "movie" {
-			if c.meta.GetMovie(clean) != nil {
+			if c.meta.GetMovie(key) != nil {
 				continue
 			}
 			cacheKey := SearchCacheKey(query, "movie")
 			if cached, ok := c.cache.Get(cacheKey); ok {
 				if result, ok := cached.(map[string]any); ok {
-					c.resolveMovieFromCache(clean, result)
+					c.resolveMovieFromCache(key, result)
 					populated++
 				}
 			}
 		} else {
-			if c.meta.GetSeries(clean) != nil {
+			if c.meta.GetSeries(key) != nil {
 				continue
 			}
 			cacheKey := SearchCacheKey(query, "tv")
 			if cached, ok := c.cache.Get(cacheKey); ok {
 				if result, ok := cached.(map[string]any); ok {
-					c.resolveSeriesFromCache(clean, result)
+					c.resolveSeriesFromCache(key, result)
 					populated++
 				}
 			}
@@ -372,20 +383,20 @@ func (c *Client) Sync(items []VODItem) {
 	var toSync []VODItem
 	seen := make(map[string]bool)
 	for _, item := range items {
-		clean, _ := CleanVODName(item.Name)
+		key := metaKey(item.Name)
 		if item.MediaType == "movie" {
-			if c.meta.GetMovie(clean) != nil {
+			if c.meta.GetMovie(key) != nil {
 				continue
 			}
 		} else {
-			if c.meta.GetSeries(clean) != nil {
+			if c.meta.GetSeries(key) != nil {
 				continue
 			}
 		}
-		if seen[clean+"_"+item.MediaType] {
+		if seen[key+"_"+item.MediaType] {
 			continue
 		}
-		seen[clean+"_"+item.MediaType] = true
+		seen[key+"_"+item.MediaType] = true
 		toSync = append(toSync, item)
 	}
 
@@ -431,10 +442,11 @@ func (c *Client) Sync(items []VODItem) {
 				continue
 			}
 
+			storeKey := metaKey(item.Name)
 			if item.MediaType == "movie" {
-				c.resolveMovie(clean, result)
+				c.resolveMovie(storeKey, result)
 			} else {
-				c.resolveSeries(clean, result)
+				c.resolveSeries(storeKey, result)
 			}
 
 			c.syncDone.Add(1)

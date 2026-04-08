@@ -57,11 +57,11 @@ func (s *Server) playbackInfo(w http.ResponseWriter, r *http.Request) {
 		Protocol: "Http", ID: itemID, Type: "Default", Name: "Default",
 		Container: "mp4", IsRemote: true,
 		SupportsTranscoding:     true,
-		SupportsDirectStream:    true,
+		SupportsDirectStream:    false,
 		SupportsDirectPlay:      false,
 		RunTimeTicks:            ticks,
 		DefaultAudioStreamIndex: 1,
-		TranscodingURL:          channelStreamURL(itemID),
+		TranscodingURL:          fmt.Sprintf("/Videos/%s/stream.mp4?MediaSourceId=%s&PlaySessionId=%s", itemID, itemID, itemID[:min(16, len(itemID))]),
 		TranscodingSubProtocol:  "http",
 		TranscodingContainer:    "mp4",
 		MediaStreams:             mediaStreams,
@@ -93,12 +93,28 @@ func (s *Server) videoStream(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "video/mp4")
 	w.Header().Set("Transfer-Encoding", "chunked")
-	w.Header().Set("Accept-Ranges", "none")
 	w.Header().Set("Connection", "keep-alive")
 
 	args := []string{
 		"-analyzeduration", "2000000",
 		"-probesize", "2000000",
+	}
+
+	seekTicks := r.URL.Query().Get("StartTimeTicks")
+	if seekTicks == "" {
+		seekTicks = r.URL.Query().Get("startTimeTicks")
+	}
+	if seekTicks != "" {
+		var t int64
+		fmt.Sscanf(seekTicks, "%d", &t)
+		if t > 0 {
+			secs := float64(t) / 10000000.0
+			args = append(args, "-ss", fmt.Sprintf("%.1f", secs))
+			s.log.Info().Float64("seek_secs", secs).Str("stream", streamID).Msg("seeking in jellyfin stream")
+		}
+	}
+
+	args = append(args,
 		"-i", stream.URL,
 		"-c:v", "copy",
 		"-c:a", "aac",
@@ -107,7 +123,7 @@ func (s *Server) videoStream(w http.ResponseWriter, r *http.Request) {
 		"-movflags", "frag_keyframe+empty_moov+default_base_moof",
 		"-f", "mp4",
 		"pipe:1",
-	}
+	)
 
 	s.log.Info().Str("stream", streamID).Str("url", stream.URL).Msg("starting jellyfin video stream")
 

@@ -18,6 +18,11 @@ func (s *Server) serveImage(w http.ResponseWriter, r *http.Request) {
 
 	isBackdrop := strings.EqualFold(imageType, "Backdrop")
 
+	if strings.HasPrefix(itemID, "person_") {
+		s.servePersonImage(w, r)
+		return
+	}
+
 	if strings.HasPrefix(itemID, "group_") {
 		s.serveGroupImage(w, r, addDashes(strings.TrimPrefix(itemID, "group_")))
 		return
@@ -132,6 +137,36 @@ func (s *Server) serveTMDBImage(w http.ResponseWriter, r *http.Request, size, pa
 
 func (s *Server) redirectToLogo(w http.ResponseWriter, r *http.Request, logoURL string) {
 	http.Redirect(w, r, s.mainServerURL()+s.logoService.Resolve(logoURL), http.StatusTemporaryRedirect)
+}
+
+func (s *Server) servePersonImage(w http.ResponseWriter, r *http.Request) {
+	personID := chi.URLParam(r, "personId")
+	if personID == "" {
+		personID = chi.URLParam(r, "itemId")
+	}
+	tmdbID := strings.TrimPrefix(personID, "person_")
+	if tmdbID == "" || tmdbID == personID {
+		w.WriteHeader(http.StatusNotFound)
+		return
+	}
+
+	details, err := s.tmdbClient.Details("person", tmdbID)
+	if err != nil {
+		w.WriteHeader(http.StatusNotFound)
+		return
+	}
+	dm, ok := details.(map[string]any)
+	if !ok {
+		w.WriteHeader(http.StatusNotFound)
+		return
+	}
+	profilePath, _ := dm["profile_path"].(string)
+	if profilePath == "" {
+		w.WriteHeader(http.StatusNotFound)
+		return
+	}
+
+	s.serveTMDBImage(w, r, "w185", profilePath)
 }
 
 func (s *Server) mainServerURL() string {
