@@ -1,14 +1,18 @@
 package jellyfin
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/url"
 	"os/exec"
+	"strconv"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
+
+	"github.com/gavinmcnair/tvproxy/pkg/hls"
 )
 
 func (s *Server) playbackInfo(w http.ResponseWriter, r *http.Request) {
@@ -17,11 +21,6 @@ func (s *Server) playbackInfo(w http.ResponseWriter, r *http.Request) {
 
 	var reqBody map[string]any
 	json.NewDecoder(r.Body).Decode(&reqBody)
-	if dp, ok := reqBody["DeviceProfile"].(map[string]any); ok {
-		if profiles, ok := dp["DirectPlayProfiles"].([]any); ok {
-			s.log.Debug().Int("directPlayProfiles", len(profiles)).Msg("client device profile")
-		}
-	}
 
 	stream, _ := s.streams.GetByID(r.Context(), streamID)
 
@@ -53,6 +52,7 @@ func (s *Server) playbackInfo(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	playSessionID := itemID[:min(16, len(itemID))]
 	ms := MediaSource{
 		Protocol: "Http", ID: itemID, Type: "Default", Name: "Default",
 		Container: "mp4", IsRemote: true,
@@ -61,16 +61,103 @@ func (s *Server) playbackInfo(w http.ResponseWriter, r *http.Request) {
 		SupportsDirectPlay:      false,
 		RunTimeTicks:            ticks,
 		DefaultAudioStreamIndex: 1,
-		TranscodingURL:          fmt.Sprintf("/Videos/%s/stream.mp4?MediaSourceId=%s&PlaySessionId=%s", itemID, itemID, itemID[:min(16, len(itemID))]),
-		TranscodingSubProtocol:  "http",
-		TranscodingContainer:    "mp4",
+		TranscodingURL:          fmt.Sprintf("/Videos/%s/master.m3u8?MediaSourceId=%s&PlaySessionId=%s", itemID, itemID, playSessionID),
+		TranscodingSubProtocol:  "hls",
+		TranscodingContainer:    "ts",
 		MediaStreams:             mediaStreams,
 	}
 
 	s.respondJSON(w, http.StatusOK, map[string]any{
 		"MediaSources":  []MediaSource{ms},
-		"PlaySessionId": itemID[:min(16, len(itemID))],
+		"PlaySessionId": playSessionID,
 	})
+}
+
+func (s *Server) hlsMasterPlaylist(w http.ResponseWriter, r *http.Request) {
+	itemID := chi.URLParam(r, "itemId")
+	streamID := addDashes(itemID)
+	ctx := r.Context()
+
+	var streamURL string
+	var durationTicks int64
+	var isLive bool
+
+	if channel, err := s.channels.GetByID(ctx, streamID); err == nil && channel != nil {
+		streamURL = fmt.Sprintf("%s/channel/%s?_port=8096", s.mainServerURL(), streamID)
+		isLive = true
+		_ = channel
+	} else if stream, err := s.streams.GetByID(ctx, streamID); err == nil && stream != nil {
+		streamURL = stream.URL
+		if stream.VODDuration > 0 {
+			durationTicks = secondsToTicks(stream.VODDuration)
+		}
+	}
+
+	if streamURL == "" {
+		http.Error(w, "stream not found", http.StatusNotFound)
+		return
+	}
+
+	sess := s.hlsManager.GetOrCreateSession(itemID, streamURL, 6, durationTicks, isLive)
+	hls.ServeMasterPlaylist(w, sess, "")
+}
+
+func (s *Server) hlsMediaPlaylist(w http.ResponseWriter, r *http.Request) {
+	itemID := chi.URLParam(r, "itemId")
+	sess := s.hlsManager.GetSession(itemID)
+	if sess == nil {
+		http.Error(w, "session not found", http.StatusNotFound)
+		return
+	}
+
+	if !sess.IsLive && sess.IsDone() && sess.CurrentTranscodeIndex() == -1 {
+		if err := sess.StartTranscode(context.Background(), 0, 0); err != nil {
+			s.log.Error().Err(err).Str("session", itemID).Msg("failed to start initial transcode")
+		}
+	}
+
+	hls.ServeMediaPlaylist(w, sess)
+}
+
+func (s *Server) hlsSegment(w http.ResponseWriter, r *http.Request) {
+	playlistID := chi.URLParam(r, "playlistId")
+	segmentFile := chi.URLParam(r, "segment")
+
+	_ = playlistID
+
+	var sessionID string
+	var segmentIndex int
+	parts := strings.TrimSuffix(segmentFile, ".ts")
+	for i := len(parts) - 1; i >= 0; i-- {
+		if parts[i] < '0' || parts[i] > '9' {
+			sessionID = parts[:i+1]
+			segmentIndex, _ = strconv.Atoi(parts[i+1:])
+			break
+		}
+	}
+
+	sess := s.hlsManager.GetSession(sessionID)
+	if sess == nil {
+		http.Error(w, "session not found", http.StatusNotFound)
+		return
+	}
+
+	var runtimeTicks int64
+	if rt := r.URL.Query().Get("runtimeTicks"); rt != "" {
+		fmt.Sscanf(rt, "%d", &runtimeTicks)
+	}
+
+	if err := s.hlsManager.RequestSegment(context.Background(), sess, segmentIndex, runtimeTicks); err != nil {
+		s.log.Error().Err(err).Int("segment", segmentIndex).Str("session", sessionID).Msg("segment not available")
+		http.Error(w, "segment not available", http.StatusNotFound)
+		return
+	}
+
+	hls.ServeSegment(w, r, sess.SegmentPath(segmentIndex))
+}
+
+func (s *Server) hlsLivePlaylist(w http.ResponseWriter, r *http.Request) {
+	s.hlsMediaPlaylist(w, r)
 }
 
 func (s *Server) videoStream(w http.ResponseWriter, r *http.Request) {
@@ -110,7 +197,6 @@ func (s *Server) videoStream(w http.ResponseWriter, r *http.Request) {
 		if t > 0 {
 			secs := float64(t) / 10000000.0
 			args = append(args, "-ss", fmt.Sprintf("%.1f", secs))
-			s.log.Info().Float64("seek_secs", secs).Str("stream", streamID).Msg("seeking in jellyfin stream")
 		}
 	}
 

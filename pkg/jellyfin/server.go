@@ -13,6 +13,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/rs/zerolog"
 
+	"github.com/gavinmcnair/tvproxy/pkg/hls"
 	"github.com/gavinmcnair/tvproxy/pkg/service"
 	"github.com/gavinmcnair/tvproxy/pkg/store"
 	"github.com/gavinmcnair/tvproxy/pkg/tmdb"
@@ -31,11 +32,12 @@ type Server struct {
 	epg             store.EPGStore
 	logoService     *service.LogoService
 	tmdbClient      *tmdb.Client
+	hlsManager      *hls.Manager
 	log             zerolog.Logger
 	tokens          sync.Map
 }
 
-func NewServer(serverName, baseURL string, auth *service.AuthService, activityService *service.ActivityService, favorites store.FavoriteStore, channels store.ChannelStore, channelGroups store.ChannelGroupStore, streams store.StreamReader, epg store.EPGStore, logoService *service.LogoService, tmdbClient *tmdb.Client, log zerolog.Logger) *Server {
+func NewServer(serverName, baseURL string, auth *service.AuthService, activityService *service.ActivityService, favorites store.FavoriteStore, channels store.ChannelStore, channelGroups store.ChannelGroupStore, streams store.StreamReader, epg store.EPGStore, logoService *service.LogoService, tmdbClient *tmdb.Client, hlsManager *hls.Manager, log zerolog.Logger) *Server {
 	return &Server{
 		serverID:        generateGUID(),
 		serverName:      serverName,
@@ -49,6 +51,7 @@ func NewServer(serverName, baseURL string, auth *service.AuthService, activitySe
 		epg:             epg,
 		logoService:     logoService,
 		tmdbClient:      tmdbClient,
+		hlsManager:      hlsManager,
 		log:             log.With().Str("component", "jellyfin").Logger(),
 	}
 }
@@ -124,6 +127,10 @@ func (s *Server) registerMediaRoutes(r chi.Router) {
 	r.Get("/Videos/{itemId}/stream.{container}", s.videoStream)
 	r.Head("/Videos/{itemId}/stream", s.videoStream)
 	r.Head("/Videos/{itemId}/stream.{container}", s.videoStream)
+	r.Get("/Videos/{itemId}/master.m3u8", s.hlsMasterPlaylist)
+	r.Get("/Videos/{itemId}/main.m3u8", s.hlsMediaPlaylist)
+	r.Get("/Videos/{itemId}/live.m3u8", s.hlsLivePlaylist)
+	r.Get("/Videos/{itemId}/hls1/{playlistId}/{segment}", s.hlsSegment)
 }
 
 func (s *Server) registerUserRoutes(r chi.Router) {
