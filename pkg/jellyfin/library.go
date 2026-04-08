@@ -21,17 +21,39 @@ import (
 const (
 	viewMoviesID = "f0000000-0000-0000-0000-000000000001"
 	viewTVID     = "f0000000-0000-0000-0000-000000000002"
+	viewMusicID  = "f0000000-0000-0000-0000-000000000003"
 	viewLiveTVID = "f0000000-0000-0000-0000-000000000004"
 )
 
+var musicKeywords = []string{"mtv", "music", "jukebox", "radio", "hits", "vh1", "viva"}
+
 func (s *Server) userViews(w http.ResponseWriter, r *http.Request) {
+	views := []BaseItemDto{
+		{Name: "Movies", ServerID: s.serverID, ID: viewMoviesID, Type: "CollectionFolder", CollectionType: "movies", IsFolder: true, ImageTags: map[string]string{}},
+		{Name: "TV Shows", ServerID: s.serverID, ID: viewTVID, Type: "CollectionFolder", CollectionType: "tvshows", IsFolder: true, ImageTags: map[string]string{}},
+	}
+
+	groups, _ := s.channelGroups.List(r.Context())
+	for _, g := range groups {
+		if !g.JellyfinEnabled {
+			continue
+		}
+		groupID := "group_" + strings.ReplaceAll(g.ID, "-", "")
+		views = append(views, BaseItemDto{
+			Name: g.Name, ServerID: s.serverID, ID: groupID,
+			Type: "CollectionFolder", CollectionType: "livetv",
+			IsFolder: true, ImageTags: map[string]string{},
+		})
+	}
+
+	views = append(views, BaseItemDto{
+		Name: "Live TV", ServerID: s.serverID, ID: viewLiveTVID,
+		Type: "CollectionFolder", CollectionType: "livetv",
+		IsFolder: true, ImageTags: map[string]string{},
+	})
+
 	s.respondJSON(w, http.StatusOK, BaseItemDtoQueryResult{
-		Items: []BaseItemDto{
-			{Name: "Movies", ServerID: s.serverID, ID: viewMoviesID, Type: "CollectionFolder", CollectionType: "movies", IsFolder: true, ImageTags: map[string]string{}},
-			{Name: "TV Shows", ServerID: s.serverID, ID: viewTVID, Type: "CollectionFolder", CollectionType: "tvshows", IsFolder: true, ImageTags: map[string]string{}},
-			{Name: "Live TV", ServerID: s.serverID, ID: viewLiveTVID, Type: "CollectionFolder", CollectionType: "livetv", IsFolder: true, ImageTags: map[string]string{}},
-		},
-		TotalRecordCount: 3,
+		Items: views, TotalRecordCount: len(views),
 	})
 }
 
@@ -51,6 +73,12 @@ func (s *Server) getItems(w http.ResponseWriter, r *http.Request) {
 	filters := strings.Join(append(q["filters"], q["Filters"]...), ",")
 	if strings.Contains(filters, "IsFavorite") {
 		s.respondJSON(w, http.StatusOK, BaseItemDtoQueryResult{Items: []BaseItemDto{}, TotalRecordCount: 0})
+		return
+	}
+
+	if strings.HasPrefix(parentID, "group_") {
+		groupID := addDashes(strings.TrimPrefix(parentID, "group_"))
+		s.groupChannels(w, r, groupID)
 		return
 	}
 
@@ -459,6 +487,9 @@ func (s *Server) getLatest(w http.ResponseWriter, r *http.Request) {
 		items = s.buildMovieItems(ctx, "", "")
 	case viewTVID:
 		items = s.buildSeriesItems(ctx, "", "")
+	case viewMusicID:
+		s.respondJSON(w, http.StatusOK, []BaseItemDto{})
+		return
 	default:
 		items = s.buildMovieItems(ctx, "", "")
 	}
@@ -946,6 +977,93 @@ func (s *Server) videoStream(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func isMusicChannel(name string) bool {
+	lower := strings.ToLower(name)
+	for _, kw := range musicKeywords {
+		if strings.Contains(lower, kw) {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *Server) musicChannels(w http.ResponseWriter, r *http.Request) {
+	channels, err := s.channels.List(r.Context())
+	if err != nil {
+		s.respondJSON(w, http.StatusOK, BaseItemDtoQueryResult{Items: []BaseItemDto{}, TotalRecordCount: 0})
+		return
+	}
+
+	var items []BaseItemDto
+	for _, ch := range channels {
+		if !isMusicChannel(ch.Name) {
+			continue
+		}
+		chID := strings.ReplaceAll(ch.ID, "-", "")
+		item := BaseItemDto{
+			Name: ch.Name, ServerID: s.serverID,
+			ID: chID, Type: "MusicVideo",
+			MediaType: "Video", IsFolder: false,
+			ImageTags: map[string]string{}, UserData: &UserItemData{Key: ch.ID},
+			MediaSources: []MediaSource{
+				{
+					Protocol: "Http", ID: chID, Type: "Default",
+					Name: ch.Name, IsRemote: true, IsInfiniteStream: true,
+					SupportsTranscoding: true, SupportsDirectStream: true,
+					TranscodingURL: fmt.Sprintf("/Videos/%s/stream.mp4?static=true", chID),
+				},
+			},
+		}
+		if ch.Logo != "" {
+			item.ImageTags["Primary"] = "logo"
+		}
+		items = append(items, item)
+	}
+	if items == nil {
+		items = []BaseItemDto{}
+	}
+	s.paginateAndRespond(w, r, items)
+}
+
+func (s *Server) groupChannels(w http.ResponseWriter, r *http.Request, groupID string) {
+	channels, err := s.channels.List(r.Context())
+	if err != nil {
+		s.respondJSON(w, http.StatusOK, BaseItemDtoQueryResult{Items: []BaseItemDto{}, TotalRecordCount: 0})
+		return
+	}
+
+	var items []BaseItemDto
+	for _, ch := range channels {
+		if ch.ChannelGroupID == nil || *ch.ChannelGroupID != groupID {
+			continue
+		}
+		chID := strings.ReplaceAll(ch.ID, "-", "")
+		item := BaseItemDto{
+			Name: ch.Name, ServerID: s.serverID,
+			ID: chID, Type: "LiveTvChannel",
+			MediaType: "Video", IsFolder: false,
+			ImageTags: map[string]string{}, UserData: &UserItemData{Key: ch.ID},
+			MediaSources: []MediaSource{
+				{
+					Protocol: "Http", ID: chID, Type: "Default",
+					Name: ch.Name, IsRemote: true, IsInfiniteStream: true,
+					SupportsTranscoding: true, SupportsDirectStream: true,
+					TranscodingURL: fmt.Sprintf("/Videos/%s/stream.mp4?static=true", chID),
+				},
+			},
+		}
+		if ch.Logo != "" {
+			item.ImageTags["Primary"] = "logo"
+			item.ChannelPrimaryImageTag = "logo"
+		}
+		items = append(items, item)
+	}
+	if items == nil {
+		items = []BaseItemDto{}
+	}
+	s.paginateAndRespond(w, r, items)
+}
+
 func (s *Server) liveTvInfo(w http.ResponseWriter, r *http.Request) {
 	s.respondJSON(w, http.StatusOK, map[string]any{
 		"Services": []any{}, "IsEnabled": true, "EnabledUsers": []string{},
@@ -958,6 +1076,16 @@ func (s *Server) liveTvChannels(w http.ResponseWriter, r *http.Request) {
 		s.respondJSON(w, http.StatusOK, BaseItemDtoQueryResult{Items: []BaseItemDto{}, TotalRecordCount: 0})
 		return
 	}
+
+	epgData, _ := s.epg.ListEPGData(r.Context())
+	epgByChannel := make(map[string]string)
+	var epgIDs []string
+	for _, e := range epgData {
+		epgByChannel[e.ChannelID] = e.ID
+		epgIDs = append(epgIDs, e.ID)
+	}
+	programs, _ := s.epg.ListProgramsByEPGDataIDs(r.Context(), epgIDs)
+	now := time.Now()
 
 	var items []BaseItemDto
 	for i, ch := range channels {
@@ -979,7 +1107,29 @@ func (s *Server) liveTvChannels(w http.ResponseWriter, r *http.Request) {
 		}
 		if ch.Logo != "" {
 			item.ImageTags["Primary"] = "logo"
+			item.ChannelPrimaryImageTag = "logo"
 		}
+
+		if epgID, ok := epgByChannel[ch.TvgID]; ok {
+			for _, p := range programs[epgID] {
+				if now.After(p.Start) && now.Before(p.Stop) {
+					item.CurrentProgram = &BaseItemDto{
+						Name:     p.Title,
+						Overview: p.Description,
+						ID:       fmt.Sprintf("prog_%s_%d", chID, p.Start.Unix()),
+						Type:     "LiveTvProgram",
+					}
+					if !p.Start.IsZero() {
+						item.CurrentProgram.PremiereDate = p.Start.Format(time.RFC3339)
+					}
+					if !p.Start.IsZero() && !p.Stop.IsZero() {
+						item.CurrentProgram.RunTimeTicks = int64(p.Stop.Sub(p.Start).Seconds() * 10000000)
+					}
+					break
+				}
+			}
+		}
+
 		items = append(items, item)
 	}
 	if items == nil {

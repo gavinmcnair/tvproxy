@@ -4693,10 +4693,12 @@
       columns: [
         { key: 'name', label: 'Name' },
         { key: 'sort_order', label: 'Sort Order' },
+        { key: 'jellyfin_enabled', label: 'Jellyfin', render: function(item) { return item.jellyfin_enabled ? '\u2705' : ''; } },
       ],
       fields: [
         { key: 'name', label: 'Group Name', placeholder: 'Entertainment' },
         { key: 'sort_order', label: 'Sort Order', type: 'number', default: 0 },
+        { key: 'jellyfin_enabled', label: 'Show in Jellyfin', type: 'checkbox', default: false },
       ],
     }),
 

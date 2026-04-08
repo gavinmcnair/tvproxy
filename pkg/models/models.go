@@ -103,13 +103,14 @@ type ChannelStream struct {
 }
 
 type ChannelGroup struct {
-	ID        string    `json:"id"`
-	UserID    string    `json:"user_id"`
-	Name      string    `json:"name"`
-	IsEnabled bool      `json:"is_enabled"`
-	SortOrder int       `json:"sort_order"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
+	ID              string    `json:"id"`
+	UserID          string    `json:"user_id"`
+	Name            string    `json:"name"`
+	IsEnabled       bool      `json:"is_enabled"`
+	JellyfinEnabled bool      `json:"jellyfin_enabled"`
+	SortOrder       int       `json:"sort_order"`
+	CreatedAt       time.Time `json:"created_at"`
+	UpdatedAt       time.Time `json:"updated_at"`
 }
 
 type Logo struct {

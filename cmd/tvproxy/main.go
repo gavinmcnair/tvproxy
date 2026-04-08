@@ -275,7 +275,7 @@ func main() {
 	staticRoot := filepath.Join(filepath.Dir(cfg.DatabasePath), "static")
 	registerStaticRoutes(r, staticRoot, distFS, versionedIndexBytes)
 
-	jellyfinServer := jellyfin.NewServer("TVProxy", cfg.BaseURL, authService, channelStore, streamStore, epgStore, logoService, tmdbClient, log)
+	jellyfinServer := jellyfin.NewServer("TVProxy", cfg.BaseURL, authService, channelStore, channelGroupStore, streamStore, epgStore, logoService, tmdbClient, log)
 	go func() {
 		jfRouter := chi.NewRouter()
 		jfRouter.Use(func(next http.Handler) http.Handler {

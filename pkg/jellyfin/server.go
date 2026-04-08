@@ -25,31 +25,33 @@ type Server struct {
 	serverName   string
 	baseURL      string
 	auth         *service.AuthService
-	channels     store.ChannelStore
-	streams      store.StreamReader
-	epg          store.EPGStore
-	logoService  *service.LogoService
-	tmdbClient   *tmdb.Client
-	log          zerolog.Logger
-	tokens       sync.Map
+	channels      store.ChannelStore
+	channelGroups store.ChannelGroupStore
+	streams       store.StreamReader
+	epg           store.EPGStore
+	logoService   *service.LogoService
+	tmdbClient    *tmdb.Client
+	log           zerolog.Logger
+	tokens        sync.Map
 }
 
-func NewServer(serverName, baseURL string, auth *service.AuthService, channels store.ChannelStore, streams store.StreamReader, epg store.EPGStore, logoService *service.LogoService, tmdbClient *tmdb.Client, log zerolog.Logger) *Server {
+func NewServer(serverName, baseURL string, auth *service.AuthService, channels store.ChannelStore, channelGroups store.ChannelGroupStore, streams store.StreamReader, epg store.EPGStore, logoService *service.LogoService, tmdbClient *tmdb.Client, log zerolog.Logger) *Server {
 	id := make([]byte, 16)
 	rand.Read(id)
 	h := hex.EncodeToString(id)
 	guid := h[:8] + "-" + h[8:12] + "-" + h[12:16] + "-" + h[16:20] + "-" + h[20:]
 	return &Server{
-		serverID:    guid,
-		serverName:  serverName,
-		baseURL:     baseURL,
-		auth:        auth,
-		channels:    channels,
-		streams:     streams,
-		epg:         epg,
-		logoService: logoService,
-		tmdbClient:  tmdbClient,
-		log:         log.With().Str("component", "jellyfin").Logger(),
+		serverID:      guid,
+		serverName:    serverName,
+		baseURL:       baseURL,
+		auth:          auth,
+		channels:      channels,
+		channelGroups: channelGroups,
+		streams:       streams,
+		epg:           epg,
+		logoService:   logoService,
+		tmdbClient:    tmdbClient,
+		log:           log.With().Str("component", "jellyfin").Logger(),
 	}
 }
 
@@ -191,6 +193,7 @@ func (s *Server) Router() chi.Router {
 		r.Get("/LiveTv/Info", s.liveTvInfo)
 		r.Get("/LiveTv/Channels", s.liveTvChannels)
 		r.Get("/LiveTv/Programs", s.liveTvPrograms)
+		r.Get("/LiveTv/Programs/Recommended", s.liveTvPrograms)
 		r.Post("/LiveTv/Programs", s.liveTvPrograms)
 		r.Get("/LiveTv/GuideInfo", s.liveTvGuideInfo)
 
