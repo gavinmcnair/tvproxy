@@ -36,7 +36,7 @@ func (s *Server) userViews(w http.ResponseWriter, r *http.Request) {
 func (s *Server) getItems(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	parentID := firstOf(q, "parentId", "ParentId")
-	itemTypes := firstOf(q, "includeItemTypes", "IncludeItemTypes")
+	itemTypes := strings.Join(append(q["includeItemTypes"], q["IncludeItemTypes"]...), ",")
 	searchTerm := strings.ToLower(firstOf(q, "searchTerm", "SearchTerm"))
 	genres := firstOf(q, "genres", "Genres")
 	sortBy := firstOf(q, "sortBy", "SortBy")
@@ -270,7 +270,32 @@ func (s *Server) getItem(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) getLatest(w http.ResponseWriter, r *http.Request) {
-	s.respondJSON(w, http.StatusOK, []BaseItemDto{})
+	q := r.URL.Query()
+	parentID := firstOf(q, "parentId", "ParentId")
+	ctx := r.Context()
+
+	var items []BaseItemDto
+	switch parentID {
+	case viewMoviesID:
+		items = s.buildMovieItems(ctx, "", "")
+		sortItems(items, "DateCreated", "Descending")
+	case viewTVID:
+		items = s.buildSeriesItems(ctx, "", "")
+		sortItems(items, "DateCreated", "Descending")
+	}
+
+	limit := 20
+	if l := firstOf(q, "limit", "Limit"); l != "" {
+		limit, _ = strconv.Atoi(l)
+	}
+	if len(items) > limit {
+		items = items[:limit]
+	}
+	if items == nil {
+		items = []BaseItemDto{}
+	}
+
+	s.respondJSON(w, http.StatusOK, items)
 }
 
 func (s *Server) getResume(w http.ResponseWriter, r *http.Request) {
@@ -500,21 +525,48 @@ func (s *Server) getImage(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) playbackInfo(w http.ResponseWriter, r *http.Request) {
 	itemID := chi.URLParam(r, "itemId")
+	streamID := addDashes(itemID)
+
+	ctx := r.Context()
+	stream, _ := s.streams.GetByID(ctx, streamID)
+
+	container := "mp4"
+	videoCodec := "h264"
+	audioCodec := "aac"
+	var ticks int64
+
+	if stream != nil {
+		if stream.VODVCodec != "" {
+			vc := strings.ToLower(stream.VODVCodec)
+			if vc == "h264" || vc == "avc" {
+				videoCodec = "h264"
+			} else if vc == "hevc" || vc == "h265" {
+				videoCodec = "hevc"
+			}
+		}
+		if stream.VODDuration > 0 {
+			ticks = int64(stream.VODDuration * 10000000)
+		}
+	}
+
+	ms := MediaSource{
+		Protocol: "Http", ID: itemID, Type: "Default", Name: "Default",
+		Container: container, IsRemote: true,
+		SupportsTranscoding:  true,
+		SupportsDirectStream: true,
+		SupportsDirectPlay:   false,
+		RunTimeTicks:         ticks,
+		TranscodingURL:         fmt.Sprintf("/Videos/%s/stream.mp4?static=true", itemID),
+		TranscodingSubProtocol: "http",
+		TranscodingContainer:   "mp4",
+		MediaStreams: []MediaStream{
+			{Type: "Video", Codec: videoCodec, Index: 0, IsDefault: true, Width: 1920, Height: 1080},
+			{Type: "Audio", Codec: audioCodec, Index: 1, IsDefault: true, Channels: 2, SampleRate: 48000},
+		},
+	}
 
 	s.respondJSON(w, http.StatusOK, map[string]any{
-		"MediaSources": []MediaSource{
-			{
-				Protocol: "Http", ID: itemID, Type: "Default", Name: "Default",
-				Container: "mp4", IsRemote: true,
-				SupportsTranscoding: true, SupportsDirectStream: true, SupportsDirectPlay: false,
-				TranscodingURL:         fmt.Sprintf("/Videos/%s/stream.mp4?static=true", itemID),
-				TranscodingSubProtocol: "http", TranscodingContainer: "mp4",
-				MediaStreams: []MediaStream{
-					{Type: "Video", Codec: "h264", Index: 0, IsDefault: true},
-					{Type: "Audio", Codec: "aac", Index: 1, IsDefault: true, Channels: 2},
-				},
-			},
-		},
+		"MediaSources":  []MediaSource{ms},
 		"PlaySessionId": itemID[:min(16, len(itemID))],
 	})
 }

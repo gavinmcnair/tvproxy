@@ -137,6 +137,7 @@ func (s *Server) Router() chi.Router {
 
 		r.Post("/Items/{itemId}/PlaybackInfo", s.playbackInfo)
 		r.Get("/Items/Counts", s.itemCounts)
+		r.Get("/Items/Suggestions", s.getLatest)
 
 		r.Get("/Persons", s.emptyQueryResult)
 		r.Get("/Studios", s.emptyQueryResult)
