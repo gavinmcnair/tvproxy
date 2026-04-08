@@ -269,6 +269,9 @@ func (s *Server) enrichMovieItem(st *models.Stream) BaseItemDto {
 		item.CommunityRating = m.Rating
 		item.OfficialRating = m.Certification
 		item.Genres = m.Genres
+		for _, g := range m.Genres {
+			item.GenreItems = append(item.GenreItems, NameIDPair{Name: g, ID: fmt.Sprintf("genre_%x", hashString(g))})
+		}
 		if m.Year != "" {
 			if yr, _ := strconv.Atoi(m.Year); yr > 0 {
 				item.ProductionYear = yr
@@ -306,6 +309,9 @@ func (s *Server) enrichSeriesItem(name string) BaseItemDto {
 		item.CommunityRating = sr.Rating
 		item.OfficialRating = sr.Certification
 		item.Genres = sr.Genres
+		for _, g := range sr.Genres {
+			item.GenreItems = append(item.GenreItems, NameIDPair{Name: g, ID: fmt.Sprintf("genre_%x", hashString(g))})
+		}
 		if sr.Year != "" {
 			if yr, _ := strconv.Atoi(sr.Year); yr > 0 {
 				item.ProductionYear = yr

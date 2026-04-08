@@ -146,6 +146,7 @@ type BaseItemDto struct {
 	ParentIndexNumber       int             `json:"ParentIndexNumber,omitempty"`
 	UserData                *UserItemData   `json:"UserData,omitempty"`
 	MediaSources            []MediaSource   `json:"MediaSources,omitempty"`
+	GenreItems              []NameIDPair    `json:"GenreItems,omitempty"`
 	Taglines                []string        `json:"Taglines,omitempty"`
 	People                  []PersonDto     `json:"People,omitempty"`
 	Studios                 []NameIDPair    `json:"Studios,omitempty"`
