@@ -14,6 +14,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/gavinmcnair/tvproxy/pkg/models"
+	"github.com/gavinmcnair/tvproxy/pkg/tmdb"
 )
 
 const (
@@ -154,6 +155,75 @@ func (s *Server) buildSeriesItems(ctx context.Context, searchTerm, genres string
 	return items
 }
 
+func (s *Server) lookupCast(name, mediaType string) []PersonDto {
+	clean, year := tmdb.BuildQuery(name)
+	query := clean
+	if year != "" {
+		query = clean + " (" + year + ")"
+	}
+	mt := mediaType
+	if mt == "series" {
+		mt = "tv"
+	}
+
+	result, err := s.tmdbClient.Search(query, mt)
+	if err != nil || result == nil {
+		return nil
+	}
+	results, ok := result["results"].([]any)
+	if !ok || len(results) == 0 {
+		return nil
+	}
+	first, ok := results[0].(map[string]any)
+	if !ok {
+		return nil
+	}
+	id := int(0)
+	if v, ok := first["id"].(float64); ok {
+		id = int(v)
+	}
+	if id == 0 {
+		return nil
+	}
+
+	details, err := s.tmdbClient.Details(mt, fmt.Sprintf("%d", id))
+	if err != nil {
+		return nil
+	}
+	dm, ok := details.(map[string]any)
+	if !ok {
+		return nil
+	}
+	credits, ok := dm["credits"].(map[string]any)
+	if !ok {
+		return nil
+	}
+	cast, ok := credits["cast"].([]any)
+	if !ok {
+		return nil
+	}
+
+	var people []PersonDto
+	for _, c := range cast {
+		cm, ok := c.(map[string]any)
+		if !ok {
+			continue
+		}
+		name, _ := cm["name"].(string)
+		character, _ := cm["character"].(string)
+		people = append(people, PersonDto{
+			Name: name,
+			ID:   fmt.Sprintf("person_%d", int(cm["id"].(float64))),
+			Role: character,
+			Type: "Actor",
+		})
+		if len(people) >= 20 {
+			break
+		}
+	}
+	return people
+}
+
 func sortName(name string) string {
 	lower := strings.ToLower(name)
 	for _, prefix := range []string{"the ", "a ", "an "} {
@@ -265,6 +335,7 @@ func (s *Server) getItem(w http.ResponseWriter, r *http.Request) {
 	stream, err := s.streams.GetByID(ctx, addDashes(itemID))
 	if err == nil && stream != nil {
 		item := s.enrichMovieItem(stream)
+		item.People = s.lookupCast(stream.Name, stream.VODType)
 		s.respondJSON(w, http.StatusOK, item)
 		return
 	}
