@@ -240,9 +240,26 @@ func sortName(name string) string {
 
 func (s *Server) enrichMovieItem(st *models.Stream) BaseItemDto {
 	itemID := strings.ReplaceAll(st.ID, "-", "")
+
+	container := "mp4"
+	if st.URL != "" {
+		if idx := strings.LastIndex(st.URL, "."); idx >= 0 {
+			ext := strings.ToLower(st.URL[idx+1:])
+			switch ext {
+			case "mkv":
+				container = "mkv"
+			case "avi":
+				container = "avi"
+			case "ts":
+				container = "ts"
+			}
+		}
+	}
+
 	item := BaseItemDto{
 		Name:         st.Name,
 		SortName:     sortName(st.Name),
+		Container:    container,
 		ServerID:     s.serverID,
 		ID:           itemID,
 		Type:         "Movie",
