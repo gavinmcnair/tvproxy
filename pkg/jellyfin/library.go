@@ -678,8 +678,10 @@ func (s *Server) videoStream(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "video/mp4")
 	w.Header().Set("Transfer-Encoding", "chunked")
+	w.Header().Set("Accept-Ranges", "none")
+	w.Header().Set("Connection", "keep-alive")
 
-	cmd := exec.CommandContext(ctx, "ffmpeg",
+	args := []string{
 		"-analyzeduration", "2000000",
 		"-probesize", "2000000",
 		"-i", stream.URL,
@@ -690,11 +692,15 @@ func (s *Server) videoStream(w http.ResponseWriter, r *http.Request) {
 		"-movflags", "frag_keyframe+empty_moov+default_base_moof",
 		"-f", "mp4",
 		"pipe:1",
-	)
+	}
+
+	s.log.Info().Str("stream", streamID).Str("url", stream.URL).Msg("starting jellyfin video stream")
+
+	cmd := exec.CommandContext(ctx, "ffmpeg", args...)
 	cmd.Stdout = w
 
 	if err := cmd.Run(); err != nil {
-		s.log.Debug().Err(err).Str("stream", streamID).Msg("ffmpeg stream ended")
+		s.log.Debug().Err(err).Str("stream", streamID).Msg("jellyfin video stream ended")
 	}
 }
 
