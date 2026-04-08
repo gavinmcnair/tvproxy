@@ -804,20 +804,28 @@ func (s *Server) playbackInfo(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	var mediaStreams []MediaStream
+	if stream != nil {
+		mediaStreams = s.buildMediaStreams(stream)
+	} else {
+		mediaStreams = []MediaStream{
+			{Type: "Video", Codec: videoCodec, Index: 0, IsDefault: true, Width: 1920, Height: 1080},
+			{Type: "Audio", Codec: audioCodec, Index: 1, IsDefault: true, Channels: 2, SampleRate: 48000},
+		}
+	}
+
 	ms := MediaSource{
 		Protocol: "Http", ID: itemID, Type: "Default", Name: "Default",
 		Container: container, IsRemote: true,
-		SupportsTranscoding:  true,
-		SupportsDirectStream: true,
-		SupportsDirectPlay:   false,
-		RunTimeTicks:         ticks,
+		SupportsTranscoding:    true,
+		SupportsDirectStream:   true,
+		SupportsDirectPlay:     false,
+		RunTimeTicks:           ticks,
+		DefaultAudioStreamIndex: 1,
 		TranscodingURL:         fmt.Sprintf("/Videos/%s/stream.mp4?static=true", itemID),
 		TranscodingSubProtocol: "http",
 		TranscodingContainer:   "mp4",
-		MediaStreams: []MediaStream{
-			{Type: "Video", Codec: videoCodec, Index: 0, IsDefault: true, Width: 1920, Height: 1080},
-			{Type: "Audio", Codec: audioCodec, Index: 1, IsDefault: true, Channels: 2, SampleRate: 48000},
-		},
+		MediaStreams:            mediaStreams,
 	}
 
 	s.respondJSON(w, http.StatusOK, map[string]any{
