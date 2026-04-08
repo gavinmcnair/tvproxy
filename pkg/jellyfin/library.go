@@ -211,9 +211,13 @@ func (s *Server) lookupCast(name, mediaType string) []PersonDto {
 		}
 		name, _ := cm["name"].(string)
 		character, _ := cm["character"].(string)
+		pid := 0
+		if v, ok := cm["id"].(float64); ok {
+			pid = int(v)
+		}
 		people = append(people, PersonDto{
 			Name: name,
-			ID:   fmt.Sprintf("person_%d", int(cm["id"].(float64))),
+			ID:   fmt.Sprintf("person_%d", pid),
 			Role: character,
 			Type: "Actor",
 		})
