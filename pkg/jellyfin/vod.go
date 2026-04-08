@@ -196,10 +196,19 @@ func (s *Server) listResumeItems(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) resolveSeriesID(r *http.Request) string {
-	if id := chi.URLParam(r, "seriesId"); id != "" {
-		return id
+	id := chi.URLParam(r, "seriesId")
+	if id == "" {
+		id = firstOf(r.URL.Query(), "parentId", "ParentId")
 	}
-	return firstOf(r.URL.Query(), "parentId", "ParentId")
+	if strings.Contains(id, "_s") {
+		parts := strings.Split(id, "_s")
+		if len(parts) >= 2 {
+			if _, err := strconv.Atoi(parts[len(parts)-1]); err == nil {
+				return strings.Join(parts[:len(parts)-1], "_s")
+			}
+		}
+	}
+	return id
 }
 
 func (s *Server) listSeasons(w http.ResponseWriter, r *http.Request) {
@@ -255,7 +264,22 @@ func (s *Server) listSeasons(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) listEpisodes(w http.ResponseWriter, r *http.Request) {
 	targetID := s.resolveSeriesID(r)
-	seasonNum, _ := strconv.Atoi(r.URL.Query().Get("seasonId"))
+	seasonID := r.URL.Query().Get("seasonId")
+	var seasonNum int
+
+	if strings.Contains(seasonID, "_s") {
+		parts := strings.Split(seasonID, "_s")
+		if len(parts) >= 2 {
+			seasonNum, _ = strconv.Atoi(parts[len(parts)-1])
+			if targetID == seasonID {
+				targetID = strings.Join(parts[:len(parts)-1], "_s")
+			}
+		}
+	}
+
+	if seasonNum == 0 {
+		seasonNum, _ = strconv.Atoi(seasonID)
+	}
 	if seasonNum == 0 {
 		if sn := r.URL.Query().Get("season"); sn != "" {
 			seasonNum, _ = strconv.Atoi(sn)
