@@ -27,9 +27,6 @@ func (h *M3UAccountHandler) List(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	for i := range accounts {
-		accounts[i].TLSEnrolled = mtls.HasCerts(h.configDir, accounts[i].ID)
-	}
 
 	respondJSON(w, http.StatusOK, accounts)
 }
@@ -83,6 +80,7 @@ func (h *M3UAccountHandler) Create(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		account.TLSEnrolled = true
+		h.m3uService.UpdateAccount(r.Context(), account)
 	}
 
 	respondJSON(w, http.StatusCreated, account)
@@ -97,7 +95,6 @@ func (h *M3UAccountHandler) Get(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	account.TLSEnrolled = mtls.HasCerts(h.configDir, account.ID)
 	respondJSON(w, http.StatusOK, account)
 }
 
@@ -156,8 +153,9 @@ func (h *M3UAccountHandler) Update(w http.ResponseWriter, r *http.Request) {
 			})
 			return
 		}
+		account.TLSEnrolled = true
+		h.m3uService.UpdateAccount(r.Context(), account)
 	}
-	account.TLSEnrolled = mtls.HasCerts(h.configDir, account.ID)
 
 	respondJSON(w, http.StatusOK, account)
 }

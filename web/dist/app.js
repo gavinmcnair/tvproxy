@@ -4442,7 +4442,7 @@
         }},
         { key: 'max_streams', label: 'Max Streams' },
         { key: 'stream_count', label: 'Streams' },
-        { key: 'tls_enrolled', label: 'mTLS', render: function(v) { return v ? '\u2705' : ''; } },
+        { key: 'tls_enrolled', label: 'mTLS', render: function(item) { return item.tls_enrolled ? '\u2705' : ''; } },
       ],
       fields: [
         { key: 'name', label: 'Name', placeholder: 'My IPTV Provider' },
