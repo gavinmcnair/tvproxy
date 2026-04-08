@@ -161,6 +161,9 @@ func (s *Server) Router() chi.Router {
 		r.Get("/Items/Suggestions", s.getLatest)
 
 		r.Get("/Persons", s.emptyQueryResult)
+		r.Get("/Persons/{personId}/Images/{imageType}", func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusNotFound)
+		})
 		r.Get("/Persons/{personId}", func(w http.ResponseWriter, r *http.Request) {
 			s.respondJSON(w, http.StatusOK, BaseItemDto{
 				Name: chi.URLParam(r, "personId"), ServerID: s.serverID,
