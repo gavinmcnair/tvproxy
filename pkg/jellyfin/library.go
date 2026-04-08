@@ -438,6 +438,23 @@ func (s *Server) getLatest(w http.ResponseWriter, r *http.Request) {
 	s.respondJSON(w, http.StatusOK, items)
 }
 
+func (s *Server) getSuggestions(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	items := s.buildMovieItems(ctx, "", "")
+	sortItems(items, "Random", "")
+	limit := 10
+	if l := r.URL.Query().Get("limit"); l != "" {
+		limit, _ = strconv.Atoi(l)
+	}
+	if len(items) > limit {
+		items = items[:limit]
+	}
+	if items == nil {
+		items = []BaseItemDto{}
+	}
+	s.respondJSON(w, http.StatusOK, BaseItemDtoQueryResult{Items: items, TotalRecordCount: len(items)})
+}
+
 func (s *Server) getResume(w http.ResponseWriter, r *http.Request) {
 	s.respondJSON(w, http.StatusOK, BaseItemDtoQueryResult{Items: []BaseItemDto{}, TotalRecordCount: 0})
 }
