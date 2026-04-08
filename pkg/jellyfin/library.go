@@ -544,6 +544,9 @@ func (s *Server) getEpisodes(w http.ResponseWriter, r *http.Request) {
 			if ep.Overview != "" {
 				item.Overview = ep.Overview
 			}
+			if ep.StillPath != "" {
+				item.ImageTags["Primary"] = "tmdb_ep"
+			}
 		}
 
 		items = append(items, item)
@@ -721,6 +724,14 @@ func (s *Server) getImage(w http.ResponseWriter, r *http.Request) {
 		mediaType := stream.VODType
 		if stream.VODType == "series" && stream.VODSeries != "" {
 			lookupName = stream.VODSeries
+		}
+
+		if stream.VODType == "series" && stream.VODSeason > 0 && stream.VODEpisode > 0 {
+			if ep := s.tmdbClient.LookupEpisode(lookupName, stream.VODSeason, stream.VODEpisode); ep != nil && ep.StillPath != "" {
+				r.URL, _ = url.Parse(fmt.Sprintf("/api/tmdb/image?size=w300&path=%s", url.QueryEscape(ep.StillPath)))
+				s.tmdbClient.ServeImage(w, r)
+				return
+			}
 		}
 
 		if isBackdrop {
