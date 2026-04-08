@@ -71,7 +71,6 @@ type FFmpegSettings struct {
 	LogLevel           string                          `json:"log_level"`
 	AnalyzeDuration    int                             `json:"analyzeduration"`
 	ProbeSize          int                             `json:"probesize"`
-	SatIPRWTimeout     int                             `json:"satip_rw_timeout"`
 	AudioBitrate       string                          `json:"audio_bitrate"`
 	AudioChannels      int                             `json:"audio_channels"`
 	WebMAudioCodec     string                          `json:"webm_audio_codec"`

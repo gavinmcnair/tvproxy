@@ -134,11 +134,21 @@ func (s *Session) buildFFmpegArgs(startNumber int, startTimeTicks int64) []strin
 		args = append(args, "-ss", fmt.Sprintf("%.3f", secs))
 	}
 
-	args = append(args,
-		"-analyzeduration", "3000000",
-		"-probesize", "3000000",
-		"-i", s.StreamURL,
-	)
+	if isRTSP(s.StreamURL) {
+		args = append(args,
+			"-rtsp_transport", "tcp",
+			"-analyzeduration", "3000000",
+			"-probesize", "2000000",
+			"-max_delay", "500000",
+		)
+	} else {
+		args = append(args,
+			"-analyzeduration", "3000000",
+			"-probesize", "3000000",
+		)
+	}
+
+	args = append(args, "-i", s.StreamURL)
 
 	videoCodec := s.Profile.VideoCodec
 	if videoCodec == "" || videoCodec == "copy" {
@@ -177,6 +187,9 @@ func (s *Session) buildFFmpegArgs(startNumber int, startTimeTicks int64) []strin
 	args = append(args, "-c:a", audioCodec)
 	if audioCodec != "copy" {
 		args = append(args, "-b:a", "192k", "-ac", "2")
+		if isRTSP(s.StreamURL) {
+			args = append(args, "-af", "aresample=async=1000:first_pts=0")
+		}
 	}
 
 	args = append(args,
@@ -246,6 +259,10 @@ func (s *Session) WaitForSegment(index int, timeout time.Duration) error {
 	}
 
 	return fmt.Errorf("segment %d not ready after %v", index, timeout)
+}
+
+func isRTSP(url string) bool {
+	return len(url) > 7 && (url[:7] == "rtsp://" || url[:8] == "rtsps://")
 }
 
 func isHEVC(codec string) bool {

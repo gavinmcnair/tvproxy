@@ -58,7 +58,6 @@ type ProbeResult struct {
 	Width       int          `json:"width"`
 	Height      int          `json:"height"`
 	HasVideo    bool         `json:"has_video"`
-	SourceType  string       `json:"source_type,omitempty"`
 	FormatName  string       `json:"format_name,omitempty"`
 	Video       *VideoInfo   `json:"video,omitempty"`
 	AudioTracks []AudioTrack `json:"audio_tracks,omitempty"`

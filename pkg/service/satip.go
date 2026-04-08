@@ -197,8 +197,7 @@ func (s *SatIPService) scanSource(ctx context.Context, source *models.SatIPSourc
 		if s.recordingStore != nil {
 			hasVideo := group != "Radio"
 			probe := &ffmpeg.ProbeResult{
-				HasVideo:   hasVideo,
-				SourceType: "satip",
+				HasVideo: hasVideo,
 			}
 			if hasVideo {
 				for _, t := range tracks {

@@ -3,7 +3,6 @@
     "log_level": "warning",
     "analyzeduration": 5000000,
     "probesize": 5000000,
-    "satip_rw_timeout": 5000000,
     "audio_bitrate": "192k",
     "audio_channels": 2,
     "webm_audio_codec": "libopus",
