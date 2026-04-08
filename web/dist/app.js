@@ -3986,7 +3986,7 @@
       progInterval = setInterval(fetchNowPlaying, 60000);
     }
 
-    if (dvr) {
+    if (dvr && !isHLS) {
       pollInterval = setInterval(async function() {
         if (playerCtx.signal.aborted) { clearInterval(pollInterval); return; }
         try {
