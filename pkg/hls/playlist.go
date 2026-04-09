@@ -56,10 +56,26 @@ func GenerateVODPlaylist(sess *Session, endpointPrefix string) string {
 }
 
 func GenerateLivePlaylist(sess *Session) string {
+	isFMP4 := sess.Profile.Container != "mpegts"
+
+	// Original Jellyfin-proven version (mpegts only):
+	// result := "#EXTM3U\n"
+	// result += "#EXT-X-VERSION:3\n"
+	// result += fmt.Sprintf("#EXT-X-TARGETDURATION:%d\n", sess.SegmentLength)
+	// result += "#EXT-X-MEDIA-SEQUENCE:0\n"
+
 	result := "#EXTM3U\n"
-	result += "#EXT-X-VERSION:3\n"
+	if isFMP4 {
+		result += "#EXT-X-VERSION:7\n"
+	} else {
+		result += "#EXT-X-VERSION:3\n"
+	}
 	result += fmt.Sprintf("#EXT-X-TARGETDURATION:%d\n", sess.SegmentLength)
 	result += "#EXT-X-MEDIA-SEQUENCE:0\n"
+
+	if isFMP4 {
+		result += "#EXT-X-MAP:URI=\"init.mp4\"\n"
+	}
 
 	current := sess.CurrentTranscodeIndex()
 	if current < 0 {
