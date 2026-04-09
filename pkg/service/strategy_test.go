@@ -2,6 +2,8 @@ package service
 
 import (
 	"testing"
+
+	"github.com/gavinmcnair/tvproxy/pkg/models"
 )
 
 func TestClassifyStream(t *testing.T) {
@@ -155,6 +157,90 @@ func TestResolveSessionStrategy_LiveWithTranscode(t *testing.T) {
 	}
 	if s.MetadataOnly {
 		t.Error("MetadataOnly should be false for live")
+	}
+}
+
+func TestResolveVideoAction(t *testing.T) {
+	tests := []struct {
+		source, client, want string
+	}{
+		{"h264", "default", "copy"},
+		{"h264", "", "copy"},
+		{"h264", "h264", "copy"},
+		{"h264", "av1", "av1"},
+		{"mpeg2video", "h264", "h264"},
+		{"hevc", "default", "copy"},
+		{"hevc", "h264", "h264"},
+	}
+	for _, tt := range tests {
+		got := resolveVideoAction(tt.source, tt.client)
+		if got != tt.want {
+			t.Errorf("resolveVideoAction(%q, %q) = %q, want %q", tt.source, tt.client, got, tt.want)
+		}
+	}
+}
+
+func TestResolveAudioAction(t *testing.T) {
+	tests := []struct {
+		source, client, container, want string
+	}{
+		{"aac", "default", "mp4", "copy"},
+		{"aac", "default", "webm", "opus"},
+		{"ac3", "default", "mp4", "aac"},
+		{"mp2", "default", "mp4", "aac"},
+		{"aac", "aac", "mp4", "copy"},
+		{"ac3", "aac", "mp4", "aac"},
+		{"aac", "opus", "webm", "opus"},
+	}
+	for _, tt := range tests {
+		got := resolveAudioAction(tt.source, tt.client, tt.container)
+		if got != tt.want {
+			t.Errorf("resolveAudioAction(%q, %q, %q) = %q, want %q", tt.source, tt.client, tt.container, got, tt.want)
+		}
+	}
+}
+
+func TestResolveSessionStrategy_LiveWithSourceProfile(t *testing.T) {
+	in := StrategyInput{
+		StreamURL: "http://provider.com/live/123.ts",
+		VODType:   "",
+		StreamID:  "test-sp",
+		SourceProfile: &models.SourceProfile{
+			VideoCodec:      "mpeg2video",
+			AudioCodec:      "mp2",
+			Interlaced:      true,
+			AudioResync:     true,
+			FPSMode:         "cfr",
+			AnalyzeDuration: 3000000,
+			ProbeSize:       10000000,
+		},
+	}
+	out := StrategyOutput{
+		Delivery:   "hls",
+		VideoCodec: "default",
+		AudioCodec: "default",
+		Container:  "mp4",
+	}
+
+	s := resolveSessionStrategy(in, out, "/tmp/recordings")
+
+	if s.VideoCodec != "copy" {
+		t.Errorf("VideoCodec = %q, want copy (mpeg2 source, default client = copy)", s.VideoCodec)
+	}
+	if s.AudioCodec != "aac" {
+		t.Errorf("AudioCodec = %q, want aac (mp2 source needs transcode for mp4)", s.AudioCodec)
+	}
+	if !s.SourceDeinterlace {
+		t.Error("SourceDeinterlace should be true")
+	}
+	if !s.SourceAudioResync {
+		t.Error("SourceAudioResync should be true")
+	}
+	if s.SourceFPSMode != "cfr" {
+		t.Errorf("SourceFPSMode = %q, want cfr", s.SourceFPSMode)
+	}
+	if s.SourceInputArgs == "" {
+		t.Error("SourceInputArgs should be set from profile")
 	}
 }
 

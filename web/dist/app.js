@@ -5342,12 +5342,11 @@
           { value: 'videotoolbox', label: 'VideoToolbox (macOS only)' },
         ], default: 'default', showWhen: form => (form.stream_mode || 'ffmpeg') === 'ffmpeg' },
         { key: 'video_codec', label: 'Video Codec', type: 'select', options: [
-          { value: 'default', label: 'Global Default' },
-          { value: 'copy', label: 'Copy (No Transcode)' },
+          { value: 'default', label: 'Match Source (auto copy/transcode)' },
           { value: 'h264', label: 'H.264 / AVC' },
           { value: 'h265', label: 'H.265 / HEVC' },
           { value: 'av1', label: 'AV1' },
-        ], default: 'default', showWhen: form => (form.stream_mode || 'ffmpeg') === 'ffmpeg' },
+        ], default: 'default', help: 'Match Source: copies if source matches, transcodes if not. Explicit codec always transcodes to that codec.', showWhen: form => (form.stream_mode || 'ffmpeg') === 'ffmpeg' },
         { key: 'container', label: 'Container', type: 'select', options: [
           { value: 'mpegts', label: 'MPEG-TS (HDHR/Plex)' },
           { value: 'matroska', label: 'Matroska (VLC)' },
@@ -5359,12 +5358,11 @@
           { value: 'hls', label: 'HLS' },
         ], default: 'stream', showWhen: form => (form.stream_mode || 'ffmpeg') === 'ffmpeg' },
         { key: 'audio_codec', label: 'Audio Codec', type: 'select', options: [
-          { value: 'default', label: 'Default (auto)' },
-          { value: 'copy', label: 'Copy (passthrough)' },
+          { value: 'default', label: 'Match Source (auto copy/transcode)' },
           { value: 'aac', label: 'AAC' },
           { value: 'opus', label: 'Opus' },
-        ], default: 'default', help: 'Default: Opus for WebM, Copy for passthrough, AAC otherwise.', showWhen: form => (form.stream_mode || 'ffmpeg') === 'ffmpeg' },
-        { key: 'deinterlace', label: 'Deinterlace', type: 'checkbox', default: false, help: 'Apply yadif deinterlace filter (only when transcoding, not copy).', showWhen: form => (form.stream_mode || 'ffmpeg') === 'ffmpeg' && (form.video_codec || 'default') !== 'copy' },
+        ], default: 'default', help: 'Match Source: copies if compatible with output container, transcodes if not. Opus required for WebM.', showWhen: form => (form.stream_mode || 'ffmpeg') === 'ffmpeg' },
+        { key: 'deinterlace', label: 'Deinterlace (legacy)', type: 'checkbox', default: false, help: 'Deinterlacing is now configured on Source Stream Profiles. This setting is kept for backwards compatibility.', showWhen: form => (form.stream_mode || 'ffmpeg') === 'ffmpeg' && (form.video_codec || 'default') !== 'default' },
         { key: 'fps_mode', label: 'FPS Mode', type: 'select', options: [
           { value: 'auto', label: 'Auto (variable)' },
           { value: 'cfr', label: 'CFR (constant frame rate)' },

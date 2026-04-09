@@ -41,12 +41,15 @@ type StartOpts struct {
 	UseWireGuard     bool
 	KnownDuration    float64
 	SeekOffset       float64
-	Command          string
-	Args             string
-	OutputDir        string
-	HLSOutputDir     string
-	SourceInputArgs  string
-	MetadataOnly     bool
+	Command           string
+	Args              string
+	OutputDir         string
+	HLSOutputDir      string
+	SourceInputArgs   string
+	SourceDeinterlace bool
+	SourceAudioResync bool
+	SourceFPSMode     string
+	MetadataOnly      bool
 }
 
 type Manager struct {
@@ -167,23 +170,43 @@ func (m *Manager) buildDualOutputArgs(hlsDir, mp4Path string, opts StartOpts) []
 		}
 	}
 
+	if opts.SourceInputArgs != "" {
+		inputParts := ffmpeg.ShellSplit(opts.SourceInputArgs)
+		args = append(args, inputParts...)
+	} else {
+		args = append(args,
+			"-f", "mpegts",
+			"-analyzeduration", "1000000",
+			"-probesize", "1000000",
+			"-err_detect", "ignore_err",
+			"-fflags", "+genpts+discardcorrupt",
+		)
+	}
 	args = append(args,
-		"-f", "mpegts",
-		"-analyzeduration", "1000000",
-		"-probesize", "1000000",
-		"-err_detect", "ignore_err",
-		"-fflags", "+genpts+discardcorrupt",
 		"-i", "pipe:0",
 		"-map", "0:v:0?",
 		"-map", "0:a:0?",
 	)
 
 	venc := ffmpeg.MapEncoder(videoCodec)
+	if opts.SourceDeinterlace && venc == "copy" {
+		venc = "libx264"
+	}
 	args = append(args, "-c:v", venc)
+	if opts.SourceDeinterlace && venc != "copy" {
+		args = append(args, "-vf", "yadif")
+	}
+	if opts.SourceFPSMode != "" && venc != "copy" {
+		args = append(args, "-fps_mode", opts.SourceFPSMode)
+	}
+
 	if audioCodec == "copy" {
 		args = append(args, "-c:a", "aac", "-ac", "2", "-b:a", "192k")
 	} else {
 		args = append(args, "-c:a", audioCodec, "-ac", "2", "-b:a", "192k")
+	}
+	if opts.SourceAudioResync {
+		args = append(args, "-af", "aresample=async=1000:first_pts=0")
 	}
 
 	args = append(args,
@@ -558,7 +581,9 @@ func (m *Manager) GetOrCreateWithConsumer(ctx context.Context, opts StartOpts, c
 	m.sessions[opts.ChannelID] = s
 	m.mu.Unlock()
 
-	go m.probeAsync(s, opts.StreamURL)
+	if opts.HLSOutputDir == "" {
+		go m.probeAsync(s, opts.StreamURL)
+	}
 
 	if !opts.MetadataOnly {
 		args := m.buildArgs(opts.Args, opts.StreamURL, filePath, opts.UseWireGuard, opts.HLSOutputDir, opts)

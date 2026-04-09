@@ -22,9 +22,12 @@ const (
 type SessionStrategy struct {
 	Category StreamCategory
 
-	MetadataOnly    bool
-	HLSOutputDir    string
-	SourceInputArgs string
+	MetadataOnly      bool
+	HLSOutputDir      string
+	SourceInputArgs   string
+	SourceDeinterlace bool
+	SourceAudioResync bool
+	SourceFPSMode     string
 
 	VideoCodec string
 	AudioCodec string
@@ -107,6 +110,11 @@ func liveStrategy(in StrategyInput, out StrategyOutput, cat StreamCategory) Sess
 		Command:         out.Command,
 		SourceInputArgs: buildSourceInputArgs(sp),
 	}
+	if sp != nil {
+		s.SourceDeinterlace = sp.Interlaced
+		s.SourceAudioResync = sp.AudioResync
+		s.SourceFPSMode = sp.FPSMode
+	}
 
 	if out.Delivery == "hls" {
 		s.HLSOutputDir = filepath.Join(os.TempDir(), "tvproxy-hls", in.StreamID)
@@ -122,15 +130,22 @@ func liveStrategy(in StrategyInput, out StrategyOutput, cat StreamCategory) Sess
 }
 
 func vodRemoteStrategy(in StrategyInput, out StrategyOutput) SessionStrategy {
+	sp := in.SourceProfile
 	s := SessionStrategy{
-		Category:     CategoryVODRemote,
-		VideoCodec:   out.VideoCodec,
-		AudioCodec:   out.AudioCodec,
-		HWAccel:      out.HWAccel,
-		Container:    out.Container,
-		Command:      out.Command,
-		FFmpegArgs:   out.Args,
-		MetadataOnly: out.Delivery == "hls",
+		Category:        CategoryVODRemote,
+		VideoCodec:      out.VideoCodec,
+		AudioCodec:      out.AudioCodec,
+		HWAccel:         out.HWAccel,
+		Container:       out.Container,
+		Command:         out.Command,
+		FFmpegArgs:      out.Args,
+		SourceInputArgs: buildSourceInputArgs(sp),
+		MetadataOnly:    out.Delivery == "hls",
+	}
+	if sp != nil {
+		s.SourceDeinterlace = sp.Interlaced
+		s.SourceAudioResync = sp.AudioResync
+		s.SourceFPSMode = sp.FPSMode
 	}
 	return s
 }

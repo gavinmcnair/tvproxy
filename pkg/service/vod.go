@@ -221,7 +221,10 @@ func (s *VODService) StartWatching(ctx context.Context, channelID string, profil
 		Args:             strategy.FFmpegArgs,
 		OutputDir:        s.config.VODOutputDir,
 		HLSOutputDir:     strategy.HLSOutputDir,
-		SourceInputArgs:  strategy.SourceInputArgs,
+		SourceInputArgs:   strategy.SourceInputArgs,
+		SourceDeinterlace: strategy.SourceDeinterlace,
+		SourceAudioResync: strategy.SourceAudioResync,
+		SourceFPSMode:     strategy.SourceFPSMode,
 		MetadataOnly:     strategy.MetadataOnly,
 	}, session.ConsumerViewer)
 	if err != nil {
@@ -300,7 +303,10 @@ func (s *VODService) StartWatchingStream(ctx context.Context, streamID string, p
 		Args:             strategy.FFmpegArgs,
 		OutputDir:        s.config.VODOutputDir,
 		HLSOutputDir:     strategy.HLSOutputDir,
-		SourceInputArgs:  strategy.SourceInputArgs,
+		SourceInputArgs:   strategy.SourceInputArgs,
+		SourceDeinterlace: strategy.SourceDeinterlace,
+		SourceAudioResync: strategy.SourceAudioResync,
+		SourceFPSMode:     strategy.SourceFPSMode,
 		KnownDuration:    stream.VODDuration,
 		MetadataOnly:     strategy.MetadataOnly,
 	}, session.ConsumerViewer)
