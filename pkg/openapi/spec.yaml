@@ -398,6 +398,25 @@ paths:
                   message:
                     type: string
 
+  /api/m3u/accounts/{id}/hard-refresh:
+    parameters:
+      - $ref: "#/components/parameters/id"
+    post:
+      summary: Hard refresh — clear auto TMDB matches, force full re-download (admin only)
+      description: Clears ETag, resets auto-matched TMDB IDs (preserves manual rematches), then does a full refresh.
+      tags: [M3U]
+      security: [{ bearerAuth: [] }]
+      responses:
+        "202":
+          description: Hard refresh started
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+
   /api/m3u/accounts/{id}/status:
     parameters:
       - $ref: "#/components/parameters/id"
