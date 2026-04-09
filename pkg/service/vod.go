@@ -225,6 +225,7 @@ func (s *VODService) StartWatching(ctx context.Context, channelID string, profil
 		SourceDeinterlace: strategy.SourceDeinterlace,
 		SourceAudioResync: strategy.SourceAudioResync,
 		SourceFPSMode:     strategy.SourceFPSMode,
+		SkipProbe:         strategy.SkipProbe,
 		MetadataOnly:     strategy.MetadataOnly,
 	}, session.ConsumerViewer)
 	if err != nil {
@@ -309,6 +310,7 @@ func (s *VODService) StartWatchingStream(ctx context.Context, streamID string, p
 		SourceDeinterlace: strategy.SourceDeinterlace,
 		SourceAudioResync: strategy.SourceAudioResync,
 		SourceFPSMode:     strategy.SourceFPSMode,
+		SkipProbe:         strategy.SkipProbe,
 		KnownDuration:    stream.VODDuration,
 		MetadataOnly:     strategy.MetadataOnly,
 	}, session.ConsumerViewer)

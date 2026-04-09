@@ -49,6 +49,7 @@ type StartOpts struct {
 	SourceDeinterlace bool
 	SourceAudioResync bool
 	SourceFPSMode     string
+	SkipProbe         bool
 	MetadataOnly      bool
 }
 
@@ -600,7 +601,7 @@ func (m *Manager) GetOrCreateWithConsumer(ctx context.Context, opts StartOpts, c
 	m.sessions[opts.ChannelID] = s
 	m.mu.Unlock()
 
-	if opts.HLSOutputDir == "" {
+	if opts.HLSOutputDir == "" && !opts.SkipProbe {
 		go m.probeAsync(s, opts.StreamURL)
 	}
 

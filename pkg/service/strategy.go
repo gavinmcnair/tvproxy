@@ -23,6 +23,7 @@ type SessionStrategy struct {
 	Category StreamCategory
 
 	MetadataOnly      bool
+	SkipProbe         bool
 	HLSOutputDir      string
 	SourceInputArgs   string
 	SourceDeinterlace bool
@@ -118,6 +119,9 @@ func liveStrategy(in StrategyInput, out StrategyOutput, cat StreamCategory) Sess
 		s.SourceDeinterlace = sp.Deinterlace
 		s.SourceAudioResync = sp.AudioResync
 		s.SourceFPSMode = sp.FPSMode
+		if sp.ProbeMode == "none" || sp.ProbeMode == "declared" {
+			s.SkipProbe = true
+		}
 	}
 
 	if out.Delivery == "hls" {
@@ -150,6 +154,9 @@ func vodRemoteStrategy(in StrategyInput, out StrategyOutput) SessionStrategy {
 		s.SourceDeinterlace = sp.Deinterlace
 		s.SourceAudioResync = sp.AudioResync
 		s.SourceFPSMode = sp.FPSMode
+		if sp.ProbeMode == "none" || sp.ProbeMode == "declared" {
+			s.SkipProbe = true
+		}
 	}
 	return s
 }
