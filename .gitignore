@@ -44,6 +44,7 @@ AGENT.md
 CHANNELS.md
 packager
 wireguard_profiles.json
+source_profiles.json
 tmdb_cache/
 cache/
 jellyfin-openapi-stable.json
