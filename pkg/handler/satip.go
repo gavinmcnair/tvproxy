@@ -44,6 +44,7 @@ func (h *SatIPHandler) Create(w http.ResponseWriter, r *http.Request) {
 		HTTPPort        int    `json:"http_port"`
 		IsEnabled       bool   `json:"is_enabled"`
 		TransmitterFile string `json:"transmitter_file"`
+		SourceProfileID string `json:"source_profile_id"`
 	}
 	if err := decodeJSON(r, &req); err != nil {
 		respondError(w, http.StatusBadRequest, "invalid request body")
@@ -61,6 +62,7 @@ func (h *SatIPHandler) Create(w http.ResponseWriter, r *http.Request) {
 		HTTPPort:        req.HTTPPort,
 		IsEnabled:       req.IsEnabled,
 		TransmitterFile: req.TransmitterFile,
+		SourceProfileID: req.SourceProfileID,
 	}
 
 	if err := h.satipService.CreateSource(r.Context(), source); err != nil {
@@ -102,6 +104,7 @@ func (h *SatIPHandler) Update(w http.ResponseWriter, r *http.Request) {
 		HTTPPort        int    `json:"http_port"`
 		IsEnabled       bool   `json:"is_enabled"`
 		TransmitterFile string `json:"transmitter_file"`
+		SourceProfileID string `json:"source_profile_id"`
 	}
 	if err := decodeJSON(r, &req); err != nil {
 		respondError(w, http.StatusBadRequest, "invalid request body")
@@ -122,6 +125,7 @@ func (h *SatIPHandler) Update(w http.ResponseWriter, r *http.Request) {
 	source.HTTPPort = req.HTTPPort
 	source.IsEnabled = req.IsEnabled
 	source.TransmitterFile = req.TransmitterFile
+	source.SourceProfileID = req.SourceProfileID
 
 	if err := h.satipService.UpdateSource(r.Context(), source); err != nil {
 		respondError(w, http.StatusInternalServerError, "failed to update satip source")
