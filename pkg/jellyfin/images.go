@@ -107,7 +107,7 @@ func (s *Server) serveGroupImage(w http.ResponseWriter, r *http.Request, groupID
 func (s *Server) serveSeriesImage(w http.ResponseWriter, r *http.Request, seriesID string, isBackdrop bool) {
 	streams, _ := s.streams.List(r.Context())
 	for _, st := range streams {
-		if st.VODType != "series" || st.TMDBID == 0 {
+		if st.VODType != "series" {
 			continue
 		}
 		key := seriesKey(&st)
