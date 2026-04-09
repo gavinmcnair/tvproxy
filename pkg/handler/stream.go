@@ -217,11 +217,15 @@ func (h *StreamHandler) VODLibrary(w http.ResponseWriter, r *http.Request) {
 			Duration:   s.VODDuration,
 		}
 
+			xtreamEnriched := false
 		if s.CacheType == "xtream" && h.xtreamCache != nil {
 			if s.VODType == "movie" {
 				if m := h.xtreamCache.GetMovie(s.CacheKey); m != nil {
 					item.PosterURL = h.logoService.Resolve(m.PosterURL)
-					item.Overview = m.Plot
+					if m.Plot != "" {
+						item.Overview = m.Plot
+						xtreamEnriched = true
+					}
 					item.Rating = 0
 					if m.Rating != "" && m.Rating != "0" {
 						var r float64
@@ -260,7 +264,8 @@ func (h *StreamHandler) VODLibrary(w http.ResponseWriter, r *http.Request) {
 					}
 				}
 			}
-		} else if h.tmdb != nil {
+		}
+		if (!xtreamEnriched || s.CacheType != "xtream") && h.tmdb != nil {
 			if s.VODType == "movie" {
 				if m := h.tmdb.LookupMovie(lookupName); m != nil {
 					item.Overview = m.Overview
