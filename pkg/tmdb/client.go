@@ -177,42 +177,75 @@ func (c *Client) Invalidate(query string) {
 	c.cache.Delete("search_" + query + "_tv")
 }
 
-func (c *Client) LookupMovie(tmdbID int) *MovieMeta {
-	return c.meta.GetMovie(tmdbID)
+func (c *Client) resolveID(name, mediaType string) int {
+	clean, year := CleanVODName(name)
+	query := clean
+	if year != "" {
+		query = clean + " (" + year + ")"
+	}
+	searchType := mediaType
+	if mediaType == "series" {
+		searchType = "tv"
+	}
+	cacheKey := SearchCacheKey(query, searchType)
+	if cached, ok := c.cache.Get(cacheKey); ok {
+		if result, ok := cached.(map[string]any); ok {
+			if first := firstResult(result); first != nil {
+				return intVal(first, "id")
+			}
+		}
+	}
+	return 0
 }
 
-func (c *Client) LookupSeries(tmdbID int) *SeriesMeta {
-	return c.meta.GetSeries(tmdbID)
+func (c *Client) LookupMovie(name string) *MovieMeta {
+	tid := c.resolveID(name, "movie")
+	if tid == 0 {
+		return nil
+	}
+	return c.meta.GetMovie(tid)
 }
 
-func (c *Client) LookupEpisode(tmdbID int, season, episode int) *EpisodeMeta {
-	return c.meta.GetEpisode(tmdbID, season, episode)
+func (c *Client) LookupSeries(name string) *SeriesMeta {
+	tid := c.resolveID(name, "series")
+	if tid == 0 {
+		return nil
+	}
+	return c.meta.GetSeries(tid)
 }
 
-func (c *Client) LookupCollection(tmdbID int) *CollectionMeta {
+func (c *Client) LookupEpisode(name string, season, episode int) *EpisodeMeta {
+	tid := c.resolveID(name, "series")
+	if tid == 0 {
+		return nil
+	}
+	return c.meta.GetEpisode(tid, season, episode)
+}
+
+func (c *Client) LookupCollectionByID(tmdbID int) *CollectionMeta {
 	return c.meta.GetCollection(tmdbID)
 }
 
-func (c *Client) LookupPoster(tmdbID int, mediaType string) string {
+func (c *Client) LookupPoster(name, mediaType string) string {
 	if mediaType == "movie" {
-		if m := c.LookupMovie(tmdbID); m != nil && m.PosterPath != "" {
+		if m := c.LookupMovie(name); m != nil && m.PosterPath != "" {
 			return PosterURL(m.PosterPath)
 		}
 	} else {
-		if s := c.LookupSeries(tmdbID); s != nil && s.PosterPath != "" {
+		if s := c.LookupSeries(name); s != nil && s.PosterPath != "" {
 			return PosterURL(s.PosterPath)
 		}
 	}
 	return ""
 }
 
-func (c *Client) LookupBackdrop(tmdbID int, mediaType string) string {
+func (c *Client) LookupBackdrop(name, mediaType string) string {
 	if mediaType == "movie" {
-		if m := c.LookupMovie(tmdbID); m != nil && m.BackdropPath != "" {
+		if m := c.LookupMovie(name); m != nil && m.BackdropPath != "" {
 			return m.BackdropPath
 		}
 	} else {
-		if s := c.LookupSeries(tmdbID); s != nil && s.BackdropPath != "" {
+		if s := c.LookupSeries(name); s != nil && s.BackdropPath != "" {
 			return s.BackdropPath
 		}
 	}

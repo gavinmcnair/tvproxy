@@ -149,8 +149,8 @@ func (h *StreamHandler) VODLibrary(w http.ResponseWriter, r *http.Request) {
 		}
 
 		posterURL := ""
-		if h.tmdb != nil && s.TMDBID > 0 {
-			posterURL = h.tmdb.LookupPoster(s.TMDBID, mediaType)
+		if h.tmdb != nil {
+			posterURL = h.tmdb.LookupPoster(lookupName, mediaType)
 		}
 		if h.tmdb != nil && posterURL == "" && !seen[lookupName+"_"+mediaType] {
 			seen[lookupName+"_"+mediaType] = true
@@ -177,16 +177,16 @@ func (h *StreamHandler) VODLibrary(w http.ResponseWriter, r *http.Request) {
 			Duration:  s.VODDuration,
 		}
 
-		if h.tmdb != nil && s.TMDBID > 0 {
+		if h.tmdb != nil {
 			if s.VODType == "movie" {
-				if m := h.tmdb.LookupMovie(s.TMDBID); m != nil {
+				if m := h.tmdb.LookupMovie(lookupName); m != nil {
 					item.Overview = m.Overview
 					item.Rating = m.Rating
 					item.Year = m.Year
 					item.Genres = m.Genres
 					item.Certification = m.Certification
 					if m.CollectionID > 0 {
-						if col := h.tmdb.LookupCollection(m.CollectionID); col != nil {
+						if col := h.tmdb.LookupCollectionByID(m.CollectionID); col != nil {
 							if col.PosterPath != "" {
 								item.CollectionPoster = tmdb.PosterURL(col.PosterPath)
 							}
@@ -197,7 +197,7 @@ func (h *StreamHandler) VODLibrary(w http.ResponseWriter, r *http.Request) {
 					}
 				}
 			} else if s.VODType == "series" {
-				if sr := h.tmdb.LookupSeries(s.TMDBID); sr != nil {
+				if sr := h.tmdb.LookupSeries(lookupName); sr != nil {
 					item.Overview = sr.Overview
 					item.Rating = sr.Rating
 					item.Year = sr.Year
@@ -205,7 +205,7 @@ func (h *StreamHandler) VODLibrary(w http.ResponseWriter, r *http.Request) {
 					item.Certification = sr.Certification
 				}
 				if s.VODSeason > 0 && s.VODEpisode > 0 {
-					if ep := h.tmdb.LookupEpisode(s.TMDBID, s.VODSeason, s.VODEpisode); ep != nil {
+					if ep := h.tmdb.LookupEpisode(lookupName, s.VODSeason, s.VODEpisode); ep != nil {
 						item.EpisodeName = ep.Name
 						item.EpisodeOverview = ep.Overview
 						if ep.StillPath != "" {

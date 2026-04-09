@@ -34,29 +34,30 @@ func (s *Server) serveImage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if stream, err := s.streams.GetByID(ctx, addDashes(itemID)); err == nil && stream != nil {
+		lookupName := stream.Name
 		mediaType := stream.VODType
-		tid := stream.TMDBID
+		if stream.VODType == "series" && stream.VODSeries != "" {
+			lookupName = stream.VODSeries
+		}
 
-		if tid > 0 && stream.VODType == "series" && stream.VODSeason > 0 && stream.VODEpisode > 0 {
-			if ep := s.tmdbClient.LookupEpisode(tid, stream.VODSeason, stream.VODEpisode); ep != nil && ep.StillPath != "" {
+		if stream.VODType == "series" && stream.VODSeason > 0 && stream.VODEpisode > 0 {
+			if ep := s.tmdbClient.LookupEpisode(lookupName, stream.VODSeason, stream.VODEpisode); ep != nil && ep.StillPath != "" {
 				s.serveTMDBImage(w, r, "w300", ep.StillPath)
 				return
 			}
 		}
 
-		if tid > 0 && isBackdrop {
-			if bd := s.tmdbClient.LookupBackdrop(tid, mediaType); bd != "" {
+		if isBackdrop {
+			if bd := s.tmdbClient.LookupBackdrop(lookupName, mediaType); bd != "" {
 				s.serveTMDBImage(w, r, "w1280", bd)
 				return
 			}
 		}
 
-		if tid > 0 {
-			if posterURL := s.tmdbClient.LookupPoster(tid, mediaType); posterURL != "" {
-				r.URL, _ = url.Parse(posterURL)
-				s.tmdbClient.ServeImage(w, r)
-				return
-			}
+		if posterURL := s.tmdbClient.LookupPoster(lookupName, mediaType); posterURL != "" {
+			r.URL, _ = url.Parse(posterURL)
+			s.tmdbClient.ServeImage(w, r)
+			return
 		}
 
 		if s.logoService != nil && stream.Logo != "" {
@@ -114,12 +115,12 @@ func (s *Server) serveSeriesImage(w http.ResponseWriter, r *http.Request, series
 			continue
 		}
 		if isBackdrop {
-			if bd := s.tmdbClient.LookupBackdrop(st.TMDBID, "series"); bd != "" {
+			if bd := s.tmdbClient.LookupBackdrop(key, "series"); bd != "" {
 				s.serveTMDBImage(w, r, "w1280", bd)
 				return
 			}
 		}
-		if poster := s.tmdbClient.LookupPoster(st.TMDBID, "tv"); poster != "" {
+		if poster := s.tmdbClient.LookupPoster(key, "tv"); poster != "" {
 			r.URL, _ = url.Parse(poster)
 			s.tmdbClient.ServeImage(w, r)
 			return
