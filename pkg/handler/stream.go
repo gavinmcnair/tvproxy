@@ -15,11 +15,11 @@ import (
 )
 
 type StreamHandler struct {
-	streamStore  store.StreamReader
-	versioned    store.Versioned
-	logoService  *service.LogoService
-	tmdb         *tmdb.Client
-	xtreamCache  *xtream.Cache
+	streamStore store.StreamReader
+	versioned   store.Versioned
+	logoService *service.LogoService
+	tmdb        *tmdb.Client
+	xtreamCache *xtream.Cache
 }
 
 func NewStreamHandler(streamStore store.StreamReader, versioned store.Versioned, logoService *service.LogoService, tmdbClient *tmdb.Client, xtreamCache *xtream.Cache) *StreamHandler {
@@ -112,6 +112,8 @@ func (h *StreamHandler) VODLibrary(w http.ResponseWriter, r *http.Request) {
 		Logo               string   `json:"logo,omitempty"`
 		PosterURL          string   `json:"poster_url,omitempty"`
 		TMDBID             int      `json:"tmdb_id,omitempty"`
+		CacheType          string   `json:"cache_type,omitempty"`
+		CacheKey           int      `json:"cache_key,omitempty"`
 		Type               string   `json:"type"`
 		Series             string   `json:"series,omitempty"`
 		Collection         string   `json:"collection,omitempty"`
@@ -175,6 +177,8 @@ func (h *StreamHandler) VODLibrary(w http.ResponseWriter, r *http.Request) {
 			Logo:       h.logoService.Resolve(s.Logo),
 			PosterURL:  posterURL,
 			TMDBID:     s.TMDBID,
+			CacheType:  s.CacheType,
+			CacheKey:   s.CacheKey,
 			Type:       s.VODType,
 			Series:     s.VODSeries,
 			Collection: s.VODCollection,
