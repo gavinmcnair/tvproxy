@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -213,10 +214,14 @@ func (s *M3UService) refreshXtreamAccount(ctx context.Context, account *models.M
 		seen[hash] = struct{}{}
 		id := deterministicStreamID(hash)
 		keepIDs = append(keepIDs, id)
+		cleanName, lang := extractLanguage(vs.Name)
+		if lang == "" {
+			cleanName, lang = vs.Name, extractLangFromCategory(vs.CategoryName)
+		}
 		streams = append(streams, models.Stream{
 			ID:           id,
 			M3UAccountID: account.ID,
-			Name:         vs.Name,
+			Name:         cleanName,
 			URL:          streamURL,
 			Group:        vs.CategoryName,
 			Logo:         vs.StreamIcon,
@@ -224,6 +229,7 @@ func (s *M3UService) refreshXtreamAccount(ctx context.Context, account *models.M
 			VODType:      "movie",
 			CacheType:    "xtream",
 			CacheKey:     vs.StreamID,
+			Language:     lang,
 			UseWireGuard: account.UseWireGuard,
 			IsActive:     true,
 		})
@@ -248,18 +254,23 @@ func (s *M3UService) refreshXtreamAccount(ctx context.Context, account *models.M
 		seen[hash] = struct{}{}
 		id := deterministicStreamID(hash)
 		keepIDs = append(keepIDs, id)
+		cleanName, lang := extractLanguage(sr.Name)
+		if lang == "" {
+			lang = extractLangFromCategory(sr.CategoryName)
+		}
 		streams = append(streams, models.Stream{
 			ID:           id,
 			M3UAccountID: account.ID,
-			Name:         sr.Name,
+			Name:         cleanName,
 			URL:          fmt.Sprintf("%s/series/%s/%s", account.URL, account.Username, account.Password),
 			Group:        sr.CategoryName,
 			Logo:         sr.Cover,
 			ContentHash:  hash,
 			VODType:      "series",
-			VODSeries:    sr.Name,
+			VODSeries:    cleanName,
 			CacheType:    "xtream",
 			CacheKey:     sr.SeriesID,
+			Language:     lang,
 			UseWireGuard: account.UseWireGuard,
 			IsActive:     true,
 		})
@@ -542,6 +553,31 @@ func (s *M3UService) RefreshAllAccounts(ctx context.Context) error {
 }
 
 var streamNamespace = uuid.MustParse("f47ac10b-58cc-4372-a567-0e02b2c3d479")
+
+func extractLanguage(name string) (cleanName, lang string) {
+	if len(name) > 3 && name[2] == ':' && name[0] >= 'A' && name[0] <= 'Z' && name[1] >= 'A' && name[1] <= 'Z' {
+		return strings.TrimSpace(name[3:]), name[:2]
+	}
+	if len(name) > 4 && name[3] == ':' && name[0] >= 'A' && name[0] <= 'Z' && name[1] >= 'A' && name[1] <= 'Z' && name[2] >= 'A' && name[2] <= 'Z' {
+		return strings.TrimSpace(name[4:]), name[:3]
+	}
+	if len(name) > 3 && name[2] == ' ' && name[0] >= 'A' && name[0] <= 'Z' && name[1] >= 'A' && name[1] <= 'Z' {
+		rest := strings.TrimLeft(name[2:], " -:|")
+		if rest != name[2:] {
+			return strings.TrimSpace(rest), name[:2]
+		}
+	}
+	return name, ""
+}
+
+func extractLangFromCategory(cat string) string {
+	if len(cat) >= 2 && cat[0] >= 'A' && cat[0] <= 'Z' && cat[1] >= 'A' && cat[1] <= 'Z' {
+		if len(cat) == 2 || cat[2] == ' ' || cat[2] == '-' || cat[2] == ':' {
+			return cat[:2]
+		}
+	}
+	return ""
+}
 
 func deterministicStreamID(contentHash string) string {
 	return uuid.NewSHA1(streamNamespace, []byte(contentHash)).String()

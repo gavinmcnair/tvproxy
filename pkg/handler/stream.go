@@ -128,6 +128,7 @@ func (h *StreamHandler) VODLibrary(w http.ResponseWriter, r *http.Request) {
 		TMDBID             int      `json:"tmdb_id,omitempty"`
 		CacheType          string   `json:"cache_type,omitempty"`
 		CacheKey           int      `json:"cache_key,omitempty"`
+		Language           string   `json:"language,omitempty"`
 		Type               string   `json:"type"`
 		Series             string   `json:"series,omitempty"`
 		Collection         string   `json:"collection,omitempty"`
@@ -193,6 +194,7 @@ func (h *StreamHandler) VODLibrary(w http.ResponseWriter, r *http.Request) {
 			TMDBID:     s.TMDBID,
 			CacheType:  s.CacheType,
 			CacheKey:   s.CacheKey,
+			Language:   s.Language,
 			Type:       s.VODType,
 			Series:     s.VODSeries,
 			Collection: s.VODCollection,

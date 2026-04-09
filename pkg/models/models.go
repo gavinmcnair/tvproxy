@@ -83,6 +83,7 @@ type Stream struct {
 	TMDBManual    bool          `json:"tmdb_manual,omitempty"`
 	CacheType     string        `json:"cache_type,omitempty"`
 	CacheKey      int           `json:"cache_key,omitempty"`
+	Language      string        `json:"language,omitempty"`
 	UseWireGuard  bool          `json:"use_wireguard,omitempty"`
 	IsActive      bool          `json:"is_active"`
 	Tracks        []StreamTrack `json:"tracks,omitempty"`

@@ -35,6 +35,7 @@ type StreamIndex struct {
 	TMDBManual    bool
 	CacheType     string
 	CacheKey      int
+	Language      string
 	UseWireGuard  bool
 	IsActive      bool
 	Logo          string
@@ -88,6 +89,7 @@ func (s *IndexedStreamStore) indexFromStream(st models.Stream) StreamIndex {
 		TMDBManual:    st.TMDBManual,
 		CacheType:     st.CacheType,
 		CacheKey:      st.CacheKey,
+		Language:      st.Language,
 		UseWireGuard:  st.UseWireGuard,
 		IsActive:      st.IsActive,
 		Logo:          st.Logo,

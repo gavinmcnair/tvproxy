@@ -6250,12 +6250,15 @@
 
         var decades = {};
         var genreCounts = {};
+        var langCounts = {};
         items.forEach(function(item) {
           if (item.year && item.year.length === 4) decades[item.year.substring(0, 3) + '0s'] = true;
           (item.genres || []).forEach(function(g) { genreCounts[g] = (genreCounts[g] || 0) + 1; });
+          if (item.language) langCounts[item.language] = (langCounts[item.language] || 0) + 1;
         });
         var decadeList = Object.keys(decades).sort();
         var genreNames = Object.keys(genreCounts).sort(function(a, b) { return genreCounts[b] - genreCounts[a]; });
+        var langNames = Object.keys(langCounts).sort(function(a, b) { return langCounts[b] - langCounts[a]; });
 
         if (!_favoriteIds) await loadFavorites();
         var mg = pages._mediaGrid({
@@ -6282,11 +6285,14 @@
         });
         var pills = [{ label: '\u2B50 Favorites', key: 'fav:yes', group: 'collection' }];
         var dropdowns = [];
+        if (langNames.length > 1) dropdowns.push({ label: 'Language', options: langNames, keyPrefix: 'lang_', group: 'age' });
         if (decadeList.length > 0) dropdowns.push({ label: 'Decades', options: decadeList, keyPrefix: 'decade_', group: 'decade' });
         if (genreNames.length > 0) dropdowns.push({ label: 'Genres', options: genreNames, keyPrefix: 'genre_', group: 'genre' });
         mg.buildFilterBar(container, pills, dropdowns, displayItems.length);
         mg.buildGrid(container, displayItems, function(di, af) {
           if (af['fav:yes'] && (!_favoriteIds || !_favoriteIds.has(di.item.id))) return false;
+          var activeLangs = []; Object.keys(af).forEach(function(k) { if (k.startsWith('lang_')) activeLangs.push(k.replace('lang_', '')); });
+          if (activeLangs.length > 0 && activeLangs.indexOf(di.item.language || '') === -1) return false;
           var hasDecade = Object.keys(af).some(function(k) { return k.startsWith('decade_'); });
           if (hasDecade) { var ad = {}; Object.keys(af).forEach(function(k) { if (k.startsWith('decade_')) ad[k.replace('decade_', '')] = true; }); if (!di.item.year || !ad[di.item.year.substring(0, 3) + '0s']) return false; }
           var ag = []; Object.keys(af).forEach(function(k) { if (k.startsWith('genre_')) ag.push(k.replace('genre_', '')); });
@@ -6327,10 +6333,15 @@
         var displayItems = seriesList.map(function(show) { return { type: 'series', show: show }; });
 
         var genreCounts = {};
+        var langCounts = {};
         seriesList.forEach(function(show) {
-          show.episodes.forEach(function(ep) { (ep.genres || []).forEach(function(g) { genreCounts[g] = (genreCounts[g] || 0) + 1; }); });
+          show.episodes.forEach(function(ep) {
+            (ep.genres || []).forEach(function(g) { genreCounts[g] = (genreCounts[g] || 0) + 1; });
+            if (ep.language) langCounts[ep.language] = (langCounts[ep.language] || 0) + 1;
+          });
         });
         var genreNames = Object.keys(genreCounts).sort(function(a, b) { return genreCounts[b] - genreCounts[a]; });
+        var langNames = Object.keys(langCounts).sort(function(a, b) { return langCounts[b] - langCounts[a]; });
 
         if (!_favoriteIds) await loadFavorites();
         var mg = pages._mediaGrid({
@@ -6350,10 +6361,13 @@
         });
         var pills = [{ label: '\u2B50 Favorites', key: 'fav:yes', group: 'collection' }];
         var dropdowns = [];
+        if (langNames.length > 1) dropdowns.push({ label: 'Language', options: langNames, keyPrefix: 'lang_', group: 'age' });
         if (genreNames.length > 0) dropdowns.push({ label: 'Genres', options: genreNames, keyPrefix: 'genre_', group: 'genre' });
         mg.buildFilterBar(container, pills, dropdowns, displayItems.length);
         mg.buildGrid(container, displayItems, function(di, af) {
           if (af['fav:yes']) { var anyFav = di.show.episodes.some(function(ep) { return _favoriteIds && _favoriteIds.has(ep.id); }); if (!anyFav) return false; }
+          var activeLangs = []; Object.keys(af).forEach(function(k) { if (k.startsWith('lang_')) activeLangs.push(k.replace('lang_', '')); });
+          if (activeLangs.length > 0) { var showLang = di.show.episodes[0] && di.show.episodes[0].language; if (activeLangs.indexOf(showLang || '') === -1) return false; }
           var ag = []; Object.keys(af).forEach(function(k) { if (k.startsWith('genre_')) ag.push(k.replace('genre_', '')); });
           if (ag.length > 0) { var sg = []; di.show.episodes.forEach(function(ep) { (ep.genres || []).forEach(function(g) { if (sg.indexOf(g) === -1) sg.push(g); }); }); if (!ag.every(function(g) { return sg.indexOf(g) >= 0; })) return false; }
           return true;
