@@ -81,6 +81,8 @@ type Stream struct {
 	VODDuration   float64       `json:"vod_duration,omitempty"`
 	TMDBID        int           `json:"tmdb_id,omitempty"`
 	TMDBManual    bool          `json:"tmdb_manual,omitempty"`
+	CacheType     string        `json:"cache_type,omitempty"`
+	CacheKey      int           `json:"cache_key,omitempty"`
 	UseWireGuard  bool          `json:"use_wireguard,omitempty"`
 	IsActive      bool          `json:"is_active"`
 	Tracks        []StreamTrack `json:"tracks,omitempty"`

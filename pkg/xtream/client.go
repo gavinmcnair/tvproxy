@@ -108,23 +108,76 @@ type VODStream struct {
 	StreamType   string `json:"stream_type"`
 	StreamID     int    `json:"stream_id"`
 	StreamIcon   string `json:"stream_icon"`
+	Rating       string `json:"rating"`
+	IsAdult      string `json:"is_adult"`
 	CategoryID   string `json:"category_id"`
 	CategoryName string `json:"category_name"`
 	ContainerExt string `json:"container_extension"`
 }
 
+type VODInfo struct {
+	Info struct {
+		Name         string `json:"name"`
+		Plot         string `json:"plot"`
+		Cast         string `json:"cast"`
+		Director     string `json:"director"`
+		Genre        string `json:"genre"`
+		ReleaseDate  string `json:"releasedate"`
+		Rating       string `json:"rating"`
+		Duration     string `json:"duration"`
+		DurationSecs int    `json:"duration_secs"`
+		Trailer      string `json:"youtube_trailer"`
+		BackdropPath []string `json:"backdrop_path"`
+		Video        VideoInfo `json:"video"`
+		Audio        AudioInfo `json:"audio"`
+	} `json:"info"`
+	MovieData struct {
+		StreamID     int    `json:"stream_id"`
+		ContainerExt string `json:"container_extension"`
+	} `json:"movie_data"`
+}
+
+type VideoInfo struct {
+	CodecName string `json:"codec_name"`
+	Width     int    `json:"width"`
+	Height    int    `json:"height"`
+	Profile   string `json:"profile"`
+}
+
+type AudioInfo struct {
+	CodecName string `json:"codec_name"`
+	Channels  int    `json:"channels"`
+}
+
 type Series struct {
-	Num          int    `json:"num"`
+	Num           int      `json:"num"`
+	Name          string   `json:"name"`
+	SeriesID      int      `json:"series_id"`
+	Cover         string   `json:"cover"`
+	Plot          string   `json:"plot"`
+	Cast          string   `json:"cast"`
+	Director      string   `json:"director"`
+	Genre         string   `json:"genre"`
+	ReleaseDate   string   `json:"releaseDate"`
+	Rating        string   `json:"rating"`
+	BackdropPath  []string `json:"backdrop_path"`
+	YouTubeTrailer string  `json:"youtube_trailer"`
+	CategoryID    string   `json:"category_id"`
+	CategoryName  string   `json:"category_name"`
+}
+
+type SeasonInfo struct {
+	SeasonNumber int    `json:"season_number"`
 	Name         string `json:"name"`
-	SeriesID     int    `json:"series_id"`
+	AirDate      string `json:"air_date"`
+	EpisodeCount int    `json:"episode_count"`
 	Cover        string `json:"cover"`
-	CategoryID   string `json:"category_id"`
-	CategoryName string `json:"category_name"`
 }
 
 type SeriesInfo struct {
-	Seasons  map[string][]SeriesEpisode `json:"episodes"`
-	Info     SeriesDetail               `json:"info"`
+	Seasons    map[string][]SeriesEpisode `json:"episodes"`
+	RawSeasons []SeasonInfo               `json:"seasons"`
+	Info       SeriesDetail               `json:"info"`
 }
 
 type SeriesDetail struct {
@@ -133,17 +186,21 @@ type SeriesDetail struct {
 }
 
 type SeriesEpisode struct {
-	ID            string `json:"id"`
-	EpisodeNum    int    `json:"episode_num"`
-	Title         string `json:"title"`
-	ContainerExt  string `json:"container_extension"`
-	Info          SeriesEpisodeInfo `json:"info"`
+	ID           string            `json:"id"`
+	EpisodeNum   int               `json:"episode_num"`
+	Title        string            `json:"title"`
+	ContainerExt string            `json:"container_extension"`
+	Info         SeriesEpisodeInfo `json:"info"`
 }
 
 type SeriesEpisodeInfo struct {
-	Duration    string `json:"duration"`
-	MovieImage  string `json:"movie_image"`
-	Season      int    `json:"season"`
+	Duration     string    `json:"duration"`
+	DurationSecs int       `json:"duration_secs"`
+	MovieImage   string    `json:"movie_image"`
+	Season       int       `json:"season"`
+	Plot         string    `json:"plot"`
+	Video        VideoInfo `json:"video"`
+	Audio        AudioInfo `json:"audio"`
 }
 
 func (c *Client) GetVODStreams(ctx context.Context) ([]VODStream, error) {
@@ -169,6 +226,15 @@ func (c *Client) GetSeriesInfo(ctx context.Context, seriesID int) (*SeriesInfo, 
 	var info SeriesInfo
 	if err := c.get(ctx, url, &info); err != nil {
 		return nil, fmt.Errorf("getting series info: %w", err)
+	}
+	return &info, nil
+}
+
+func (c *Client) GetVODInfo(ctx context.Context, streamID int) (*VODInfo, error) {
+	url := fmt.Sprintf("%s/player_api.php?username=%s&password=%s&action=get_vod_info&vod_id=%d", c.baseURL, c.username, c.password, streamID)
+	var info VODInfo
+	if err := c.get(ctx, url, &info); err != nil {
+		return nil, fmt.Errorf("getting vod info: %w", err)
 	}
 	return &info, nil
 }

@@ -27,6 +27,7 @@ type M3UService struct {
 	config          *config.Config
 	configDir       string
 	httpClient      *http.Client
+	xtreamCache     *xtream.Cache
 	log             zerolog.Logger
 	StatusTracker
 }
@@ -58,6 +59,8 @@ func NewM3UService(
 }
 
 func (s *M3UService) Log() *zerolog.Logger { return &s.log }
+
+func (s *M3UService) SetXtreamCache(c *xtream.Cache) { s.xtreamCache = c }
 
 func (s *M3UService) CreateAccount(ctx context.Context, account *models.M3UAccount) error {
 	if err := s.m3uAccountStore.Create(ctx, account); err != nil {
@@ -219,29 +222,75 @@ func (s *M3UService) refreshXtreamAccount(ctx context.Context, account *models.M
 			Logo:         vs.StreamIcon,
 			ContentHash:  hash,
 			VODType:      "movie",
+			CacheType:    "xtream",
+			CacheKey:     vs.StreamID,
 			UseWireGuard: account.UseWireGuard,
 			IsActive:     true,
 		})
+		if s.xtreamCache != nil {
+			s.xtreamCache.SetMovie(vs.StreamID, &xtream.MovieMeta{
+				StreamID:     vs.StreamID,
+				Name:         vs.Name,
+				PosterURL:    vs.StreamIcon,
+				Rating:       vs.Rating,
+				IsAdult:      vs.IsAdult == "1",
+				Container:    vs.ContainerExt,
+				CategoryName: vs.CategoryName,
+			})
+		}
 	}
 
 	s.Set(account.ID, RefreshStatus{State: "running", Message: fmt.Sprintf("Fetching %d series...", len(seriesList))})
-	for _, sr := range seriesList {
+	for idx, sr := range seriesList {
+		if idx%100 == 0 {
+			s.Set(account.ID, RefreshStatus{State: "running", Message: fmt.Sprintf("Series %d/%d...", idx, len(seriesList)), Total: len(seriesList), Progress: idx})
+		}
 		info, err := client.GetSeriesInfo(ctx, sr.SeriesID)
 		if err != nil {
 			continue
 		}
+
+		if s.xtreamCache != nil {
+			sm := &xtream.SeriesMeta{
+				SeriesID:     sr.SeriesID,
+				Name:         sr.Name,
+				Plot:         sr.Plot,
+				Cast:         sr.Cast,
+				Director:     sr.Director,
+				Genre:        sr.Genre,
+				ReleaseDate:  sr.ReleaseDate,
+				Rating:       sr.Rating,
+				PosterURL:    sr.Cover,
+				Trailer:      sr.YouTubeTrailer,
+				CategoryName: sr.CategoryName,
+			}
+			if len(sr.BackdropPath) > 0 {
+				sm.BackdropURL = sr.BackdropPath[0]
+			}
+			if info.Seasons != nil {
+				for _, rawSeason := range info.RawSeasons {
+					sm.Seasons = append(sm.Seasons, xtream.SeasonMeta{
+						SeasonNumber: rawSeason.SeasonNumber,
+						Name:         rawSeason.Name,
+						AirDate:      rawSeason.AirDate,
+						EpisodeCount: rawSeason.EpisodeCount,
+						CoverURL:     rawSeason.Cover,
+					})
+				}
+			}
+			s.xtreamCache.SetSeries(sr.SeriesID, sm)
+		}
+
 		for seasonNum, episodes := range info.Seasons {
 			var season int
 			fmt.Sscanf(seasonNum, "%d", &season)
 			for _, ep := range episodes {
-				streamURL := client.GetSeriesStreamURL(ep.EpisodeNum, ep.ContainerExt)
-				if ep.ID != "" {
-					var epID int
-					fmt.Sscanf(ep.ID, "%d", &epID)
-					if epID > 0 {
-						streamURL = client.GetSeriesStreamURL(epID, ep.ContainerExt)
-					}
+				var epID int
+				fmt.Sscanf(ep.ID, "%d", &epID)
+				if epID == 0 {
+					epID = ep.EpisodeNum
 				}
+				streamURL := client.GetSeriesStreamURL(epID, ep.ContainerExt)
 				hash := computeContentHash(streamURL)
 				if _, dup := seen[hash]; dup {
 					continue
@@ -249,6 +298,16 @@ func (s *M3UService) refreshXtreamAccount(ctx context.Context, account *models.M
 				seen[hash] = struct{}{}
 				id := deterministicStreamID(hash)
 				keepIDs = append(keepIDs, id)
+
+				var durSecs int
+				if ep.Info.DurationSecs > 0 {
+					durSecs = ep.Info.DurationSecs
+				}
+				epSeason := season
+				if ep.Info.Season > 0 {
+					epSeason = ep.Info.Season
+				}
+
 				streams = append(streams, models.Stream{
 					ID:           id,
 					M3UAccountID: account.ID,
@@ -259,16 +318,43 @@ func (s *M3UService) refreshXtreamAccount(ctx context.Context, account *models.M
 					ContentHash:  hash,
 					VODType:      "series",
 					VODSeries:    sr.Name,
-					VODSeason:    season,
+					VODSeason:    epSeason,
 					VODEpisode:   ep.EpisodeNum,
+					VODDuration:  float64(durSecs),
+					CacheType:    "xtream",
+					CacheKey:     epID,
 					UseWireGuard: account.UseWireGuard,
 					IsActive:     true,
 				})
+
+				if s.xtreamCache != nil {
+					em := &xtream.EpisodeMeta{
+						ID:         epID,
+						EpisodeNum: ep.EpisodeNum,
+						Season:     epSeason,
+						Title:      ep.Title,
+						Duration:   durSecs,
+						Container:  ep.ContainerExt,
+						CoverURL:   ep.Info.MovieImage,
+					}
+					if ep.Info.Video.CodecName != "" {
+						em.VideoCodec = ep.Info.Video.CodecName
+						em.Width = ep.Info.Video.Width
+						em.Height = ep.Info.Video.Height
+					}
+					if ep.Info.Audio.CodecName != "" {
+						em.AudioCodec = ep.Info.Audio.CodecName
+					}
+					s.xtreamCache.SetEpisode(epID, em)
+				}
 			}
 		}
 	}
 
 	s.log.Info().Int("total", len(streams)).Msg("xtream refresh complete")
+	if s.xtreamCache != nil {
+		s.xtreamCache.Save()
+	}
 	return s.upsertAndFinalize(ctx, account, streams, keepIDs)
 }
 

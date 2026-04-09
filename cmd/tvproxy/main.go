@@ -27,6 +27,7 @@ import (
 	"github.com/gavinmcnair/tvproxy/pkg/service"
 	"github.com/gavinmcnair/tvproxy/pkg/jellyfin"
 	"github.com/gavinmcnair/tvproxy/pkg/tmdb"
+	"github.com/gavinmcnair/tvproxy/pkg/xtream"
 	"github.com/gavinmcnair/tvproxy/pkg/session"
 	"github.com/gavinmcnair/tvproxy/pkg/store"
 	"github.com/gavinmcnair/tvproxy/pkg/worker"
@@ -196,7 +197,9 @@ func main() {
 	logoCache := logocache.New(filepath.Join(dataDir, "static", "logocache"), cfg, logoTimeout)
 	logoService := service.NewLogoService(logoStore, epgStore, logoCache, log)
 
+	xtreamCache := xtream.NewCache(filepath.Join(dataDir, "cache", "xtream"))
 	m3uService := service.NewM3UService(m3uAccountStore, streamStore, channelStore, logoService, cfg, dataDir, wgHTTPClient, log)
+	m3uService.SetXtreamCache(xtreamCache)
 	m3uService.CleanupOrphanedStreams(ctx)
 	channelService := service.NewChannelService(channelStore, channelGroupStore, streamStore, log)
 	epgService := service.NewEPGService(epgSourceStore, epgStore, cfg, wgHTTPClient, log)
