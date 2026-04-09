@@ -288,6 +288,7 @@ func (s *M3UService) refreshXtreamAccount(ctx context.Context, account *models.M
 	s.log.Info().Int("total", len(streams)).Msg("xtream refresh complete")
 	if s.xtreamCache != nil {
 		s.xtreamCache.Save()
+		go s.syncXtreamSeries(account, seriesList)
 	}
 	return s.upsertAndFinalize(ctx, account, streams, keepIDs)
 }
@@ -412,6 +413,80 @@ func (s *M3UService) upsertAndFinalize(ctx context.Context, account *models.M3UA
 		Msg("account refresh complete")
 
 	return nil
+}
+
+func (s *M3UService) syncXtreamSeries(account *models.M3UAccount, seriesList []xtream.Series) {
+	xtreamTimeout := s.config.Settings.Network.XtreamAPITimeout
+	client := xtream.NewClient(account.URL, account.Username, account.Password, s.config.UserAgent, s.config.BypassHeader, s.config.BypassSecret, xtreamTimeout, s.httpClient.Transport)
+
+	s.log.Info().Int("series", len(seriesList)).Msg("starting background xtream series sync")
+
+	ctx := context.Background()
+	synced := 0
+	for _, sr := range seriesList {
+		if s.xtreamCache.GetSeries(sr.SeriesID) != nil {
+			sm := s.xtreamCache.GetSeries(sr.SeriesID)
+			if len(sm.Seasons) > 0 {
+				synced++
+				continue
+			}
+		}
+
+		info, err := client.GetSeriesInfo(ctx, sr.SeriesID)
+		if err != nil {
+			continue
+		}
+
+		sm := s.xtreamCache.GetSeries(sr.SeriesID)
+		if sm == nil {
+			continue
+		}
+		for _, rawSeason := range info.RawSeasons {
+			sm.Seasons = append(sm.Seasons, xtream.SeasonMeta{
+				SeasonNumber: rawSeason.SeasonNumber,
+				Name:         rawSeason.Name,
+				AirDate:      rawSeason.AirDate,
+				EpisodeCount: rawSeason.EpisodeCount,
+				CoverURL:     rawSeason.Cover,
+			})
+		}
+		s.xtreamCache.SetSeries(sr.SeriesID, sm)
+
+		for seasonNum, episodes := range info.Seasons {
+			var season int
+			fmt.Sscanf(seasonNum, "%d", &season)
+			for _, ep := range episodes {
+				var epID int
+				fmt.Sscanf(ep.ID, "%d", &epID)
+				if epID == 0 {
+					continue
+				}
+				epSeason := season
+				if ep.Info.Season > 0 {
+					epSeason = ep.Info.Season
+				}
+				s.xtreamCache.SetEpisode(epID, &xtream.EpisodeMeta{
+					ID:         epID,
+					EpisodeNum: ep.EpisodeNum,
+					Season:     epSeason,
+					Title:      ep.Title,
+					Duration:   ep.Info.DurationSecs,
+					Container:  ep.ContainerExt,
+					CoverURL:   ep.Info.MovieImage,
+				})
+			}
+		}
+
+		synced++
+		if synced%50 == 0 {
+			s.xtreamCache.Save()
+			s.log.Info().Int("synced", synced).Int("total", len(seriesList)).Msg("xtream series sync progress")
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+
+	s.xtreamCache.Save()
+	s.log.Info().Int("synced", synced).Msg("xtream series sync complete")
 }
 
 func (s *M3UService) CleanupOrphanedStreams(ctx context.Context) {
