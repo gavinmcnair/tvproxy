@@ -114,6 +114,9 @@ func (s *StreamStoreImpl) BulkUpsert(_ context.Context, streams []models.Stream)
 	for _, st := range streams {
 		if existing, exists := s.items[st.ID]; exists {
 			st.CreatedAt = existing.CreatedAt
+			if existing.TMDBID > 0 {
+				st.TMDBID = existing.TMDBID
+			}
 		} else {
 			st.CreatedAt = now
 		}

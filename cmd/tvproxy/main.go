@@ -324,6 +324,9 @@ func main() {
 	}()
 
 	onTMDBResolved := func(streamID string, tmdbID int) {
+		if st, err := streamStore.GetByID(ctx, streamID); err == nil && st != nil && st.TMDBID > 0 {
+			return
+		}
 		if err := streamStore.UpdateTMDBID(ctx, streamID, tmdbID); err != nil {
 			log.Debug().Err(err).Str("stream_id", streamID).Int("tmdb_id", tmdbID).Msg("failed to update stream TMDB ID")
 		}
