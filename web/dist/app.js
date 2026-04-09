@@ -6236,7 +6236,7 @@
       container.innerHTML = '';
       container.appendChild(h('div', { className: 'loading-page' }, h('div', { className: 'spinner' }), 'Loading IPTV movies...'));
       try {
-        var currentLang = '';
+        var currentLang = 'EN';
         async function loadMovies() {
           var url = '/api/vod/library?type=movie&source=xtream';
           if (currentLang) url += '&lang=' + encodeURIComponent(currentLang);
