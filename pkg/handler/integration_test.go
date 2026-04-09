@@ -125,7 +125,7 @@ func setupFullEnv(t *testing.T) *fullTestEnv {
 	authHandler := NewAuthHandler(authService)
 	userHandler := NewUserHandler(authService)
 	m3uAccountHandler := NewM3UAccountHandler(m3uService, dir)
-	streamHandler := NewStreamHandler(streamStore, streamStore, logoService, nil)
+	streamHandler := NewStreamHandler(streamStore, streamStore, logoService, nil, nil)
 	channelHandler := NewChannelHandler(channelService, logoService)
 	channelGroupHandler := NewChannelGroupHandler(channelService)
 	logoHandler := NewLogoHandler(logoService)

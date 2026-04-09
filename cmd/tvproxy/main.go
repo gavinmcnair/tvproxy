@@ -244,7 +244,7 @@ func main() {
 		user:         handler.NewUserHandler(authService),
 		m3uAccount:   handler.NewM3UAccountHandler(m3uService, dataDir),
 		satip:        handler.NewSatIPHandler(satipService),
-		stream:       handler.NewStreamHandler(streamStore, streamStore, logoService, tmdbClient),
+		stream:       handler.NewStreamHandler(streamStore, streamStore, logoService, tmdbClient, xtreamCache),
 		channel:      handler.NewChannelHandler(channelService, logoService),
 		channelGroup: handler.NewChannelGroupHandler(channelService),
 		logo:         handler.NewLogoHandler(logoService),

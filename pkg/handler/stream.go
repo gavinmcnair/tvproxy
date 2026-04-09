@@ -1,7 +1,9 @@
 package handler
 
 import (
+	"fmt"
 	"net/http"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 
@@ -9,17 +11,19 @@ import (
 	"github.com/gavinmcnair/tvproxy/pkg/service"
 	"github.com/gavinmcnair/tvproxy/pkg/store"
 	"github.com/gavinmcnair/tvproxy/pkg/tmdb"
+	"github.com/gavinmcnair/tvproxy/pkg/xtream"
 )
 
 type StreamHandler struct {
-	streamStore store.StreamReader
-	versioned   store.Versioned
-	logoService *service.LogoService
-	tmdb        *tmdb.Client
+	streamStore  store.StreamReader
+	versioned    store.Versioned
+	logoService  *service.LogoService
+	tmdb         *tmdb.Client
+	xtreamCache  *xtream.Cache
 }
 
-func NewStreamHandler(streamStore store.StreamReader, versioned store.Versioned, logoService *service.LogoService, tmdbClient *tmdb.Client) *StreamHandler {
-	return &StreamHandler{streamStore: streamStore, versioned: versioned, logoService: logoService, tmdb: tmdbClient}
+func NewStreamHandler(streamStore store.StreamReader, versioned store.Versioned, logoService *service.LogoService, tmdbClient *tmdb.Client, xtreamCache *xtream.Cache) *StreamHandler {
+	return &StreamHandler{streamStore: streamStore, versioned: versioned, logoService: logoService, tmdb: tmdbClient, xtreamCache: xtreamCache}
 }
 
 func (h *StreamHandler) List(w http.ResponseWriter, r *http.Request) {
@@ -184,7 +188,46 @@ func (h *StreamHandler) VODLibrary(w http.ResponseWriter, r *http.Request) {
 			Duration:   s.VODDuration,
 		}
 
-		if h.tmdb != nil {
+		if s.CacheType == "xtream" && h.xtreamCache != nil {
+			if s.VODType == "movie" {
+				if m := h.xtreamCache.GetMovie(s.CacheKey); m != nil {
+					item.PosterURL = m.PosterURL
+					item.Overview = m.Plot
+					item.Rating = 0
+					if m.Rating != "" && m.Rating != "0" {
+						var r float64
+						fmt.Sscanf(m.Rating, "%f", &r)
+						item.Rating = r
+					}
+					if m.Genre != "" {
+						item.Genres = splitGenres(m.Genre)
+					}
+					if m.ReleaseDate != "" && len(m.ReleaseDate) >= 4 {
+						item.Year = m.ReleaseDate[:4]
+					}
+					if m.BackdropURL != "" {
+						item.CollectionBackdrop = m.BackdropURL
+					}
+				}
+			} else if s.VODType == "series" {
+				if sr := h.xtreamCache.GetSeries(s.CacheKey); sr != nil {
+					item.PosterURL = sr.PosterURL
+					item.Overview = sr.Plot
+					if sr.Genre != "" {
+						item.Genres = splitGenres(sr.Genre)
+					}
+					if sr.ReleaseDate != "" && len(sr.ReleaseDate) >= 4 {
+						item.Year = sr.ReleaseDate[:4]
+					}
+				}
+				if ep := h.xtreamCache.GetEpisode(s.CacheKey); ep != nil {
+					item.EpisodeName = ep.Title
+					if ep.Duration > 0 {
+						item.Duration = float64(ep.Duration)
+					}
+				}
+			}
+		} else if h.tmdb != nil {
 			if s.VODType == "movie" {
 				if m := h.tmdb.LookupMovie(lookupName); m != nil {
 					item.Overview = m.Overview
@@ -234,4 +277,19 @@ func (h *StreamHandler) VODLibrary(w http.ResponseWriter, r *http.Request) {
 		items = []vodItem{}
 	}
 	respondJSON(w, http.StatusOK, items)
+}
+
+func splitGenres(s string) []string {
+	if s == "" {
+		return nil
+	}
+	parts := strings.Split(s, ",")
+	var genres []string
+	for _, p := range parts {
+		g := strings.TrimSpace(p)
+		if g != "" {
+			genres = append(genres, g)
+		}
+	}
+	return genres
 }
