@@ -163,7 +163,7 @@ func (s *Server) itemDetail(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) findSeriesItem(ctx context.Context, seriesID string) (BaseItemDto, bool) {
-	streams, _ := s.streams.List(ctx)
+	streams, _ := s.streams.ListByVODType(ctx, "series")
 	for _, st := range streams {
 		if st.VODType != "series" {
 			continue
@@ -254,7 +254,7 @@ func (s *Server) resolveSeriesID(r *http.Request) string {
 
 func (s *Server) listSeasons(w http.ResponseWriter, r *http.Request) {
 	targetID := s.resolveSeriesID(r)
-	streams, _ := s.streams.List(r.Context())
+	streams, _ := s.streams.ListByVODType(r.Context(), "series")
 
 	seasonSet := make(map[int]bool)
 	seasonEpCount := make(map[int]int)
@@ -327,7 +327,7 @@ func (s *Server) listEpisodes(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	streams, _ := s.streams.List(r.Context())
+	streams, _ := s.streams.ListByVODType(r.Context(), "series")
 	seen := make(map[string]bool)
 	var items []BaseItemDto
 
@@ -385,7 +385,7 @@ func (s *Server) listEpisodes(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) listFilters(w http.ResponseWriter, r *http.Request) {
-	streams, _ := s.streams.List(r.Context())
+	streams, _ := s.streams.ListByVODType(r.Context(), "movie")
 
 	genreSet := make(map[string]bool)
 	yearSet := make(map[int]bool)
@@ -489,7 +489,7 @@ func (s *Server) listSimilarItems(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) buildMovieItems(ctx context.Context, searchTerm, genres string) []BaseItemDto {
-	streams, err := s.streams.List(ctx)
+	streams, err := s.streams.ListByVODType(ctx, "movie")
 	if err != nil {
 		return nil
 	}
@@ -520,7 +520,7 @@ func (s *Server) buildMovieItems(ctx context.Context, searchTerm, genres string)
 }
 
 func (s *Server) buildSeriesItems(ctx context.Context, searchTerm, genres string) []BaseItemDto {
-	streams, err := s.streams.List(ctx)
+	streams, err := s.streams.ListByVODType(ctx, "series")
 	if err != nil {
 		return nil
 	}

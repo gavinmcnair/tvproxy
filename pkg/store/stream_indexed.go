@@ -247,6 +247,30 @@ func (s *IndexedStreamStore) ListBySatIPSourceID(_ context.Context, sourceID str
 	return items, nil
 }
 
+func (s *IndexedStreamStore) ListByVODType(_ context.Context, vodType string) ([]models.Stream, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	var matching []StreamIndex
+	for _, idx := range s.index {
+		if idx.VODType == vodType {
+			matching = append(matching, idx)
+		}
+	}
+
+	sort.Slice(matching, func(i, j int) bool {
+		return matching[i].Name < matching[j].Name
+	})
+
+	var items []models.Stream
+	for _, idx := range matching {
+		if st, err := s.readStream(idx); err == nil {
+			items = append(items, *st)
+		}
+	}
+	return items, nil
+}
+
 func (s *IndexedStreamStore) GetByID(_ context.Context, id string) (*models.Stream, error) {
 	s.mu.RLock()
 	idx, exists := s.index[id]

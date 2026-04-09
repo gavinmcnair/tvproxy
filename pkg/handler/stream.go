@@ -5,6 +5,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/gavinmcnair/tvproxy/pkg/models"
 	"github.com/gavinmcnair/tvproxy/pkg/service"
 	"github.com/gavinmcnair/tvproxy/pkg/store"
 	"github.com/gavinmcnair/tvproxy/pkg/tmdb"
@@ -85,14 +86,20 @@ func (h *StreamHandler) Delete(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *StreamHandler) VODLibrary(w http.ResponseWriter, r *http.Request) {
-	streams, err := h.streamStore.List(r.Context())
+	vodType := r.URL.Query().Get("type")
+	series := r.URL.Query().Get("series")
+
+	var streams []models.Stream
+	var err error
+	if vodType != "" {
+		streams, err = h.streamStore.ListByVODType(r.Context(), vodType)
+	} else {
+		streams, err = h.streamStore.List(r.Context())
+	}
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, "failed to list streams")
 		return
 	}
-
-	vodType := r.URL.Query().Get("type")
-	series := r.URL.Query().Get("series")
 
 	type vodItem struct {
 		ID                 string   `json:"id"`

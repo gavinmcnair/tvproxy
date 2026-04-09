@@ -17,6 +17,7 @@ type StreamReader interface {
 	ListSummaries(ctx context.Context) ([]models.StreamSummary, error)
 	ListByAccountID(ctx context.Context, accountID string) ([]models.Stream, error)
 	ListBySatIPSourceID(ctx context.Context, sourceID string) ([]models.Stream, error)
+	ListByVODType(ctx context.Context, vodType string) ([]models.Stream, error)
 	GetByID(ctx context.Context, id string) (*models.Stream, error)
 }
 

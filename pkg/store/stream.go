@@ -96,6 +96,21 @@ func (s *StreamStoreImpl) ListByAccountID(_ context.Context, accountID string) (
 	return items, nil
 }
 
+func (s *StreamStoreImpl) ListByVODType(_ context.Context, vodType string) ([]models.Stream, error) {
+	s.mu.RLock()
+	var items []models.Stream
+	for _, v := range s.items {
+		if v.VODType == vodType {
+			items = append(items, v)
+		}
+	}
+	s.mu.RUnlock()
+	sort.Slice(items, func(i, j int) bool {
+		return items[i].Name < items[j].Name
+	})
+	return items, nil
+}
+
 func (s *StreamStoreImpl) GetByID(_ context.Context, id string) (*models.Stream, error) {
 	s.mu.RLock()
 	st, ok := s.items[id]

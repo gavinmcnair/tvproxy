@@ -127,7 +127,7 @@ func (h *TMDBHandler) updateRelatedStreams(ctx context.Context, sourceStreamID s
 		return
 	}
 
-	streams, err := h.streamStore.List(ctx)
+	streams, err := h.streamStore.ListByVODType(ctx, "series")
 	if err != nil {
 		return
 	}
