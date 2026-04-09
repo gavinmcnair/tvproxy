@@ -762,6 +762,8 @@
     { id: 'channels', label: 'Channels', icon: '\ud83d\udcfa', tip: 'Define your custom channels and assign streams and EPG data' },
     { id: 'movies', label: 'Movies', icon: '\uD83C\uDFAC', tip: 'Browse movie library' },
     { id: 'tv-series', label: 'TV Series', icon: '\uD83D\uDCFA', tip: 'Browse TV series library' },
+    { id: 'iptv-movies', label: 'IPTV Movies', icon: '\uD83C\uDF1F', tip: 'Browse IPTV movie library' },
+    { id: 'iptv-series', label: 'IPTV Series', icon: '\uD83D\uDCE1', tip: 'Browse IPTV TV series' },
     { id: 'epg-guide', label: 'EPG Guide', icon: '\ud83d\udcf0', tip: 'TV programme guide grid for your channels' },
     { id: 'recordings', label: 'Recordings', icon: '\ud83d\udd34', tip: 'View active and completed recordings', iconStyle: 'font-size:0.75em' },
     { id: 'favorites', label: 'Favorites', icon: '\u2B50', tip: 'Your favorite channels and streams' },
@@ -5732,7 +5734,7 @@
       container.appendChild(h('div', { className: 'loading-page' }, h('div', { className: 'spinner' }), 'Loading movies...'));
 
       try {
-        var items = await api.get('/api/vod/library?type=movie');
+        var items = await api.get('/api/vod/library?type=movie&source=local');
         container.innerHTML = '';
 
         if (items.length === 0) {
@@ -6003,7 +6005,7 @@
       container.appendChild(h('div', { className: 'loading-page' }, h('div', { className: 'spinner' }), 'Loading TV series...'));
 
       try {
-        var items = await api.get('/api/vod/library?type=series');
+        var items = await api.get('/api/vod/library?type=series&source=local');
         container.innerHTML = '';
 
         if (items.length === 0) {
@@ -6222,6 +6224,136 @@
             shows.forEach(function(s) { s.episodes.forEach(function(ep) { (ep.genres || []).forEach(function(g) { if (allGenres.indexOf(g) === -1) allGenres.push(g); }); }); });
             if (!ag.every(function(g) { return allGenres.indexOf(g) >= 0; })) return false;
           }
+          return true;
+        });
+      } catch(err) {
+        container.innerHTML = '';
+        container.appendChild(h('p', { style: 'color:var(--danger)' }, 'Failed to load: ' + err.message));
+      }
+    },
+
+    'iptv-movies': async function(container) {
+      container.innerHTML = '';
+      container.appendChild(h('div', { className: 'loading-page' }, h('div', { className: 'spinner' }), 'Loading IPTV movies...'));
+      try {
+        var items = await api.get('/api/vod/library?type=movie&source=xtream');
+        container.innerHTML = '';
+        if (items.length === 0) {
+          container.appendChild(h('div', { style: 'text-align:center;padding:48px;color:var(--text-muted)' },
+            h('div', { style: 'font-size:3em;margin-bottom:12px;opacity:0.4' }, '\uD83C\uDF1F'),
+            h('p', { style: 'font-size:1.1em' }, 'No IPTV movies found. Add an Xtream Codes source and refresh.')
+          ));
+          return;
+        }
+        var displayItems = items.map(function(item) { return { type: 'movie', item: item }; });
+        displayItems.sort(function(a, b) { return a.item.name.localeCompare(b.item.name); });
+
+        var decades = {};
+        var genreCounts = {};
+        items.forEach(function(item) {
+          if (item.year && item.year.length === 4) decades[item.year.substring(0, 3) + '0s'] = true;
+          (item.genres || []).forEach(function(g) { genreCounts[g] = (genreCounts[g] || 0) + 1; });
+        });
+        var decadeList = Object.keys(decades).sort();
+        var genreNames = Object.keys(genreCounts).sort(function(a, b) { return genreCounts[b] - genreCounts[a]; });
+
+        if (!_favoriteIds) await loadFavorites();
+        var mg = pages._mediaGrid({
+          title: 'IPTV Movies',
+          getName: function(di) { return di.item.name; },
+          getPoster: function(di) { return di.item.poster_url || ''; },
+          getBadges: function(di) {
+            var b = []; var item = di.item;
+            if (item.year) b.push(item.year);
+            if (item.rating > 0) b.push('\u2605 ' + item.rating.toFixed(1));
+            if (item.duration > 0) { var hrs = Math.floor(item.duration / 3600); var mins = Math.floor((item.duration % 3600) / 60); b.push(hrs > 0 ? hrs + 'h ' + mins + 'm' : mins + 'm'); }
+            return b;
+          },
+          getGenres: function(di) { return di.item.genres; },
+          onCardClick: function(di) {
+            showProgrammeModal({
+              title: di.item.name, mediaType: 'movie',
+              description: di.item.overview || '', year: di.item.year,
+              rating: di.item.rating, genres: di.item.genres,
+              channelName: '', channelID: null, tvgId: null,
+              isLive: false, isFuture: false, vodStreamURL: di.item.url, vodStreamID: di.item.id,
+            });
+          },
+        });
+        var pills = [{ label: '\u2B50 Favorites', key: 'fav:yes', group: 'collection' }];
+        var dropdowns = [];
+        if (decadeList.length > 0) dropdowns.push({ label: 'Decades', options: decadeList, keyPrefix: 'decade_', group: 'decade' });
+        if (genreNames.length > 0) dropdowns.push({ label: 'Genres', options: genreNames, keyPrefix: 'genre_', group: 'genre' });
+        mg.buildFilterBar(container, pills, dropdowns, displayItems.length);
+        mg.buildGrid(container, displayItems, function(di, af) {
+          if (af['fav:yes'] && (!_favoriteIds || !_favoriteIds.has(di.item.id))) return false;
+          var hasDecade = Object.keys(af).some(function(k) { return k.startsWith('decade_'); });
+          if (hasDecade) { var ad = {}; Object.keys(af).forEach(function(k) { if (k.startsWith('decade_')) ad[k.replace('decade_', '')] = true; }); if (!di.item.year || !ad[di.item.year.substring(0, 3) + '0s']) return false; }
+          var ag = []; Object.keys(af).forEach(function(k) { if (k.startsWith('genre_')) ag.push(k.replace('genre_', '')); });
+          if (ag.length > 0 && !ag.every(function(g) { return (di.item.genres || []).indexOf(g) >= 0; })) return false;
+          return true;
+        });
+      } catch(err) {
+        container.innerHTML = '';
+        container.appendChild(h('p', { style: 'color:var(--danger)' }, 'Failed to load: ' + err.message));
+      }
+    },
+
+    'iptv-series': async function(container) {
+      container.innerHTML = '';
+      container.appendChild(h('div', { className: 'loading-page' }, h('div', { className: 'spinner' }), 'Loading IPTV series...'));
+      try {
+        var items = await api.get('/api/vod/library?type=series&source=xtream');
+        container.innerHTML = '';
+        if (items.length === 0) {
+          container.appendChild(h('div', { style: 'text-align:center;padding:48px;color:var(--text-muted)' },
+            h('div', { style: 'font-size:3em;margin-bottom:12px;opacity:0.4' }, '\uD83D\uDCE1'),
+            h('p', { style: 'font-size:1.1em' }, 'No IPTV series found. Add an Xtream Codes source and refresh.')
+          ));
+          return;
+        }
+        var seriesMap = {};
+        items.forEach(function(item) {
+          var key = item.series || item.name;
+          if (!seriesMap[key]) seriesMap[key] = { name: key, seasons: {}, episodes: [] };
+          seriesMap[key].episodes.push(item);
+          var seasonKey = item.vod_season_name || (item.season > 0 ? item.season : null);
+          if (seasonKey !== null) {
+            if (!seriesMap[key].seasons[seasonKey]) seriesMap[key].seasons[seasonKey] = [];
+            seriesMap[key].seasons[seasonKey].push(item);
+          }
+        });
+        var seriesList = Object.values(seriesMap).sort(function(a, b) { return a.name.localeCompare(b.name); });
+        var displayItems = seriesList.map(function(show) { return { type: 'series', show: show }; });
+
+        var genreCounts = {};
+        seriesList.forEach(function(show) {
+          show.episodes.forEach(function(ep) { (ep.genres || []).forEach(function(g) { genreCounts[g] = (genreCounts[g] || 0) + 1; }); });
+        });
+        var genreNames = Object.keys(genreCounts).sort(function(a, b) { return genreCounts[b] - genreCounts[a]; });
+
+        if (!_favoriteIds) await loadFavorites();
+        var mg = pages._mediaGrid({
+          title: 'IPTV Series',
+          getName: function(di) { return di.show.name; },
+          getPoster: function(di) { var p = ''; di.show.episodes.some(function(ep) { if (ep.poster_url) { p = ep.poster_url; return true; } return false; }); return p; },
+          getBadges: function(di) {
+            var b = []; var sc = Object.keys(di.show.seasons).length; var ec = di.show.episodes.length;
+            if (sc > 0) b.push(sc + ' season' + (sc > 1 ? 's' : ''));
+            b.push(ec + ' episode' + (ec > 1 ? 's' : ''));
+            return b;
+          },
+          getGenres: function(di) { var g = []; di.show.episodes.forEach(function(ep) { (ep.genres || []).forEach(function(genre) { if (g.indexOf(genre) === -1) g.push(genre); }); }); return g; },
+          onCardClick: function(di) { showSeriesDetail(di.show); },
+        });
+        var pills = [{ label: '\u2B50 Favorites', key: 'fav:yes', group: 'collection' }];
+        var dropdowns = [];
+        if (genreNames.length > 0) dropdowns.push({ label: 'Genres', options: genreNames, keyPrefix: 'genre_', group: 'genre' });
+        mg.buildFilterBar(container, pills, dropdowns, displayItems.length);
+        mg.buildGrid(container, displayItems, function(di, af) {
+          if (af['fav:yes']) { var anyFav = di.show.episodes.some(function(ep) { return _favoriteIds && _favoriteIds.has(ep.id); }); if (!anyFav) return false; }
+          var ag = []; Object.keys(af).forEach(function(k) { if (k.startsWith('genre_')) ag.push(k.replace('genre_', '')); });
+          if (ag.length > 0) { var sg = []; di.show.episodes.forEach(function(ep) { (ep.genres || []).forEach(function(g) { if (sg.indexOf(g) === -1) sg.push(g); }); }); if (!ag.every(function(g) { return sg.indexOf(g) >= 0; })) return false; }
           return true;
         });
       } catch(err) {
