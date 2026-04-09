@@ -1,7 +1,9 @@
 package store
 
 import (
+	"bytes"
 	"context"
+	"encoding/binary"
 	"encoding/gob"
 	"encoding/json"
 	"fmt"
@@ -17,25 +19,28 @@ import (
 )
 
 type StreamIndex struct {
-	ID            string `json:"id"`
-	Name          string `json:"name"`
-	Group         string `json:"group"`
-	M3UAccountID  string `json:"m3u_account_id"`
-	SatIPSourceID string `json:"satip_source_id,omitempty"`
-	VODType       string `json:"vod_type,omitempty"`
-	VODSeries     string `json:"vod_series,omitempty"`
-	VODCollection string `json:"vod_collection,omitempty"`
-	VODSeason     int    `json:"vod_season,omitempty"`
-	VODSeasonName string `json:"vod_season_name,omitempty"`
-	VODEpisode    int    `json:"vod_episode,omitempty"`
-	VODYear       int    `json:"vod_year,omitempty"`
-	TMDBID        int    `json:"tmdb_id,omitempty"`
-	TMDBManual    bool   `json:"tmdb_manual,omitempty"`
-	UseWireGuard  bool   `json:"use_wireguard,omitempty"`
-	IsActive      bool   `json:"is_active"`
-	Logo          string `json:"logo,omitempty"`
+	ID            string
+	Name          string
+	Group         string
+	M3UAccountID  string
+	SatIPSourceID string
+	VODType       string
+	VODSeries     string
+	VODCollection string
+	VODSeason     int
+	VODSeasonName string
+	VODEpisode    int
+	VODYear       int
+	TMDBID        int
+	TMDBManual    bool
+	UseWireGuard  bool
+	IsActive      bool
+	Logo          string
 	CreatedAt     time.Time
 	UpdatedAt     time.Time
+
+	offset int64
+	length int
 }
 
 type IndexedStreamStore struct {
@@ -43,20 +48,20 @@ type IndexedStreamStore struct {
 	index map[string]StreamIndex
 	rev   *Revision
 
-	dataDir  string
+	dataDir    string
 	legacyPath string
-	log      zerolog.Logger
+	dataFile   []byte
+	log        zerolog.Logger
 }
 
 func NewIndexedStreamStore(dataDir string, legacyGobPath string, log zerolog.Logger) *IndexedStreamStore {
-	s := &IndexedStreamStore{
+	return &IndexedStreamStore{
 		index:      make(map[string]StreamIndex),
 		rev:        NewRevision(),
 		dataDir:    dataDir,
 		legacyPath: legacyGobPath,
 		log:        log.With().Str("store", "stream_indexed").Logger(),
 	}
-	return s
 }
 
 func (s *IndexedStreamStore) ETag() string {
@@ -105,59 +110,74 @@ func (s *IndexedStreamStore) summaryFromIndex(idx StreamIndex) models.StreamSumm
 	}
 }
 
-func (s *IndexedStreamStore) streamPath(id string) string {
-	return filepath.Join(s.dataDir, "streams", id+".json")
+func (s *IndexedStreamStore) dataPath() string {
+	return filepath.Join(s.dataDir, "streams.dat")
 }
 
-func (s *IndexedStreamStore) indexPath() string {
-	return filepath.Join(s.dataDir, "stream_index.json")
-}
-
-func (s *IndexedStreamStore) readStream(id string) (*models.Stream, error) {
-	data, err := os.ReadFile(s.streamPath(id))
-	if err != nil {
-		return nil, err
+func (s *IndexedStreamStore) readStream(idx StreamIndex) (*models.Stream, error) {
+	if idx.offset < 0 || idx.length == 0 || int64(len(s.dataFile)) < idx.offset+int64(idx.length) {
+		return nil, fmt.Errorf("invalid offset for %s", idx.ID)
 	}
 	var st models.Stream
-	if err := json.Unmarshal(data, &st); err != nil {
+	if err := json.Unmarshal(s.dataFile[idx.offset:idx.offset+int64(idx.length)], &st); err != nil {
 		return nil, err
 	}
 	return &st, nil
 }
 
-func (s *IndexedStreamStore) writeStream(st models.Stream) error {
-	dir := filepath.Join(s.dataDir, "streams")
-	os.MkdirAll(dir, 0755)
-	data, err := json.Marshal(st)
-	if err != nil {
-		return err
+func (s *IndexedStreamStore) rebuildDataFile() {
+	var buf bytes.Buffer
+	for id, idx := range s.index {
+		st, err := s.readStream(idx)
+		if err != nil {
+			continue
+		}
+		data, _ := json.Marshal(st)
+		offset := int64(buf.Len()) + 4
+		binary.Write(&buf, binary.LittleEndian, int32(len(data)))
+		buf.Write(data)
+		idx.offset = offset
+		idx.length = len(data)
+		s.index[id] = idx
 	}
-	return os.WriteFile(s.streamPath(st.ID), data, 0644)
+	s.dataFile = buf.Bytes()
 }
 
-func (s *IndexedStreamStore) deleteStreamFile(id string) {
-	os.Remove(s.streamPath(id))
+func (s *IndexedStreamStore) appendStream(st models.Stream) StreamIndex {
+	data, _ := json.Marshal(st)
+
+	var lenBuf [4]byte
+	binary.LittleEndian.PutUint32(lenBuf[:], uint32(len(data)))
+
+	offset := int64(len(s.dataFile)) + 4
+	s.dataFile = append(s.dataFile, lenBuf[:]...)
+	s.dataFile = append(s.dataFile, data...)
+
+	idx := s.indexFromStream(st)
+	idx.offset = offset
+	idx.length = len(data)
+	return idx
 }
 
 func (s *IndexedStreamStore) List(_ context.Context) ([]models.Stream, error) {
 	s.mu.RLock()
-	ids := make([]StreamIndex, 0, len(s.index))
+	indices := make([]StreamIndex, 0, len(s.index))
 	for _, idx := range s.index {
-		ids = append(ids, idx)
+		indices = append(indices, idx)
 	}
 	s.mu.RUnlock()
 
-	sort.Slice(ids, func(i, j int) bool {
-		return ids[i].CreatedAt.Before(ids[j].CreatedAt)
+	sort.Slice(indices, func(i, j int) bool {
+		return indices[i].CreatedAt.Before(indices[j].CreatedAt)
 	})
 
-	items := make([]models.Stream, 0, len(ids))
-	for _, idx := range ids {
-		st, err := s.readStream(idx.ID)
-		if err != nil {
-			continue
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	items := make([]models.Stream, 0, len(indices))
+	for _, idx := range indices {
+		if st, err := s.readStream(idx); err == nil {
+			items = append(items, *st)
 		}
-		items = append(items, *st)
 	}
 	return items, nil
 }
@@ -189,7 +209,6 @@ func (s *IndexedStreamStore) ListByAccountID(_ context.Context, accountID string
 			matching = append(matching, idx)
 		}
 	}
-	s.mu.RUnlock()
 
 	sort.Slice(matching, func(i, j int) bool {
 		return matching[i].CreatedAt.Before(matching[j].CreatedAt)
@@ -197,10 +216,11 @@ func (s *IndexedStreamStore) ListByAccountID(_ context.Context, accountID string
 
 	var items []models.Stream
 	for _, idx := range matching {
-		if st, err := s.readStream(idx.ID); err == nil {
+		if st, err := s.readStream(idx); err == nil {
 			items = append(items, *st)
 		}
 	}
+	s.mu.RUnlock()
 	return items, nil
 }
 
@@ -212,7 +232,6 @@ func (s *IndexedStreamStore) ListBySatIPSourceID(_ context.Context, sourceID str
 			matching = append(matching, idx)
 		}
 	}
-	s.mu.RUnlock()
 
 	sort.Slice(matching, func(i, j int) bool {
 		return matching[i].CreatedAt.Before(matching[j].CreatedAt)
@@ -220,21 +239,23 @@ func (s *IndexedStreamStore) ListBySatIPSourceID(_ context.Context, sourceID str
 
 	var items []models.Stream
 	for _, idx := range matching {
-		if st, err := s.readStream(idx.ID); err == nil {
+		if st, err := s.readStream(idx); err == nil {
 			items = append(items, *st)
 		}
 	}
+	s.mu.RUnlock()
 	return items, nil
 }
 
 func (s *IndexedStreamStore) GetByID(_ context.Context, id string) (*models.Stream, error) {
 	s.mu.RLock()
-	_, exists := s.index[id]
-	s.mu.RUnlock()
+	idx, exists := s.index[id]
 	if !exists {
+		s.mu.RUnlock()
 		return nil, fmt.Errorf("stream not found: %s", id)
 	}
-	st, err := s.readStream(id)
+	st, err := s.readStream(idx)
+	s.mu.RUnlock()
 	if err != nil {
 		return nil, fmt.Errorf("stream not found: %s", id)
 	}
@@ -257,8 +278,7 @@ func (s *IndexedStreamStore) BulkUpsert(_ context.Context, streams []models.Stre
 			st.CreatedAt = now
 		}
 		st.UpdatedAt = now
-		s.index[st.ID] = s.indexFromStream(st)
-		s.writeStream(st)
+		s.index[st.ID] = s.appendStream(st)
 	}
 	s.rev.Bump()
 	return nil
@@ -280,7 +300,6 @@ func (s *IndexedStreamStore) DeleteStaleByAccountID(_ context.Context, accountID
 		}
 		if _, shouldKeep := keep[id]; !shouldKeep {
 			delete(s.index, id)
-			s.deleteStreamFile(id)
 			deleted = append(deleted, id)
 		}
 	}
@@ -293,11 +312,9 @@ func (s *IndexedStreamStore) DeleteStaleByAccountID(_ context.Context, accountID
 func (s *IndexedStreamStore) DeleteByAccountID(_ context.Context, accountID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-
 	for id, idx := range s.index {
 		if idx.M3UAccountID == accountID {
 			delete(s.index, id)
-			s.deleteStreamFile(id)
 		}
 	}
 	s.rev.Bump()
@@ -320,7 +337,6 @@ func (s *IndexedStreamStore) DeleteStaleBySatIPSourceID(_ context.Context, sourc
 		}
 		if _, shouldKeep := keep[id]; !shouldKeep {
 			delete(s.index, id)
-			s.deleteStreamFile(id)
 			deleted = append(deleted, id)
 		}
 	}
@@ -336,7 +352,6 @@ func (s *IndexedStreamStore) DeleteBySatIPSourceID(_ context.Context, sourceID s
 	for id, idx := range s.index {
 		if idx.SatIPSourceID == sourceID {
 			delete(s.index, id)
-			s.deleteStreamFile(id)
 		}
 	}
 	s.rev.Bump()
@@ -359,7 +374,6 @@ func (s *IndexedStreamStore) DeleteOrphanedM3UStreams(_ context.Context, knownAc
 		}
 		if _, ok := known[idx.M3UAccountID]; !ok {
 			delete(s.index, id)
-			s.deleteStreamFile(id)
 			deleted = append(deleted, id)
 		}
 	}
@@ -385,7 +399,6 @@ func (s *IndexedStreamStore) DeleteOrphanedSatIPStreams(_ context.Context, known
 		}
 		if _, ok := known[idx.SatIPSourceID]; !ok {
 			delete(s.index, id)
-			s.deleteStreamFile(id)
 			deleted = append(deleted, id)
 		}
 	}
@@ -398,9 +411,23 @@ func (s *IndexedStreamStore) DeleteOrphanedSatIPStreams(_ context.Context, known
 func (s *IndexedStreamStore) Delete(_ context.Context, id string) error {
 	s.mu.Lock()
 	delete(s.index, id)
-	s.deleteStreamFile(id)
 	s.rev.Bump()
 	s.mu.Unlock()
+	return nil
+}
+
+func (s *IndexedStreamStore) updateStreamField(id string, fn func(*models.Stream)) error {
+	idx, ok := s.index[id]
+	if !ok {
+		return fmt.Errorf("stream not found: %s", id)
+	}
+	st, err := s.readStream(idx)
+	if err != nil {
+		return err
+	}
+	fn(st)
+	st.UpdatedAt = time.Now()
+	s.index[id] = s.appendStream(*st)
 	return nil
 }
 
@@ -414,12 +441,7 @@ func (s *IndexedStreamStore) UpdateTMDBID(_ context.Context, id string, tmdbID i
 	idx.TMDBID = tmdbID
 	idx.UpdatedAt = time.Now()
 	s.index[id] = idx
-
-	if st, err := s.readStream(id); err == nil {
-		st.TMDBID = tmdbID
-		st.UpdatedAt = idx.UpdatedAt
-		s.writeStream(*st)
-	}
+	s.updateStreamField(id, func(st *models.Stream) { st.TMDBID = tmdbID })
 	return nil
 }
 
@@ -434,13 +456,7 @@ func (s *IndexedStreamStore) SetTMDBManual(_ context.Context, id string, tmdbID 
 	idx.TMDBManual = true
 	idx.UpdatedAt = time.Now()
 	s.index[id] = idx
-
-	if st, err := s.readStream(id); err == nil {
-		st.TMDBID = tmdbID
-		st.TMDBManual = true
-		st.UpdatedAt = idx.UpdatedAt
-		s.writeStream(*st)
-	}
+	s.updateStreamField(id, func(st *models.Stream) { st.TMDBID = tmdbID; st.TMDBManual = true })
 	return nil
 }
 
@@ -451,11 +467,7 @@ func (s *IndexedStreamStore) ClearAutoTMDBByAccountID(_ context.Context, account
 		if idx.M3UAccountID == accountID && idx.TMDBID > 0 && !idx.TMDBManual {
 			idx.TMDBID = 0
 			s.index[id] = idx
-
-			if st, err := s.readStream(id); err == nil {
-				st.TMDBID = 0
-				s.writeStream(*st)
-			}
+			s.updateStreamField(id, func(st *models.Stream) { st.TMDBID = 0 })
 		}
 	}
 	return nil
@@ -468,11 +480,7 @@ func (s *IndexedStreamStore) UpdateWireGuardByAccountID(_ context.Context, accou
 		if idx.M3UAccountID == accountID {
 			idx.UseWireGuard = useWireGuard
 			s.index[id] = idx
-
-			if st, err := s.readStream(id); err == nil {
-				st.UseWireGuard = useWireGuard
-				s.writeStream(*st)
-			}
+			s.updateStreamField(id, func(st *models.Stream) { st.UseWireGuard = useWireGuard })
 		}
 	}
 	return nil
@@ -480,43 +488,62 @@ func (s *IndexedStreamStore) UpdateWireGuardByAccountID(_ context.Context, accou
 
 func (s *IndexedStreamStore) Clear() error {
 	s.mu.Lock()
-	for id := range s.index {
-		s.deleteStreamFile(id)
-	}
 	s.index = make(map[string]StreamIndex)
+	s.dataFile = nil
 	s.rev.Bump()
 	s.mu.Unlock()
 	return nil
 }
 
 func (s *IndexedStreamStore) Save() error {
-	s.mu.RLock()
-	indexCopy := make(map[string]StreamIndex, len(s.index))
-	for k, v := range s.index {
-		indexCopy[k] = v
-	}
-	s.mu.RUnlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
 
-	data, err := json.MarshalIndent(indexCopy, "", "  ")
-	if err != nil {
+	var buf bytes.Buffer
+	for id, idx := range s.index {
+		st, err := s.readStream(idx)
+		if err != nil {
+			continue
+		}
+		data, _ := json.Marshal(st)
+		newOffset := int64(buf.Len()) + 4
+		binary.Write(&buf, binary.LittleEndian, int32(len(data)))
+		buf.Write(data)
+		idx.offset = newOffset
+		idx.length = len(data)
+		s.index[id] = idx
+	}
+	s.dataFile = buf.Bytes()
+
+	os.MkdirAll(s.dataDir, 0755)
+	tmp := s.dataPath() + ".tmp"
+	if err := os.WriteFile(tmp, s.dataFile, 0644); err != nil {
 		return err
 	}
-	tmp := s.indexPath() + ".tmp"
-	if err := os.MkdirAll(filepath.Dir(s.indexPath()), 0755); err != nil {
-		return err
-	}
-	if err := os.WriteFile(tmp, data, 0644); err != nil {
-		return err
-	}
-	return os.Rename(tmp, s.indexPath())
+	return os.Rename(tmp, s.dataPath())
 }
 
 func (s *IndexedStreamStore) Load() error {
-	if data, err := os.ReadFile(s.indexPath()); err == nil {
+	data, err := os.ReadFile(s.dataPath())
+	if err == nil {
 		s.mu.Lock()
-		json.Unmarshal(data, &s.index)
-		if s.index == nil {
-			s.index = make(map[string]StreamIndex)
+		s.dataFile = data
+		s.index = make(map[string]StreamIndex)
+		offset := int64(0)
+		for offset+4 <= int64(len(data)) {
+			length := int(binary.LittleEndian.Uint32(data[offset : offset+4]))
+			recStart := offset + 4
+			if recStart+int64(length) > int64(len(data)) {
+				break
+			}
+			var st models.Stream
+			if err := json.Unmarshal(data[recStart:recStart+int64(length)], &st); err == nil {
+				idx := s.indexFromStream(st)
+				idx.offset = recStart
+				idx.length = length
+				s.index[st.ID] = idx
+			}
+			offset = recStart + int64(length)
 		}
 		s.mu.Unlock()
 		s.log.Info().Int("count", len(s.index)).Msg("loaded stream index")
@@ -540,9 +567,9 @@ func (s *IndexedStreamStore) Load() error {
 
 	s.mu.Lock()
 	s.index = make(map[string]StreamIndex, len(legacy))
+	s.dataFile = nil
 	for _, st := range legacy {
-		s.index[st.ID] = s.indexFromStream(st)
-		s.writeStream(st)
+		s.index[st.ID] = s.appendStream(st)
 	}
 	s.mu.Unlock()
 
