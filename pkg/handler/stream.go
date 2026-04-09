@@ -169,6 +169,9 @@ func (h *StreamHandler) VODLibrary(w http.ResponseWriter, r *http.Request) {
 		if vodType != "" && s.VODType != vodType {
 			continue
 		}
+		if s.VODType == "series" && s.VODSeason == 0 && s.VODEpisode == 0 {
+			continue
+		}
 		if series != "" && s.VODSeries != series {
 			continue
 		}

@@ -6442,6 +6442,8 @@
               if (ep0 && ep0.year) b.push(ep0.year);
               if (ep0 && ep0.rating > 0) b.push('\u2605 ' + ep0.rating.toFixed(1));
               if (ep0 && ep0.certification) b.push(ep0.certification);
+              var sc = Object.keys(di.show.seasons).length;
+              b.push(sc + 'S \u2022 ' + di.show.episodes.length + 'E');
               return b;
             },
             getGenres: function(di) { var g = []; di.show.episodes.forEach(function(ep) { (ep.genres || []).forEach(function(genre) { if (g.indexOf(genre) === -1) g.push(genre); }); }); return g; },
