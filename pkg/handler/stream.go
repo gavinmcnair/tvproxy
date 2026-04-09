@@ -93,6 +93,8 @@ func (h *StreamHandler) VODLibrary(w http.ResponseWriter, r *http.Request) {
 	vodType := r.URL.Query().Get("type")
 	series := r.URL.Query().Get("series")
 
+	source := r.URL.Query().Get("source")
+
 	var streams []models.Stream
 	var err error
 	if vodType != "" {
@@ -103,6 +105,18 @@ func (h *StreamHandler) VODLibrary(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, "failed to list streams")
 		return
+	}
+
+	if source != "" {
+		var filtered []models.Stream
+		for _, s := range streams {
+			if source == "xtream" && s.CacheType == "xtream" {
+				filtered = append(filtered, s)
+			} else if source == "local" && s.CacheType != "xtream" {
+				filtered = append(filtered, s)
+			}
+		}
+		streams = filtered
 	}
 
 	type vodItem struct {
