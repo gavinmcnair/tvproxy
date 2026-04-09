@@ -228,6 +228,7 @@ func main() {
 	sessionMgr := session.NewManager(cfg, wgHTTPClient, wgMultiClient, recordingStore, log)
 	vodService := service.NewVODService(channelStore, streamStore, profileStore, sourceProfileStore, m3uAccountStore, settingsService, sessionMgr, recordingStore, activityService, cfg, log)
 	vodService.RecoverRecordings(ctx)
+	go m3uService.ResumeSeriesSync(ctx)
 	schedulerService := service.NewSchedulerService(scheduledRecStore, channelStore, vodService, cfg, log)
 	dlnaService := service.NewDLNAService(channelStore, channelGroupStore, userStore, settingsService, logoService, vodService, cfg, log)
 

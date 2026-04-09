@@ -63,6 +63,51 @@ func (s *M3UService) Log() *zerolog.Logger { return &s.log }
 
 func (s *M3UService) SetXtreamCache(c *xtream.Cache) { s.xtreamCache = c }
 
+func (s *M3UService) ResumeSeriesSync(ctx context.Context) {
+	if s.xtreamCache == nil {
+		return
+	}
+	accounts, err := s.m3uAccountStore.List(ctx)
+	if err != nil {
+		return
+	}
+	for _, acct := range accounts {
+		if acct.Type != "xtream" || !acct.IsEnabled {
+			continue
+		}
+		xtreamTimeout := s.config.Settings.Network.XtreamAPITimeout
+		client := xtream.NewClient(acct.URL, acct.Username, acct.Password, s.config.UserAgent, s.config.BypassHeader, s.config.BypassSecret, xtreamTimeout, s.httpClient.Transport)
+
+		seriesList, err := client.GetSeries(ctx)
+		if err != nil {
+			s.log.Warn().Err(err).Str("account", acct.Name).Msg("failed to fetch series list for sync resume")
+			continue
+		}
+
+		seriesWithEpisodes := make(map[string]bool)
+		existing, _ := s.streamStore.ListByAccountID(ctx, acct.ID)
+		for _, st := range existing {
+			if st.VODType == "series" && st.VODEpisode > 0 {
+				seriesWithEpisodes[st.VODSeries] = true
+			}
+		}
+
+		needSync := 0
+		for _, sr := range seriesList {
+			cleanName, _ := extractLanguage(sr.Name)
+			if !seriesWithEpisodes[cleanName] {
+				needSync++
+			}
+		}
+
+		if needSync > 0 {
+			s.log.Info().Str("account", acct.Name).Int("pending", needSync).Msg("resuming series sync")
+			a := acct
+			go s.syncXtreamSeries(&a, seriesList)
+		}
+	}
+}
+
 func (s *M3UService) CreateAccount(ctx context.Context, account *models.M3UAccount) error {
 	if err := s.m3uAccountStore.Create(ctx, account); err != nil {
 		return fmt.Errorf("creating m3u account: %w", err)
