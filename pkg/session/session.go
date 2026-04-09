@@ -25,6 +25,7 @@ type Session struct {
 	OutputContainer  string
 	OutputHWAccel    string
 	UseWireGuard     bool
+	HLSOutputDir    string
 	FilePath        string
 	TempDir         string
 	BufferedSecs    float64

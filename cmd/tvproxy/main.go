@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"io/fs"
 	"net/http"
 	"os"
@@ -520,7 +521,15 @@ func buildVersionedIndex(distFS fs.FS) []byte {
 	if err != nil {
 		panic("failed to read embedded index.html: " + err.Error())
 	}
-	versionedIndex := strings.ReplaceAll(string(indexHTML), `app.css"`, `app.css?v=`+buildVersion+`"`)
-	versionedIndex = strings.ReplaceAll(versionedIndex, `app.js"`, `app.js?v=`+buildVersion+`"`)
+	ver := buildVersion
+	if ver == "dev" {
+		ver = fmt.Sprintf("dev.%d", time.Now().Unix())
+	}
+	idx := string(indexHTML)
+	idx = strings.ReplaceAll(idx, `app.css"`, `app.css?v=`+ver+`"`)
+	idx = strings.ReplaceAll(idx, `app.css?v=dev"`, `app.css?v=`+ver+`"`)
+	idx = strings.ReplaceAll(idx, `app.js"`, `app.js?v=`+ver+`"`)
+	idx = strings.ReplaceAll(idx, `app.js?v=dev"`, `app.js?v=`+ver+`"`)
+	versionedIndex := idx
 	return []byte(versionedIndex)
 }

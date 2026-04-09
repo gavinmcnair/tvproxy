@@ -44,6 +44,7 @@ type StartOpts struct {
 	Command          string
 	Args             string
 	OutputDir        string
+	HLSOutputDir     string
 	MetadataOnly     bool
 }
 
@@ -98,15 +99,37 @@ func (m *Manager) cleanupDoneSession(channelID string, s *Session) {
 }
 
 
-func (m *Manager) buildArgs(argsStr string, inputURL string, outputPath string, useWireGuard bool) []string {
+func (m *Manager) buildArgs(argsStr string, inputURL string, outputPath string, useWireGuard bool, hlsOutputDir string) []string {
+	pipeInput := ffmpeg.IsHTTPURL(inputURL) && useWireGuard
+
 	var args []string
 	if argsStr == "" {
-		args = ffmpeg.ShellSplit("-hide_banner -loglevel warning -i {input} -c copy -f mp4 -movflags frag_keyframe+empty_moov+default_base_moof {output}")
+		if pipeInput && hlsOutputDir != "" {
+			segPattern := filepath.Join(hlsOutputDir, "seg%d.mp4")
+			playlistPath := filepath.Join(hlsOutputDir, "playlist.m3u8")
+			args = ffmpeg.ShellSplit(
+				"-hide_banner -loglevel warning -nostdin" +
+					" -f mpegts -analyzeduration 1000000 -probesize 1000000" +
+					" -err_detect ignore_err -fflags +genpts+discardcorrupt" +
+					" -i pipe:0 -map 0:v:0? -map 0:a:0?" +
+					" -c:v copy -c:a aac -ac 2 -b:a 192k" +
+					" -max_muxing_queue_size 2048" +
+					" -f hls -hls_time 6 -hls_segment_type fmp4" +
+					" -hls_fmp4_init_filename init.mp4" +
+					" -start_number 0 -hls_playlist_type event -hls_list_size 0" +
+					" -hls_segment_filename " + segPattern +
+					" -y " + playlistPath +
+					" -c:v copy -c:a aac -ac 2 -b:a 192k" +
+					" -f mp4 -movflags frag_keyframe+empty_moov+default_base_moof" +
+					" {output}")
+		} else if pipeInput {
+			args = ffmpeg.ShellSplit("-hide_banner -loglevel warning -nostdin -f mpegts -analyzeduration 1000000 -probesize 1000000 -err_detect ignore_err -fflags +genpts+discardcorrupt -i pipe:0 -map 0:v:0? -map 0:a:0? -c:v copy -c:a aac -ac 2 -b:a 192k -f mp4 -movflags frag_keyframe+empty_moov+default_base_moof {output}")
+		} else {
+			args = ffmpeg.ShellSplit("-hide_banner -loglevel warning -i {input} -c copy -f mp4 -movflags frag_keyframe+empty_moov+default_base_moof {output}")
+		}
 	} else {
 		args = ffmpeg.ShellSplit(argsStr)
 	}
-
-	pipeInput := ffmpeg.IsHTTPURL(inputURL) && useWireGuard
 
 	for i, arg := range args {
 		switch arg {
@@ -420,6 +443,7 @@ func (m *Manager) GetOrCreateWithConsumer(ctx context.Context, opts StartOpts, c
 		OutputContainer:  opts.OutputContainer,
 		OutputHWAccel:    opts.OutputHWAccel,
 		UseWireGuard:     opts.UseWireGuard,
+		HLSOutputDir:    opts.HLSOutputDir,
 		Duration:         opts.KnownDuration,
 		SeekOffset:       opts.SeekOffset,
 		FilePath:         filePath,
@@ -475,7 +499,7 @@ func (m *Manager) GetOrCreateWithConsumer(ctx context.Context, opts StartOpts, c
 	go m.probeAsync(s, opts.StreamURL)
 
 	if !opts.MetadataOnly {
-		args := m.buildArgs(opts.Args, opts.StreamURL, filePath, opts.UseWireGuard)
+		args := m.buildArgs(opts.Args, opts.StreamURL, filePath, opts.UseWireGuard, opts.HLSOutputDir)
 		command := opts.Command
 		if command == "" {
 			command = "ffmpeg"

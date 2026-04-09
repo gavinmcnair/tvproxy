@@ -37,8 +37,13 @@ func (m *Manager) GetOrCreateSession(sessionID, streamURL string, segmentLength 
 	defer m.mu.Unlock()
 
 	if sess, ok := m.sessions[sessionID]; ok {
-		sess.Touch()
-		return sess
+		if sess.StreamURL == streamURL {
+			sess.Touch()
+			return sess
+		}
+		sess.Stop()
+		os.RemoveAll(sess.OutputDir)
+		delete(m.sessions, sessionID)
 	}
 
 	outputDir := filepath.Join(m.baseDir, sessionID)

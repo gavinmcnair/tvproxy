@@ -169,6 +169,29 @@ func (c *Cache) load() {
 	}
 }
 
+func (c *Cache) PosterURLs() []string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	var urls []string
+	for _, m := range c.movies {
+		if m.PosterURL != "" {
+			urls = append(urls, m.PosterURL)
+		}
+		if m.BackdropURL != "" {
+			urls = append(urls, m.BackdropURL)
+		}
+	}
+	for _, s := range c.series {
+		if s.PosterURL != "" {
+			urls = append(urls, s.PosterURL)
+		}
+		if s.BackdropURL != "" {
+			urls = append(urls, s.BackdropURL)
+		}
+	}
+	return urls
+}
+
 func (c *Cache) Stats() (int, int, int) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()

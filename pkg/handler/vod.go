@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -514,6 +515,21 @@ func (h *VODHandler) HLSMaster(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if sess.HLSOutputDir != "" {
+		for i := 0; i < 30; i++ {
+			if data, err := os.ReadFile(filepath.Join(sess.HLSOutputDir, "playlist.m3u8")); err == nil && len(data) > 50 {
+				break
+			}
+			time.Sleep(500 * time.Millisecond)
+		}
+		w.Header().Set("Content-Type", "application/x-mpegURL")
+		w.Header().Set("Cache-Control", "no-cache, no-store")
+		fmt.Fprintln(w, "#EXTM3U")
+		fmt.Fprintf(w, "#EXT-X-STREAM-INF:BANDWIDTH=10000000\n")
+		fmt.Fprintf(w, "/vod/%s/hls/playlist.m3u8\n", channelID)
+		return
+	}
+
 	var duration float64
 	for i := 0; i < 20; i++ {
 		_, _, d := h.vodService.GetProbeInfo(channelID)
@@ -552,6 +568,7 @@ func (h *VODHandler) HLSMaster(w http.ResponseWriter, r *http.Request) {
 	if profile.AudioCodec == "" {
 		profile.AudioCodec = "aac"
 	}
+
 	hlsSess := h.hlsManager.GetOrCreateSession(channelID, streamURL, 6, durationTicks, duration == 0, profile)
 	playlistURL := fmt.Sprintf("/vod/%s/hls/playlist.m3u8", channelID)
 	hls.ServeMasterPlaylist(w, hlsSess, playlistURL)
@@ -559,6 +576,20 @@ func (h *VODHandler) HLSMaster(w http.ResponseWriter, r *http.Request) {
 
 func (h *VODHandler) HLSPlaylist(w http.ResponseWriter, r *http.Request) {
 	channelID := chi.URLParam(r, "sessionID")
+
+	sess := h.vodService.GetSession(channelID)
+	if sess != nil && sess.HLSOutputDir != "" {
+		data, err := os.ReadFile(filepath.Join(sess.HLSOutputDir, "playlist.m3u8"))
+		if err != nil {
+			respondError(w, http.StatusNotFound, "playlist not ready")
+			return
+		}
+		w.Header().Set("Content-Type", "application/x-mpegURL")
+		w.Header().Set("Cache-Control", "no-cache, no-store")
+		w.Write(data)
+		return
+	}
+
 	hlsSess := h.hlsManager.GetSession(channelID)
 	if hlsSess == nil {
 		respondError(w, http.StatusNotFound, "hls session not found")
@@ -577,6 +608,20 @@ func (h *VODHandler) HLSPlaylist(w http.ResponseWriter, r *http.Request) {
 func (h *VODHandler) HLSSegment(w http.ResponseWriter, r *http.Request) {
 	channelID := chi.URLParam(r, "sessionID")
 	segmentFile := chi.URLParam(r, "segment")
+
+	sess := h.vodService.GetSession(channelID)
+	if sess != nil && sess.HLSOutputDir != "" {
+		segPath := filepath.Join(sess.HLSOutputDir, segmentFile)
+		for i := 0; i < 50; i++ {
+			if info, err := os.Stat(segPath); err == nil && info.Size() > 0 {
+				hls.ServeSegment(w, r, segPath)
+				return
+			}
+			time.Sleep(200 * time.Millisecond)
+		}
+		respondError(w, http.StatusNotFound, "segment not available")
+		return
+	}
 
 	hlsSess := h.hlsManager.GetSession(channelID)
 	if hlsSess == nil {

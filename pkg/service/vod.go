@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -163,6 +164,20 @@ func (s *VODService) StartWatching(ctx context.Context, channelID string, profil
 	audioOnly := strings.EqualFold(streamGroup, "radio")
 	sa := s.composeSessionArgs(ctx, profileName, streamURL, streamGroup)
 
+	sessionArgs := sa.Args
+	sessionVideoCodec := sa.OutputVideoCodec
+	sessionAudioCodec := sa.OutputAudioCodec
+	sessionHWAccel := sa.OutputHWAccel
+	var hlsOutDir string
+	if sa.Delivery == "hls" {
+		sessionArgs = ""
+		sessionVideoCodec = "copy"
+		sessionAudioCodec = "aac"
+		sessionHWAccel = ""
+		hlsOutDir = filepath.Join(os.TempDir(), "tvproxy-hls", streamID)
+		os.MkdirAll(hlsOutDir, 0755)
+	}
+
 	_, consumerID, err := s.sessionMgr.GetOrCreateWithConsumer(ctx, session.StartOpts{
 		ChannelID:        channelID,
 		StreamID:         streamID,
@@ -170,15 +185,16 @@ func (s *VODService) StartWatching(ctx context.Context, channelID string, profil
 		StreamName:       streamName,
 		ChannelName:      channelName,
 		ProfileName:      profileName,
-		OutputVideoCodec: sa.OutputVideoCodec,
-		OutputAudioCodec: sa.OutputAudioCodec,
+		OutputVideoCodec: sessionVideoCodec,
+		OutputAudioCodec: sessionAudioCodec,
 		OutputContainer:  sa.Container,
-		OutputHWAccel:    sa.OutputHWAccel,
+		OutputHWAccel:    sessionHWAccel,
 		UseWireGuard:     useWG,
 		Command:          sa.Command,
-		Args:             sa.Args,
+		Args:             sessionArgs,
 		OutputDir:        s.config.VODOutputDir,
-		MetadataOnly:     sa.Delivery == "hls",
+		HLSOutputDir:     hlsOutDir,
+		MetadataOnly:     false,
 	}, session.ConsumerViewer)
 	if err != nil {
 		return "", "", "", false, err
@@ -217,6 +233,20 @@ func (s *VODService) StartWatchingStream(ctx context.Context, streamID string, p
 
 	sa := s.composeSessionArgs(ctx, profileName, streamURL, stream.Group)
 
+	streamSessionArgs := sa.Args
+	streamSessionVideoCodec := sa.OutputVideoCodec
+	streamSessionAudioCodec := sa.OutputAudioCodec
+	streamSessionHWAccel := sa.OutputHWAccel
+	var hlsOutputDir string
+	if sa.Delivery == "hls" && stream.VODDuration == 0 {
+		streamSessionArgs = ""
+		streamSessionVideoCodec = "copy"
+		streamSessionAudioCodec = "aac"
+		streamSessionHWAccel = ""
+		hlsOutputDir = filepath.Join(os.TempDir(), "tvproxy-hls", streamID)
+		os.MkdirAll(hlsOutputDir, 0755)
+	}
+
 	_, consumerID, err := s.sessionMgr.GetOrCreateWithConsumer(ctx, session.StartOpts{
 		ChannelID:        streamID,
 		StreamID:         streamID,
@@ -224,16 +254,17 @@ func (s *VODService) StartWatchingStream(ctx context.Context, streamID string, p
 		StreamName:       stream.Name,
 		ChannelName:      stream.Name,
 		ProfileName:      profileName,
-		OutputVideoCodec: sa.OutputVideoCodec,
-		OutputAudioCodec: sa.OutputAudioCodec,
+		OutputVideoCodec: streamSessionVideoCodec,
+		OutputAudioCodec: streamSessionAudioCodec,
 		OutputContainer:  sa.Container,
-		OutputHWAccel:    sa.OutputHWAccel,
+		OutputHWAccel:    streamSessionHWAccel,
 		UseWireGuard:     stream.UseWireGuard,
 		Command:          sa.Command,
-		Args:             sa.Args,
+		Args:             streamSessionArgs,
 		OutputDir:        s.config.VODOutputDir,
+		HLSOutputDir:     hlsOutputDir,
 		KnownDuration:    stream.VODDuration,
-		MetadataOnly:     sa.Delivery == "hls",
+		MetadataOnly:     false,
 	}, session.ConsumerViewer)
 	if err != nil {
 		return "", "", "", err

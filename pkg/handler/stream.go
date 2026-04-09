@@ -217,7 +217,7 @@ func (h *StreamHandler) VODLibrary(w http.ResponseWriter, r *http.Request) {
 		if s.CacheType == "xtream" && h.xtreamCache != nil {
 			if s.VODType == "movie" {
 				if m := h.xtreamCache.GetMovie(s.CacheKey); m != nil {
-					item.PosterURL = m.PosterURL
+					item.PosterURL = h.logoService.Resolve(m.PosterURL)
 					item.Overview = m.Plot
 					item.Rating = 0
 					if m.Rating != "" && m.Rating != "0" {
@@ -232,12 +232,12 @@ func (h *StreamHandler) VODLibrary(w http.ResponseWriter, r *http.Request) {
 						item.Year = m.ReleaseDate[:4]
 					}
 					if m.BackdropURL != "" {
-						item.CollectionBackdrop = m.BackdropURL
+						item.CollectionBackdrop = h.logoService.Resolve(m.BackdropURL)
 					}
 				}
 			} else if s.VODType == "series" {
 				if sr := h.xtreamCache.GetSeries(s.CacheKey); sr != nil {
-					item.PosterURL = sr.PosterURL
+					item.PosterURL = h.logoService.Resolve(sr.PosterURL)
 					item.Overview = sr.Plot
 					if sr.Genre != "" {
 						item.Genres = splitGenres(sr.Genre)

@@ -78,6 +78,17 @@ func (c *Cache) Resolve(logoURL string) string {
 	return Placeholder
 }
 
+func (c *Cache) IsCached(logoURL string) bool {
+	if logoURL == "" {
+		return false
+	}
+	hash := hashURL(logoURL)
+	c.mu.RLock()
+	_, ok := c.index[hash]
+	c.mu.RUnlock()
+	return ok
+}
+
 func (c *Cache) Prefetch(logoURL string) {
 	if logoURL == "" || !strings.HasPrefix(logoURL, "http") {
 		return
@@ -90,6 +101,36 @@ func (c *Cache) Prefetch(logoURL string) {
 		return
 	}
 	go c.fetch(context.Background(), logoURL, hash)
+}
+
+func (c *Cache) QueuePrefetch(urls []string) {
+	var uncached []string
+	c.mu.RLock()
+	for _, u := range urls {
+		if u == "" || !strings.HasPrefix(u, "http") {
+			continue
+		}
+		if _, ok := c.index[hashURL(u)]; !ok {
+			uncached = append(uncached, u)
+		}
+	}
+	c.mu.RUnlock()
+	if len(uncached) == 0 {
+		return
+	}
+	go func() {
+		for _, u := range uncached {
+			hash := hashURL(u)
+			c.mu.RLock()
+			_, ok := c.index[hash]
+			c.mu.RUnlock()
+			if ok {
+				continue
+			}
+			c.fetch(context.Background(), u, hash)
+			time.Sleep(time.Second)
+		}
+	}()
 }
 
 func (c *Cache) ServeHTTP(w http.ResponseWriter, r *http.Request) {

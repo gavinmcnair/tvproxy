@@ -299,6 +299,7 @@ func (s *M3UService) refreshXtreamAccount(ctx context.Context, account *models.M
 	s.log.Info().Int("total", len(streams)).Msg("xtream refresh complete")
 	if s.xtreamCache != nil {
 		s.xtreamCache.Save()
+		s.logoService.QueuePrefetch(s.xtreamCache.PosterURLs())
 		go s.syncXtreamSeries(account, seriesList)
 	}
 	return s.upsertAndFinalize(ctx, account, streams, keepIDs)
@@ -395,6 +396,13 @@ func (s *M3UService) upsertAndFinalize(ctx context.Context, account *models.M3UA
 		return fmt.Errorf("upserting streams: %w", err)
 	}
 
+	existing, _ := s.streamStore.ListByAccountID(ctx, account.ID)
+	for _, st := range existing {
+		if st.VODType == "series" && st.VODEpisode > 0 {
+			keepIDs = append(keepIDs, st.ID)
+		}
+	}
+
 	deletedIDs, err := s.streamStore.DeleteStaleByAccountID(ctx, account.ID, keepIDs)
 	if err != nil {
 		return fmt.Errorf("deleting stale streams: %w", err)
@@ -433,11 +441,20 @@ func (s *M3UService) syncXtreamSeries(account *models.M3UAccount, seriesList []x
 	s.log.Info().Int("series", len(seriesList)).Msg("starting background xtream series sync")
 
 	ctx := context.Background()
+
+	seriesWithEpisodes := make(map[string]bool)
+	existing, _ := s.streamStore.ListByAccountID(ctx, account.ID)
+	for _, st := range existing {
+		if st.VODType == "series" && st.VODEpisode > 0 {
+			seriesWithEpisodes[st.VODSeries] = true
+		}
+	}
+
 	synced := 0
 	for _, sr := range seriesList {
-		if s.xtreamCache.GetSeries(sr.SeriesID) != nil {
-			sm := s.xtreamCache.GetSeries(sr.SeriesID)
-			if len(sm.Seasons) > 0 {
+		if sm := s.xtreamCache.GetSeries(sr.SeriesID); sm != nil && len(sm.Seasons) > 0 {
+			cleanName, _ := extractLanguage(sr.Name)
+			if seriesWithEpisodes[cleanName] {
 				synced++
 				continue
 			}
@@ -520,6 +537,9 @@ func (s *M3UService) syncXtreamSeries(account *models.M3UAccount, seriesList []x
 
 		if len(episodeStreams) > 0 {
 			s.streamStore.BulkUpsert(ctx, episodeStreams)
+			placeholderHash := computeContentHash(fmt.Sprintf("xtream-series-%d", sr.SeriesID))
+			placeholderID := deterministicStreamID(placeholderHash)
+			s.streamStore.Delete(ctx, placeholderID)
 		}
 
 		synced++
@@ -533,6 +553,7 @@ func (s *M3UService) syncXtreamSeries(account *models.M3UAccount, seriesList []x
 
 	s.xtreamCache.Save()
 	s.streamStore.Save()
+	s.logoService.QueuePrefetch(s.xtreamCache.PosterURLs())
 	s.log.Info().Int("synced", synced).Msg("xtream series sync complete")
 }
 

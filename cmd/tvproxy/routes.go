@@ -316,17 +316,20 @@ func registerStaticRoutes(r chi.Router, staticRoot string, distFS fs.FS, version
 	fileServer := http.FileServer(http.FS(distFS))
 	r.Get("/*", func(w http.ResponseWriter, req *http.Request) {
 		path := strings.TrimPrefix(req.URL.Path, "/")
-		if f, err := distFS.Open(path); err == nil {
-			f.Close()
-			if req.URL.RawQuery != "" && strings.Contains(req.URL.RawQuery, "v=") {
-				w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
-			} else {
-				w.Header().Set("Cache-Control", "public, max-age=3600")
+		if path != "" && path != "index.html" {
+			if f, err := distFS.Open(path); err == nil {
+				f.Close()
+				if req.URL.RawQuery != "" && strings.Contains(req.URL.RawQuery, "v=") {
+					w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+				} else {
+					w.Header().Set("Cache-Control", "public, max-age=3600")
+				}
+				fileServer.ServeHTTP(w, req)
+				return
 			}
-			fileServer.ServeHTTP(w, req)
-			return
 		}
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.Header().Set("Cache-Control", "no-cache")
 		w.Write(versionedIndexBytes)
 	})
 }

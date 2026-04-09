@@ -72,6 +72,10 @@ func (s *LogoService) Resolve(url string) string {
 	return s.cache.Resolve(url)
 }
 
+func (s *LogoService) QueuePrefetch(urls []string) {
+	s.cache.QueuePrefetch(urls)
+}
+
 func (s *LogoService) ResolveChannel(ch models.Channel) string {
 	if ch.LogoID != nil {
 		if logo, err := s.store.GetByID(context.Background(), *ch.LogoID); err == nil && logo.URL != logocache.Placeholder && !strings.HasPrefix(logo.URL, "data:") {
