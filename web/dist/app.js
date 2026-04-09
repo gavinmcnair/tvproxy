@@ -4102,7 +4102,7 @@
       progInterval = setInterval(fetchNowPlaying, 60000);
     }
 
-    if (dvr && !isHLS) {
+    if (dvr) {
       pollInterval = setInterval(async function() {
         if (playerCtx.signal.aborted) { clearInterval(pollInterval); return; }
         try {
@@ -5638,6 +5638,11 @@
 
         if (!_favoriteIds) await loadFavorites();
 
+        var searchInput = h('input', { type: 'text', placeholder: 'Search...', style: 'padding:5px 12px;border-radius:20px;border:1px solid var(--border);background:var(--bg-input);color:var(--text-primary);font-size:12px;width:180px;' });
+        searchInput.oninput = function() { renderGrid(); };
+        filterBar.appendChild(searchInput);
+        filterBar.appendChild(h('span', { style: 'width:1px;height:20px;background:var(--border);align-self:center;' }));
+
         makePill('\u2B50 Favorites', 'fav:yes', filterBar, 'collection');
         makePill('Kids', 'kids', null, 'age');
         makePill('15+', 'adult', null, 'age');
@@ -5664,6 +5669,11 @@
         var grid = h('div', { style: 'display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:20px;' });
 
         function matchesFilters(di) {
+          var searchTerm = searchInput.value.trim().toLowerCase();
+          if (searchTerm) {
+            var itemName = di.type === 'movie' ? di.item.name : di.collection.name;
+            if (itemName.toLowerCase().indexOf(searchTerm) === -1) return false;
+          }
           if (activeFilters['fav:yes']) {
             if (di.type === 'movie') { if (!_favoriteIds || !_favoriteIds.has(di.item.id)) return false; }
             else if (di.type === 'collection') { var anyFav = di.collection.movies.some(function(m) { return _favoriteIds && _favoriteIds.has(m.id); }); if (!anyFav) return false; }
@@ -6006,6 +6016,11 @@
           return btn;
         }
 
+        var tvSearchInput = h('input', { type: 'text', placeholder: 'Search...', style: 'padding:5px 12px;border-radius:20px;border:1px solid var(--border);background:var(--bg-input);color:var(--text-primary);font-size:12px;width:180px;' });
+        tvSearchInput.oninput = function() { renderTvGrid(); };
+        tvFilterBar.appendChild(tvSearchInput);
+        tvFilterBar.appendChild(h('span', { style: 'width:1px;height:20px;background:var(--border);align-self:center;' }));
+
         makeTvPill('\u2B50 Favorites', 'fav:yes', tvFilterBar, 'collection');
         if (tvDecadeList.length > 0) {
           tvFilterBar.appendChild(h('span', { style: 'width:1px;height:20px;background:var(--border);align-self:center;' }));
@@ -6025,6 +6040,8 @@
         var grid = h('div', { style: 'display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:20px;' });
 
         function matchesTvFilters(show) {
+          var tvSearch = tvSearchInput.value.trim().toLowerCase();
+          if (tvSearch && show.name.toLowerCase().indexOf(tvSearch) === -1) return false;
           if (tvActiveFilters['fav:yes']) {
             var anyFav = show.episodes.some(function(ep) { return _favoriteIds && _favoriteIds.has(ep.id); });
             if (!anyFav) return false;
