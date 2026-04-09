@@ -179,6 +179,8 @@ func (s *Session) buildFFmpegArgs(startNumber int, startTimeTicks int64, pipeHTT
 		args = append(args,
 			"-analyzeduration", "3000000",
 			"-probesize", "3000000",
+			"-err_detect", "ignore_err",
+			"-fflags", "+genpts+discardcorrupt",
 			"-i", "pipe:0",
 		)
 	} else if isRTSP(s.StreamURL) {
@@ -187,12 +189,16 @@ func (s *Session) buildFFmpegArgs(startNumber int, startTimeTicks int64, pipeHTT
 			"-analyzeduration", "1000000",
 			"-probesize", "1000000",
 			"-max_delay", "500000",
+			"-err_detect", "ignore_err",
+			"-fflags", "+genpts+discardcorrupt",
 			"-i", s.StreamURL,
 		)
 	} else {
 		args = append(args,
 			"-analyzeduration", "1000000",
 			"-probesize", "1000000",
+			"-err_detect", "ignore_err",
+			"-fflags", "+genpts+discardcorrupt",
 			"-i", s.StreamURL,
 		)
 	}
@@ -231,7 +237,7 @@ func (s *Session) buildFFmpegArgs(startNumber int, startTimeTicks int64, pipeHTT
 	args = append(args, "-c:a", audioCodec)
 	if audioCodec != "copy" {
 		args = append(args, "-b:a", "192k", "-ac", "2")
-		if isRTSP(s.StreamURL) {
+		if isRTSP(s.StreamURL) || pipeHTTP {
 			args = append(args, "-af", "aresample=async=1000:first_pts=0")
 		}
 	}
