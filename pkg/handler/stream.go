@@ -239,7 +239,11 @@ func (h *StreamHandler) VODLibrary(w http.ResponseWriter, r *http.Request) {
 					}
 				}
 			} else if s.VODType == "series" {
-				if sr := h.xtreamCache.GetSeries(s.CacheKey); sr != nil {
+				sr := h.xtreamCache.GetSeries(s.CacheKey)
+				if sr == nil && s.VODSeries != "" {
+					sr = h.xtreamCache.FindSeriesByName(s.VODSeries)
+				}
+				if sr != nil {
 					item.PosterURL = h.logoService.Resolve(sr.PosterURL)
 					item.Overview = sr.Plot
 					if sr.Genre != "" {

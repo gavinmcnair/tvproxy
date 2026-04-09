@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 )
 
@@ -70,11 +71,12 @@ type EpisodeMeta struct {
 }
 
 type Cache struct {
-	mu      sync.RWMutex
-	movies  map[int]*MovieMeta
-	series  map[int]*SeriesMeta
-	episodes map[int]*EpisodeMeta
-	path    string
+	mu            sync.RWMutex
+	movies        map[int]*MovieMeta
+	series        map[int]*SeriesMeta
+	seriesNameIdx map[string]*SeriesMeta
+	episodes      map[int]*EpisodeMeta
+	path          string
 }
 
 type cacheData struct {
@@ -112,9 +114,27 @@ func (c *Cache) GetSeries(seriesID int) *SeriesMeta {
 	return c.series[seriesID]
 }
 
+func (c *Cache) FindSeriesByName(name string) *SeriesMeta {
+	c.mu.Lock()
+	if c.seriesNameIdx == nil {
+		c.seriesNameIdx = make(map[string]*SeriesMeta, len(c.series)*2)
+		for _, s := range c.series {
+			c.seriesNameIdx[s.Name] = s
+			if idx := strings.Index(s.Name, ":"); idx >= 2 && idx <= 6 {
+				cleaned := strings.TrimSpace(s.Name[idx+1:])
+				c.seriesNameIdx[cleaned] = s
+			}
+		}
+	}
+	result := c.seriesNameIdx[name]
+	c.mu.Unlock()
+	return result
+}
+
 func (c *Cache) SetSeries(seriesID int, s *SeriesMeta) {
 	c.mu.Lock()
 	c.series[seriesID] = s
+	c.seriesNameIdx = nil
 	c.mu.Unlock()
 }
 
