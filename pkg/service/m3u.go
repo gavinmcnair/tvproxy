@@ -158,12 +158,26 @@ func (s *M3UService) refreshXtreamAccount(ctx context.Context, account *models.M
 	if err != nil {
 		return fmt.Errorf("getting xtream live streams: %w", err)
 	}
+	s.log.Info().Int("live", len(liveStreams)).Msg("fetched xtream live streams")
 
-	s.log.Info().Int("streams", len(liveStreams)).Msg("fetched xtream live streams")
+	vodStreams, err := client.GetVODStreams(ctx)
+	if err != nil {
+		s.log.Warn().Err(err).Msg("failed to fetch xtream VOD streams")
+	} else {
+		s.log.Info().Int("vod", len(vodStreams)).Msg("fetched xtream VOD streams")
+	}
 
-	seen := make(map[string]struct{}, len(liveStreams))
-	streams := make([]models.Stream, 0, len(liveStreams))
-	keepIDs := make([]string, 0, len(liveStreams))
+	seriesList, err := client.GetSeries(ctx)
+	if err != nil {
+		s.log.Warn().Err(err).Msg("failed to fetch xtream series")
+	} else {
+		s.log.Info().Int("series", len(seriesList)).Msg("fetched xtream series")
+	}
+
+	seen := make(map[string]struct{})
+	var streams []models.Stream
+	var keepIDs []string
+
 	for _, xs := range liveStreams {
 		streamURL := client.GetStreamURL(xs.StreamID, "ts")
 		hash := computeContentHash(streamURL)
@@ -187,6 +201,74 @@ func (s *M3UService) refreshXtreamAccount(ctx context.Context, account *models.M
 		})
 	}
 
+	for _, vs := range vodStreams {
+		streamURL := client.GetVODStreamURL(vs.StreamID, vs.ContainerExt)
+		hash := computeContentHash(streamURL)
+		if _, dup := seen[hash]; dup {
+			continue
+		}
+		seen[hash] = struct{}{}
+		id := deterministicStreamID(hash)
+		keepIDs = append(keepIDs, id)
+		streams = append(streams, models.Stream{
+			ID:           id,
+			M3UAccountID: account.ID,
+			Name:         vs.Name,
+			URL:          streamURL,
+			Group:        vs.CategoryName,
+			Logo:         vs.StreamIcon,
+			ContentHash:  hash,
+			VODType:      "movie",
+			UseWireGuard: account.UseWireGuard,
+			IsActive:     true,
+		})
+	}
+
+	s.Set(account.ID, RefreshStatus{State: "running", Message: fmt.Sprintf("Fetching %d series...", len(seriesList))})
+	for _, sr := range seriesList {
+		info, err := client.GetSeriesInfo(ctx, sr.SeriesID)
+		if err != nil {
+			continue
+		}
+		for seasonNum, episodes := range info.Seasons {
+			var season int
+			fmt.Sscanf(seasonNum, "%d", &season)
+			for _, ep := range episodes {
+				streamURL := client.GetSeriesStreamURL(ep.EpisodeNum, ep.ContainerExt)
+				if ep.ID != "" {
+					var epID int
+					fmt.Sscanf(ep.ID, "%d", &epID)
+					if epID > 0 {
+						streamURL = client.GetSeriesStreamURL(epID, ep.ContainerExt)
+					}
+				}
+				hash := computeContentHash(streamURL)
+				if _, dup := seen[hash]; dup {
+					continue
+				}
+				seen[hash] = struct{}{}
+				id := deterministicStreamID(hash)
+				keepIDs = append(keepIDs, id)
+				streams = append(streams, models.Stream{
+					ID:           id,
+					M3UAccountID: account.ID,
+					Name:         ep.Title,
+					URL:          streamURL,
+					Group:        sr.CategoryName,
+					Logo:         sr.Cover,
+					ContentHash:  hash,
+					VODType:      "series",
+					VODSeries:    sr.Name,
+					VODSeason:    season,
+					VODEpisode:   ep.EpisodeNum,
+					UseWireGuard: account.UseWireGuard,
+					IsActive:     true,
+				})
+			}
+		}
+	}
+
+	s.log.Info().Int("total", len(streams)).Msg("xtream refresh complete")
 	return s.upsertAndFinalize(ctx, account, streams, keepIDs)
 }
 

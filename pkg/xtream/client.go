@@ -102,6 +102,91 @@ func (c *Client) GetLiveStreams(ctx context.Context) ([]Stream, error) {
 	return streams, nil
 }
 
+type VODStream struct {
+	Num          int    `json:"num"`
+	Name         string `json:"name"`
+	StreamType   string `json:"stream_type"`
+	StreamID     int    `json:"stream_id"`
+	StreamIcon   string `json:"stream_icon"`
+	CategoryID   string `json:"category_id"`
+	CategoryName string `json:"category_name"`
+	ContainerExt string `json:"container_extension"`
+}
+
+type Series struct {
+	Num          int    `json:"num"`
+	Name         string `json:"name"`
+	SeriesID     int    `json:"series_id"`
+	Cover        string `json:"cover"`
+	CategoryID   string `json:"category_id"`
+	CategoryName string `json:"category_name"`
+}
+
+type SeriesInfo struct {
+	Seasons  map[string][]SeriesEpisode `json:"episodes"`
+	Info     SeriesDetail               `json:"info"`
+}
+
+type SeriesDetail struct {
+	Name  string `json:"name"`
+	Cover string `json:"cover"`
+}
+
+type SeriesEpisode struct {
+	ID            string `json:"id"`
+	EpisodeNum    int    `json:"episode_num"`
+	Title         string `json:"title"`
+	ContainerExt  string `json:"container_extension"`
+	Info          SeriesEpisodeInfo `json:"info"`
+}
+
+type SeriesEpisodeInfo struct {
+	Duration    string `json:"duration"`
+	MovieImage  string `json:"movie_image"`
+	Season      int    `json:"season"`
+}
+
+func (c *Client) GetVODStreams(ctx context.Context) ([]VODStream, error) {
+	url := fmt.Sprintf("%s/player_api.php?username=%s&password=%s&action=get_vod_streams", c.baseURL, c.username, c.password)
+	var streams []VODStream
+	if err := c.get(ctx, url, &streams); err != nil {
+		return nil, fmt.Errorf("getting vod streams: %w", err)
+	}
+	return streams, nil
+}
+
+func (c *Client) GetSeries(ctx context.Context) ([]Series, error) {
+	url := fmt.Sprintf("%s/player_api.php?username=%s&password=%s&action=get_series", c.baseURL, c.username, c.password)
+	var series []Series
+	if err := c.get(ctx, url, &series); err != nil {
+		return nil, fmt.Errorf("getting series: %w", err)
+	}
+	return series, nil
+}
+
+func (c *Client) GetSeriesInfo(ctx context.Context, seriesID int) (*SeriesInfo, error) {
+	url := fmt.Sprintf("%s/player_api.php?username=%s&password=%s&action=get_series_info&series_id=%d", c.baseURL, c.username, c.password, seriesID)
+	var info SeriesInfo
+	if err := c.get(ctx, url, &info); err != nil {
+		return nil, fmt.Errorf("getting series info: %w", err)
+	}
+	return &info, nil
+}
+
+func (c *Client) GetVODStreamURL(streamID int, extension string) string {
+	if extension == "" {
+		extension = "mp4"
+	}
+	return fmt.Sprintf("%s/movie/%s/%s/%d.%s", c.baseURL, c.username, c.password, streamID, extension)
+}
+
+func (c *Client) GetSeriesStreamURL(streamID int, extension string) string {
+	if extension == "" {
+		extension = "mp4"
+	}
+	return fmt.Sprintf("%s/series/%s/%s/%d.%s", c.baseURL, c.username, c.password, streamID, extension)
+}
+
 func (c *Client) GetStreamURL(streamID int, extension string) string {
 	if extension == "" {
 		extension = "ts"
