@@ -6339,6 +6339,7 @@
             var b = []; var item = di.item;
             if (item.year) b.push(item.year);
             if (item.rating > 0) b.push('\u2605 ' + item.rating.toFixed(1));
+            if (item.resolution) b.push(item.resolution);
             if (item.duration > 0) { var hrs = Math.floor(item.duration / 3600); var mins = Math.floor((item.duration % 3600) / 60); b.push(hrs > 0 ? hrs + 'h ' + mins + 'm' : mins + 'm'); }
             return b;
           },
