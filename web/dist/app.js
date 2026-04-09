@@ -5864,17 +5864,14 @@
           if (af.collections && di.type !== 'collection') return false;
           var hasAge = af.kids || af.adult;
           if (hasAge) {
-            if (di.type === 'movie' && di.item.certification) {
-              var isKid = mg.kidsCerts[di.item.certification];
+            if (di.type === 'movie') {
+              var isKid = di.item.certification ? mg.kidsCerts[di.item.certification] : false;
               if (af.kids && !af.adult && !isKid) return false;
               if (af.adult && !af.kids && isKid) return false;
             }
             if (di.type === 'collection') {
-              var rated = di.collection.movies.filter(function(m) { return m.certification; });
-              if (rated.length > 0) {
-                var anyMatch = rated.some(function(m) { var isK = mg.kidsCerts[m.certification]; return (af.kids && af.adult) || (af.kids ? isK : !isK); });
-                if (!anyMatch) return false;
-              }
+              var anyMatch = di.collection.movies.some(function(m) { var isK = m.certification ? mg.kidsCerts[m.certification] : false; return (af.kids && af.adult) || (af.kids ? isK : !isK); });
+              if (!anyMatch) return false;
             }
           }
           var hasDecade = Object.keys(af).some(function(k) { return k.startsWith('decade_'); });
@@ -6093,8 +6090,8 @@
             if (!anyFav) return false;
           }
           var hasAge = af.kids || af.adult;
-          if (hasAge && show._cert) {
-            var isKid = mg.kidsCerts[show._cert];
+          if (hasAge) {
+            var isKid = show._cert ? mg.kidsCerts[show._cert] : false;
             if (af.kids && !af.adult && !isKid) return false;
             if (af.adult && !af.kids && isKid) return false;
           }
