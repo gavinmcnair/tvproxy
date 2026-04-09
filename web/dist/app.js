@@ -839,6 +839,18 @@
     };
     backdrop.appendChild(refreshBtn);
 
+    var rematchBtn = document.createElement('button');
+    rematchBtn.textContent = '\uD83D\uDD0D';
+    rematchBtn.title = 'Rematch TMDB';
+    rematchBtn.style.cssText = 'position:absolute;top:16px;right:112px;background:rgba(0,0,0,0.6);border:none;color:#fff;font-size:16px;width:40px;height:40px;border-radius:50%;cursor:pointer;z-index:3;transition:background 0.2s;';
+    rematchBtn.onmouseenter = function() { rematchBtn.style.background = 'rgba(255,255,255,0.2)'; };
+    rematchBtn.onmouseleave = function() { rematchBtn.style.background = 'rgba(0,0,0,0.6)'; };
+    rematchBtn.onclick = function() {
+      var firstEp = show.episodes[0];
+      if (firstEp) showRematchModal(firstEp.id, 'series', show.name, function() { overlay.remove(); });
+    };
+    backdrop.appendChild(rematchBtn);
+
     backdrop.appendChild(Object.assign(document.createElement('div'), {
       style: 'position:absolute;bottom:0;left:0;right:0;height:150px;background:linear-gradient(transparent,#1a1d23);'
     }));
