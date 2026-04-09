@@ -592,16 +592,16 @@ var streamNamespace = uuid.MustParse("f47ac10b-58cc-4372-a567-0e02b2c3d479")
 
 func extractLanguage(name string) (cleanName, lang string) {
 	idx := strings.Index(name, ":")
-	if idx >= 2 && idx <= 3 {
+	if idx >= 2 && idx <= 6 {
 		prefix := strings.TrimSpace(name[:idx])
-		isLang := len(prefix) >= 2 && len(prefix) <= 3
+		isLang := len(prefix) >= 2
 		for _, c := range prefix {
-			if c < 'A' || c > 'Z' {
+			if !((c >= 'A' && c <= 'Z') || c == '-') {
 				isLang = false
 				break
 			}
 		}
-		if isLang {
+		if isLang && prefix[0] != '-' {
 			return strings.TrimSpace(name[idx+1:]), prefix
 		}
 	}
