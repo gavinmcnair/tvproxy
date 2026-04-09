@@ -88,7 +88,7 @@ func main() {
 		log.Fatal().Err(err).Msg("failed to seed client defaults")
 	}
 
-	streamStore := store.NewStreamStore(filepath.Join(dataDir, "streams.gob"), log)
+	streamStore := store.NewIndexedStreamStore(dataDir, filepath.Join(dataDir, "streams.gob"), log)
 	epgStore := store.NewEPGStore(filepath.Join(dataDir, "epg.gob"), log)
 	{
 		streamErr := make(chan error, 1)
