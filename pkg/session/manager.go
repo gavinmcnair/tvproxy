@@ -51,17 +51,25 @@ type Manager struct {
 	sessions    map[string]*Session
 	config      *config.Config
 	httpClient  *http.Client
+	wgClient    *http.Client
 	probeCache  store.ProbeCache
 	onCleanup   func(channelID string)
 	log         zerolog.Logger
 	mu          sync.RWMutex
 }
 
+func (m *Manager) clientForSession(s *Session) *http.Client {
+	if s.UseWireGuard && m.wgClient != nil {
+		return m.wgClient
+	}
+	return m.httpClient
+}
+
 func (m *Manager) SetOnCleanup(fn func(channelID string)) {
 	m.onCleanup = fn
 }
 
-func NewManager(cfg *config.Config, httpClient *http.Client, probeCache store.ProbeCache, log zerolog.Logger) *Manager {
+func NewManager(cfg *config.Config, httpClient *http.Client, wgClient *http.Client, probeCache store.ProbeCache, log zerolog.Logger) *Manager {
 	if httpClient == nil {
 		httpClient = http.DefaultClient
 	}
@@ -69,6 +77,7 @@ func NewManager(cfg *config.Config, httpClient *http.Client, probeCache store.Pr
 		sessions:   make(map[string]*Session),
 		config:     cfg,
 		httpClient: httpClient,
+		wgClient:   wgClient,
 		probeCache: probeCache,
 		log:        log.With().Str("component", "session_manager").Logger(),
 	}
@@ -514,6 +523,18 @@ func (m *Manager) Shutdown() {
 	m.log.Info().Int("sessions", len(sessions)).Msg("session manager shutdown complete")
 }
 
+func (m *Manager) probeViaClient(ctx context.Context, client *http.Client, url string) (*ffmpeg.ProbeResult, error) {
+	resp, err := httputil.Fetch(ctx, client, m.config, url)
+	if err != nil {
+		return nil, fmt.Errorf("probe upstream: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("probe upstream returned %d", resp.StatusCode)
+	}
+	return ffmpeg.ProbeReader(ctx, resp.Body)
+}
+
 func (m *Manager) ProbeURL(ctx context.Context, url string) (*ffmpeg.ProbeResult, error) {
 	resp, err := httputil.Fetch(ctx, m.httpClient, m.config, url)
 	if err != nil {
@@ -549,10 +570,17 @@ func (m *Manager) probeAsync(s *Session, streamURL string) {
 
 	var result *ffmpeg.ProbeResult
 	var err error
-	result, err = ffmpeg.Probe(probeCtx, streamURL, m.config.UserAgent)
+	client := m.clientForSession(s)
+
+	if s.UseWireGuard && ffmpeg.IsHTTPURL(streamURL) {
+		m.log.Debug().Str("session_id", s.ID).Msg("probing via wireguard pipe")
+		result, err = m.probeViaClient(probeCtx, client, streamURL)
+	} else {
+		result, err = ffmpeg.Probe(probeCtx, streamURL, m.config.UserAgent)
+	}
 	if (err != nil || result == nil || result.Duration == 0) && ffmpeg.IsHTTPURL(streamURL) {
 		m.log.Debug().Str("session_id", s.ID).Msg("direct probe incomplete, trying HTTP pipe probe")
-		pipeResult, pipeErr := m.ProbeURL(probeCtx, streamURL)
+		pipeResult, pipeErr := m.probeViaClient(probeCtx, client, streamURL)
 		if pipeErr == nil && pipeResult != nil {
 			if result == nil || (pipeResult.Video != nil && result.Video == nil) {
 				result = pipeResult
@@ -662,7 +690,7 @@ func (m *Manager) run(ctx context.Context, s *Session, command string, args []st
 	var httpResp *http.Response
 	if ffmpeg.IsHTTPURL(inputURL) && s.UseWireGuard {
 		m.log.Info().Str("session_id", s.ID).Str("url", inputURL).Msg("routing upstream via wireguard")
-		resp, err := httputil.Fetch(ctx, m.httpClient, m.config, inputURL)
+		resp, err := httputil.Fetch(ctx, m.clientForSession(s), m.config, inputURL)
 		if err != nil {
 			m.log.Error().Err(err).Str("session_id", s.ID).Str("url", inputURL).Msg("upstream connection failed")
 			s.setError(fmt.Errorf("upstream connection failed: %w", err))

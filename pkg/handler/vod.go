@@ -514,9 +514,23 @@ func (h *VODHandler) HLSMaster(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	var duration float64
+	for i := 0; i < 20; i++ {
+		_, _, d := h.vodService.GetProbeInfo(channelID)
+		if d > 0 {
+			duration = d
+			break
+		}
+		if sess.Duration > 0 {
+			duration = sess.Duration
+			break
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+
 	var durationTicks int64
-	if sess.Duration > 0 {
-		durationTicks = int64(sess.Duration * 10000000)
+	if duration > 0 {
+		durationTicks = int64(duration * 10000000)
 	}
 
 	streamURL := sess.StreamURL
@@ -538,7 +552,7 @@ func (h *VODHandler) HLSMaster(w http.ResponseWriter, r *http.Request) {
 	if profile.AudioCodec == "" {
 		profile.AudioCodec = "aac"
 	}
-	hlsSess := h.hlsManager.GetOrCreateSession(channelID, streamURL, 6, durationTicks, sess.Duration == 0, profile)
+	hlsSess := h.hlsManager.GetOrCreateSession(channelID, streamURL, 6, durationTicks, duration == 0, profile)
 	playlistURL := fmt.Sprintf("/vod/%s/hls/playlist.m3u8", channelID)
 	hls.ServeMasterPlaylist(w, hlsSess, playlistURL)
 }

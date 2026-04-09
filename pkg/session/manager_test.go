@@ -19,7 +19,7 @@ func testManager(t *testing.T) (*Manager, string) {
 	dir := t.TempDir()
 	log := zerolog.New(os.Stderr).Level(zerolog.Disabled)
 	cfg := &config.Config{}
-	m := NewManager(cfg, nil, nil, log)
+	m := NewManager(cfg, nil, nil, nil, log)
 	t.Cleanup(func() { m.Shutdown() })
 	return m, dir
 }

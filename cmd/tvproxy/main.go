@@ -208,7 +208,8 @@ func main() {
 	outputService := service.NewOutputService(channelStore, channelGroupStore, epgStore, logoService, cfg, log)
 	recordingStore := store.NewRecordingStore(cfg.RecordDir, log)
 	satipService := service.NewSatIPService(satipSourceStore, streamStore, channelStore, recordingStore, log)
-	sessionMgr := session.NewManager(cfg, wgHTTPClient, recordingStore, log)
+	wgMultiClient := wgMultiService.HTTPClient()
+	sessionMgr := session.NewManager(cfg, wgHTTPClient, wgMultiClient, recordingStore, log)
 	vodService := service.NewVODService(channelStore, streamStore, profileStore, settingsService, sessionMgr, recordingStore, activityService, cfg, log)
 	vodService.RecoverRecordings(ctx)
 	schedulerService := service.NewSchedulerService(scheduledRecStore, channelStore, vodService, cfg, log)
@@ -216,7 +217,7 @@ func main() {
 
 	authMW := middleware.NewAuthMiddleware(authService, activityService, cfg.APIKey, adminUserID)
 
-	hlsManager := hls.NewManager(hls.TempDir(), wgHTTPClient, cfg, log)
+	hlsManager := hls.NewManager(hls.TempDir(), wgMultiClient, cfg, log)
 	go hlsManager.StartCleanupWorker(ctx)
 
 	exportService := service.NewExportService(channelStore, channelGroupStore, profileStore, clientStore, m3uAccountStore, epgSourceStore, settingsService, authService)
