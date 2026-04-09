@@ -137,7 +137,7 @@ func simplifyFrameRate(rate string) string {
 	return strconv.FormatFloat(fps, 'f', 2, 64)
 }
 
-func Probe(ctx context.Context, url, userAgent string) (*ProbeResult, error) {
+func Probe(ctx context.Context, url, userAgent string, extraHeaders ...string) (*ProbeResult, error) {
 	s := settings()
 	ctx, cancel := context.WithTimeout(ctx, s.ProbeTimeout)
 	defer cancel()
@@ -145,6 +145,13 @@ func Probe(ctx context.Context, url, userAgent string) (*ProbeResult, error) {
 	args := probeArgs(s, url)
 	if userAgent != "" {
 		args = append(args, "-user_agent", userAgent)
+	}
+	if len(extraHeaders) > 0 {
+		var headerStr string
+		for _, h := range extraHeaders {
+			headerStr += h + "\r\n"
+		}
+		args = append(args, "-headers", headerStr)
 	}
 	args = append(args, url)
 

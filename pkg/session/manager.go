@@ -472,6 +472,8 @@ func (m *Manager) GetOrCreateWithConsumer(ctx context.Context, opts StartOpts, c
 	m.sessions[opts.ChannelID] = s
 	m.mu.Unlock()
 
+	go m.probeAsync(s, opts.StreamURL)
+
 	if !opts.MetadataOnly {
 		args := m.buildArgs(opts.Args, opts.StreamURL, filePath, opts.UseWireGuard)
 		command := opts.Command
@@ -480,7 +482,6 @@ func (m *Manager) GetOrCreateWithConsumer(ctx context.Context, opts StartOpts, c
 		}
 
 		go m.run(sessionCtx, s, command, args, opts.StreamURL)
-		go m.probeAsync(s, opts.StreamURL)
 		if strings.HasPrefix(opts.StreamURL, "rtsp://") || strings.HasPrefix(opts.StreamURL, "rtsps://") {
 			go m.logSignalAsync(s.ID, opts.ChannelID, opts.StreamURL)
 		}
@@ -572,12 +573,11 @@ func (m *Manager) probeAsync(s *Session, streamURL string) {
 	var err error
 	client := m.clientForSession(s)
 
-	if s.UseWireGuard && ffmpeg.IsHTTPURL(streamURL) {
-		m.log.Debug().Str("session_id", s.ID).Msg("probing via wireguard pipe")
-		result, err = m.probeViaClient(probeCtx, client, streamURL)
-	} else {
-		result, err = ffmpeg.Probe(probeCtx, streamURL, m.config.UserAgent)
+	var extraHeaders []string
+	if m.config.BypassHeader != "" && m.config.BypassSecret != "" {
+		extraHeaders = append(extraHeaders, m.config.BypassHeader+": "+m.config.BypassSecret)
 	}
+	result, err = ffmpeg.Probe(probeCtx, streamURL, m.config.UserAgent, extraHeaders...)
 	if (err != nil || result == nil || result.Duration == 0) && ffmpeg.IsHTTPURL(streamURL) {
 		m.log.Debug().Str("session_id", s.ID).Msg("direct probe incomplete, trying HTTP pipe probe")
 		pipeResult, pipeErr := m.probeViaClient(probeCtx, client, streamURL)
