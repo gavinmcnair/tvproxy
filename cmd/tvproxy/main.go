@@ -227,6 +227,16 @@ func main() {
 	wgMultiClient := wgMultiService.HTTPClient()
 	m3uService.SetWGClient(wgMultiClient)
 	sessionMgr := session.NewManager(cfg, wgHTTPClient, wgMultiClient, recordingStore, log)
+
+	if wgMultiClient != nil {
+		wgProxy, err := session.NewWGProxy(wgMultiClient, cfg, log)
+		if err != nil {
+			log.Error().Err(err).Msg("failed to start wireguard proxy")
+		} else {
+			log.Info().Int("port", wgProxy.Port()).Msg("wireguard proxy available for testing: curl http://127.0.0.1:{port}/?url=...")
+		}
+	}
+
 	vodService := service.NewVODService(channelStore, streamStore, profileStore, sourceProfileStore, m3uAccountStore, satipSourceStore, settingsService, sessionMgr, recordingStore, activityService, cfg, log)
 	vodService.RecoverRecordings(ctx)
 	schedulerService := service.NewSchedulerService(scheduledRecStore, channelStore, vodService, cfg, log)
