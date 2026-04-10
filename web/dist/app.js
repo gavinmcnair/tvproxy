@@ -784,8 +784,8 @@
     { id: 'channels', label: 'Channels', icon: '\ud83d\udcfa', tip: 'Define your custom channels and assign streams and EPG data' },
     { id: 'movies', label: 'Movies', icon: '\uD83C\uDFAC', tip: 'Browse movie library' },
     { id: 'tv-series', label: 'TV Series', icon: '\uD83D\uDCFA', tip: 'Browse TV series library' },
-    { id: 'iptv-movies', label: 'IPTV Movies', icon: '\uD83C\uDF1F', tip: 'Browse IPTV movie library' },
-    { id: 'iptv-series', label: 'IPTV Series', icon: '\uD83D\uDCE1', tip: 'Browse IPTV TV series' },
+    { id: 'iptv-movies', label: 'IPTV Movies', icon: '\uD83C\uDF1F', tip: 'Browse IPTV movie library', xtreamOnly: true },
+    { id: 'iptv-series', label: 'IPTV Series', icon: '\uD83D\uDCE1', tip: 'Browse IPTV TV series', xtreamOnly: true },
     { id: 'epg-guide', label: 'EPG Guide', icon: '\ud83d\udcf0', tip: 'TV programme guide grid for your channels' },
     { id: 'recordings', label: 'Recordings', icon: '\ud83d\udd34', tip: 'View active and completed recordings', iconStyle: 'font-size:0.75em' },
     { id: 'favorites', label: 'Favorites', icon: '\u2B50', tip: 'Your favorite channels and streams' },
@@ -2163,6 +2163,7 @@
       api.get('/api/m3u/accounts').catch(() => []),
       api.get('/api/satip/sources').catch(() => []),
     ]);
+    state._hasXtream = accounts.some(function(a) { return a.type === 'xtream'; });
     navItems = navItems.filter(n => !n.id || (!n.id.startsWith('streams-') && !n.id.startsWith('satip-streams-')));
     Object.keys(pages).forEach(k => { if ((k.startsWith('streams-') || k.startsWith('satip-streams-')) && k !== 'stream-profiles') delete pages[k]; });
     const idx = navItems.findIndex(n => n.section === 'Streams');
@@ -2209,7 +2210,9 @@
 
   function renderSidebar() {
     const isAdmin = state.user && state.user.is_admin;
+    var hasXtream = !!state._hasXtream;
     const visible = navItems.filter((n, i, arr) => {
+      if (n.xtreamOnly && !hasXtream) return false;
       if (n.adminOnly && !isAdmin) return false;
       if (n.section) {
         const next = arr.slice(i + 1).find(x => !x.adminOnly || isAdmin);
