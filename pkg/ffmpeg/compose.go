@@ -1,6 +1,8 @@
 package ffmpeg
 
 import (
+	"strings"
+
 	"github.com/gavinmcnair/tvproxy/pkg/defaults"
 )
 
@@ -115,6 +117,10 @@ func buildVFChain(hwaccel, videoCodec string, deinterlace bool) []string {
 	}
 
 	var filters []string
+
+	if hwaccel == "vaapi" && strings.Contains(videoCodec, "h264") {
+		filters = append(filters, "scale_vaapi=format=nv12")
+	}
 
 	switch {
 	case hwaccel == "vaapi" && deinterlace:

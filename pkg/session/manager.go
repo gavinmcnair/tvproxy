@@ -213,15 +213,23 @@ func (m *Manager) buildDualOutputArgs(hlsDir, mp4Path string, pipeInput bool, op
 		venc = "libx264"
 	}
 	args = append(args, "-c:v", venc)
+
+	var vfParts []string
+	if hwaccel == "vaapi" && strings.Contains(venc, "h264") {
+		vfParts = append(vfParts, "scale_vaapi=format=nv12")
+	}
 	if opts.SourceDeinterlace && venc != "copy" {
 		switch hwaccel {
 		case "vaapi":
-			args = append(args, "-vf", "deinterlace_vaapi")
+			vfParts = append(vfParts, "deinterlace_vaapi")
 		case "qsv":
-			args = append(args, "-vf", "vpp_qsv=deinterlace=2")
+			vfParts = append(vfParts, "vpp_qsv=deinterlace=2")
 		default:
-			args = append(args, "-vf", "yadif")
+			vfParts = append(vfParts, "yadif")
 		}
+	}
+	if len(vfParts) > 0 {
+		args = append(args, "-vf", strings.Join(vfParts, ","))
 	}
 	if opts.SourceFPSMode != "" && venc != "copy" {
 		args = append(args, "-fps_mode", opts.SourceFPSMode)

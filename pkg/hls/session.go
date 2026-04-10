@@ -224,15 +224,22 @@ func (s *Session) buildFFmpegArgs(startNumber int, startTimeTicks int64, pipeHTT
 		args = append(args, "-start_at_zero")
 	}
 
+	var hlsVF []string
+	if hwaccel == "vaapi" && strings.Contains(videoCodec, "h264") {
+		hlsVF = append(hlsVF, "scale_vaapi=format=nv12")
+	}
 	if s.Profile.Deinterlace && videoCodec != "copy" {
 		switch hwaccel {
 		case "vaapi":
-			args = append(args, "-vf", "deinterlace_vaapi")
+			hlsVF = append(hlsVF, "deinterlace_vaapi")
 		case "qsv":
-			args = append(args, "-vf", "vpp_qsv=deinterlace=2")
+			hlsVF = append(hlsVF, "vpp_qsv=deinterlace=2")
 		default:
-			args = append(args, "-vf", "yadif")
+			hlsVF = append(hlsVF, "yadif")
 		}
+	}
+	if len(hlsVF) > 0 {
+		args = append(args, "-vf", strings.Join(hlsVF, ","))
 	}
 
 	args = append(args, "-c:a", audioCodec)

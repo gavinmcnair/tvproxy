@@ -170,7 +170,7 @@ func TestBuild(t *testing.T) {
 		{
 			name: "VAAPI h264 HTTP with hwupload filter",
 			opts: BuildOptions{StreamURL: "http://example.com/stream", HWAccel: "vaapi", VideoCodec: "h264", Container: "mpegts"},
-			want: "-hide_banner -loglevel warning -nostdin -hwaccel vaapi -hwaccel_device /dev/dri/renderD128 -hwaccel_output_format vaapi -analyzeduration 1000000 -probesize 1000000 -err_detect ignore_err -fflags +genpts+discardcorrupt -i {input} -map 0:v:0? -map 0:a:0? -max_muxing_queue_size 4096 -c:v h264_vaapi -g 50 -keyint_min 50 -c:a aac -ac 2 -b:a 192k -output_ts_offset 0 -f mpegts pipe:1",
+			want: "-hide_banner -loglevel warning -nostdin -hwaccel vaapi -hwaccel_device /dev/dri/renderD128 -hwaccel_output_format vaapi -analyzeduration 1000000 -probesize 1000000 -err_detect ignore_err -fflags +genpts+discardcorrupt -i {input} -map 0:v:0? -map 0:a:0? -max_muxing_queue_size 4096 -vf scale_vaapi=format=nv12 -c:v h264_vaapi -g 50 -keyint_min 50 -c:a aac -ac 2 -b:a 192k -output_ts_offset 0 -f mpegts pipe:1",
 		},
 		{
 			name: "VAAPI h265 HTTP with hwupload filter",
@@ -200,7 +200,7 @@ func TestBuild(t *testing.T) {
 		{
 			name: "VAAPI h264 auto-detect interlaced adds yadif before hwupload",
 			opts: BuildOptions{StreamURL: "http://example.com/stream", HWAccel: "vaapi", Probe: probeH264Interlaced, VideoCodec: "copy", Container: "mpegts"},
-			want: "-hide_banner -loglevel warning -nostdin -hwaccel vaapi -hwaccel_device /dev/dri/renderD128 -hwaccel_output_format vaapi -analyzeduration 1000000 -probesize 1000000 -err_detect ignore_err -fflags +genpts+discardcorrupt -i {input} -map 0:v:0? -map 0:a:0? -max_muxing_queue_size 4096 -vf deinterlace_vaapi -c:v h264_vaapi -g 50 -keyint_min 50 -c:a copy -output_ts_offset 0 -f mpegts pipe:1",
+			want: "-hide_banner -loglevel warning -nostdin -hwaccel vaapi -hwaccel_device /dev/dri/renderD128 -hwaccel_output_format vaapi -analyzeduration 1000000 -probesize 1000000 -err_detect ignore_err -fflags +genpts+discardcorrupt -i {input} -map 0:v:0? -map 0:a:0? -max_muxing_queue_size 4096 -vf scale_vaapi=format=nv12,deinterlace_vaapi -c:v h264_vaapi -g 50 -keyint_min 50 -c:a copy -output_ts_offset 0 -f mpegts pipe:1",
 		},
 		{
 			name: "QSV hevc auto-detect interlaced uses vpp_qsv",
