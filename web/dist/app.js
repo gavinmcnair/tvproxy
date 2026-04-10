@@ -6399,7 +6399,7 @@
               }
             }).catch(function() {});
           }, 3000);
-          headerRight.insertBefore(iptvMovieSyncSpan, headerRight.firstChild);
+          headerRight.appendChild(iptvMovieSyncSpan);
 
           var langSelect = h('select', { style: 'padding:4px 8px;border-radius:8px;border:1px solid var(--border);background:var(--bg-input);color:var(--text-primary);font-size:12px;cursor:pointer;' });
           langSelect.appendChild(h('option', { value: '' }, 'All Languages'));
