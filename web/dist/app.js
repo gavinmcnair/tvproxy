@@ -7337,7 +7337,10 @@
             }
           } else if (profiles.length > 0) {
             overviewRef = h('div', { style: 'background:var(--bg-card);border:1px solid var(--border);border-radius:8px;padding:8px 16px;margin-bottom:16px;' });
-            (multiStatus.profiles || []).forEach(function(ps) {
+            var statusByName = {};
+            (multiStatus.profiles || []).forEach(function(ps) { statusByName[ps.name] = ps; });
+            var profileStatuses = profiles.map(function(p) { return statusByName[p.name] || { id: p.id, name: p.name, state: 'disconnected' }; }).filter(function(ps) { return ps.name !== 'Default'; });
+            profileStatuses.forEach(function(ps) {
               var line = renderProfileLine(ps, poolStatus);
               line.style.cursor = 'pointer';
               line.onclick = function() { selectedProfileId = ps.id; renderPage(); };
