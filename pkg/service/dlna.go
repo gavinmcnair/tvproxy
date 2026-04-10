@@ -458,11 +458,19 @@ func (s *DLNAService) browseFavorites(ctx context.Context, baseURL, browseFlag s
 		return soapBrowseResponse(xmlutil.XmlEscape(didl), 1, 1), nil
 	}
 
+	if s.favoriteStore == nil {
+		return soapBrowseResponse(xmlutil.XmlEscape(emptyDIDL), 0, 0), nil
+	}
 	userID := ""
 	if user != nil {
 		userID = user.ID
 	}
-	if userID == "" || s.favoriteStore == nil {
+	if userID == "" {
+		if admin, err := s.userStore.GetFirstAdmin(ctx); err == nil && admin != nil {
+			userID = admin.ID
+		}
+	}
+	if userID == "" {
 		return soapBrowseResponse(xmlutil.XmlEscape(emptyDIDL), 0, 0), nil
 	}
 
