@@ -5796,8 +5796,23 @@
           var topbarRight = document.getElementById('topbar-right');
           if (topbarRight) {
             topbarRight.innerHTML = '';
+            var syncEl = h('span', { id: 'topbar-sync', style: 'display:none;color:var(--accent)' });
+            topbarRight.appendChild(syncEl);
             countSpan = h('span', { style: 'color:var(--text-muted)' }, totalCount + ' titles');
             topbarRight.appendChild(countSpan);
+            var syncPollId = setInterval(function() {
+              if (!document.getElementById('topbar-sync')) { clearInterval(syncPollId); return; }
+              api.get('/api/tmdb/sync').then(function(s) {
+                if (s.syncing && s.total > 0) {
+                  var pct = Math.round(s.completed / s.total * 100);
+                  syncEl.textContent = 'Syncing ' + pct + '%';
+                  syncEl.style.display = '';
+                } else {
+                  syncEl.style.display = 'none';
+                  if (!s.syncing) clearInterval(syncPollId);
+                }
+              }).catch(function() {});
+            }, 3000);
           }
 
           var headerRight = h('div', { style: 'display:flex;align-items:center;gap:12px;margin-bottom:8px;' });
@@ -6386,24 +6401,6 @@
           if (decadeList.length > 0) dropdowns.push({ label: 'Decades', options: decadeList, keyPrefix: 'decade_', group: 'decade' });
           if (genreNames.length > 0) dropdowns.push({ label: 'Genres', options: genreNames, keyPrefix: 'genre_', group: 'genre' });
           var headerRight = mg.buildFilterBar(container, pills, dropdowns, displayItems.length);
-
-          var iptvMovieSyncSpan = h('span', { id: 'tmdb-sync-iptv-movies', style: 'display:none;font-size:0.85em;color:var(--accent)' });
-          var iptvMovieSyncPoll = setInterval(function() {
-            if (!document.getElementById('tmdb-sync-iptv-movies')) { clearInterval(iptvMovieSyncPoll); return; }
-            api.get('/api/tmdb/sync').then(function(s) {
-              if (s.syncing && s.total > 0) {
-                var pct = Math.round(s.completed / s.total * 100);
-                iptvMovieSyncSpan.textContent = 'Syncing artwork ' + pct + '% (' + s.completed + '/' + s.total + ')';
-                iptvMovieSyncSpan.style.display = '';
-              } else {
-                iptvMovieSyncSpan.style.display = 'none';
-                if (!s.syncing) clearInterval(iptvMovieSyncPoll);
-              }
-            }).catch(function() {});
-          }, 3000);
-          if (topbarRight) {
-            topbarRight.insertBefore(iptvMovieSyncSpan, topbarRight.firstChild);
-          }
 
           var langSelect = h('select', { style: 'padding:4px 8px;border-radius:8px;border:1px solid var(--border);background:var(--bg-input);color:var(--text-primary);font-size:12px;cursor:pointer;' });
           langSelect.appendChild(h('option', { value: '' }, 'All Languages'));
