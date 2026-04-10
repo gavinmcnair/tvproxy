@@ -1,27 +1,44 @@
 # TVProxy
 
-Media stream management and proxy server written in Go. Consolidates streaming sources, manages channels and EPG data, transcodes with hardware acceleration, and integrates with media servers via HDHomeRun emulation and Jellyfin API.
+A media streaming hub that connects your content sources to your devices. Watch on Jellyfin clients, Plex, DLNA players (including VR headsets like Meta Quest), smart TVs, or any browser — TVProxy handles the transcoding, format negotiation, and delivery automatically.
 
-## Features
+Written in Go. Single binary. No external dependencies.
 
-- **Source Stream Profiles** — Define expected codecs, transport and ffmpeg input settings per source. Supports HTTP, RTSP and local servers.
-- **Client Stream Profiles** — Configure output codec, container and delivery per client. Auto copy/transcode based on source vs client comparison.
-- **Hardware Transcoding** — Intel QSV, VA-API (Arc), NVIDIA NVENC, Apple VideoToolbox. H.264, H.265/HEVC, AV1 output.
-- **Live Playback** — Single ffmpeg dual-output: HLS segments for browser playback + MP4 recording simultaneously. One upstream connection, multiple consumers.
-- **VOD Playback** — Seekable HLS with hardware transcoding. WireGuard streams routed through localhost proxy for range request support.
-- **Recording** — Click to record during live playback. Scheduled recordings via EPG. Recordings preserved on disk as MP4.
-- **Channel Management** — Multi-stream failover, channel groups, per-channel profile assignment.
-- **EPG Support** — XMLTV import, auto-match to channels, programme guide grid in the web UI.
-- **HDHomeRun Emulation** — Virtual HDHR devices for native Plex/Emby/Jellyfin DVR integration with SSDP discovery.
-- **Jellyfin API** — Native Jellyfin server emulation on port 8096 for direct client access.
-- **DLNA** — MediaServer for network players (VR headsets, smart TVs, etc).
-- **Client Detection** — Auto-detect players via HTTP headers and assign appropriate output profiles.
-- **SAT>IP** — DVB terrestrial/satellite/cable tuner integration via SAT>IP protocol.
-- **WireGuard VPN** — Built-in WireGuard tunnel with per-source routing.
-- **TMDB Integration** — Automatic poster art, metadata, and episode info from The Movie Database.
-- **Web Interface** — Built-in SPA with EPG guide, media libraries, in-browser HLS playback, activity monitoring.
-- **Authentication** — JWT auth with invite tokens, multi-user support, role-based access.
-- **Single Binary** — Everything including the web UI embedded in one Go binary. All data stored in JSON files.
+## What It Does
+
+TVProxy sits between your media sources and your playback devices. It ingests streams from multiple sources, manages channels and EPG data, and serves content to clients in whatever format they need — transcoding with hardware acceleration when required, passing through untouched when possible.
+
+### Client Integrations
+
+- **Jellyfin** — Full Jellyfin API server on port 8096. Connect any Jellyfin client directly — phones, tablets, TVs, Meta Quest, Fire Stick, Apple TV.
+- **DLNA** — MediaServer for network players. Works with VR headsets (Quest via Skybox/ALVR), smart TVs (LG, Samsung, Panasonic), and any UPnP/DLNA player.
+- **HDHomeRun** — Emulates HDHR devices with SSDP discovery for native Plex/Emby/Jellyfin DVR integration. Multiple virtual tuners, each on its own port.
+- **Plex/Emby** — Via HDHomeRun emulation. Shows up as a native DVR source with full guide data.
+- **Browser** — Built-in HLS player with live TV, VOD, recording, and EPG guide.
+
+### Source Integrations
+
+- **M3U / Xtream Codes** — Import playlists or connect to Xtream APIs. Automatic periodic refresh.
+- **SAT>IP** — DVB-T/T2, DVB-S/S2, DVB-C tuner integration via SAT>IP protocol.
+- **TVProxy-streams** — Companion server for serving local media libraries with inline probe data.
+- **WireGuard VPN** — Built-in tunnel with per-source routing. Transparent to ffmpeg via localhost proxy.
+
+### Transcoding & Profiles
+
+- **Source Stream Profiles** — Define expected codecs, transport and ffmpeg input settings per source.
+- **Client Stream Profiles** — Define what each client needs. The system compares source vs client and automatically decides copy, remux, or transcode.
+- **Hardware Acceleration** — Intel QSV, VA-API (Arc A380 etc), NVIDIA NVENC, Apple VideoToolbox. H.264, H.265/HEVC, AV1 output.
+- **Live Dual-Output** — Single ffmpeg writes both HLS (for playback) and MP4 (for recording) simultaneously.
+- **VOD Seeking** — Seekable HLS with hardware transcoding for on-demand content.
+
+### Management
+
+- **Channels** — Multi-stream failover, groups, per-channel profile assignment.
+- **EPG** — XMLTV import, auto-match to channels, programme guide grid.
+- **Recording** — One-click recording during live playback. Scheduled recordings via EPG.
+- **TMDB** — Automatic poster art, metadata, ratings, and episode info.
+- **Activity** — Real-time viewer tracking and session monitoring.
+- **Multi-User** — JWT auth, invite tokens, role-based access.
 
 ## Quick Start
 
