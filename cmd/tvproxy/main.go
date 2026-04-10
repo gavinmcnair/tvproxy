@@ -228,15 +228,16 @@ func main() {
 	m3uService.SetWGClient(wgMultiClient)
 	sessionMgr := session.NewManager(cfg, wgHTTPClient, wgMultiClient, recordingStore, log)
 
+	wgPool := session.NewWGPool(log)
 	for profileID, client := range wgMultiService.ConnectedTransports() {
 		name := wgMultiService.ProfileName(profileID)
-		proxy, err := session.NewWGProxy(client, cfg, log)
-		if err != nil {
+		if err := wgPool.AddProxy(profileID, name, client, cfg); err != nil {
 			log.Error().Err(err).Str("profile", name).Msg("failed to start wireguard proxy")
-			continue
 		}
-		log.Info().Str("profile", name).Int("port", proxy.Port()).Msgf("wireguard proxy: curl \"http://127.0.0.1:%d/?url=...\"", proxy.Port())
 	}
+	wgPool.AddDirect("default", "Direct", cfg, log)
+	m3uService.SetWGClient(wgPool.Client())
+	log.Info().Int("proxies", wgPool.Count()).Msg("wireguard pool active with failover")
 
 	vodService := service.NewVODService(channelStore, streamStore, profileStore, sourceProfileStore, m3uAccountStore, satipSourceStore, settingsService, sessionMgr, recordingStore, activityService, cfg, log)
 	vodService.RecoverRecordings(ctx)
@@ -245,10 +246,14 @@ func main() {
 
 	authMW := middleware.NewAuthMiddleware(authService, activityService, cfg.APIKey, adminUserID)
 
-	hlsManager := hls.NewManager(hls.TempDir(), wgMultiClient, cfg, log)
-	if wgMultiClient != nil {
+	wgClientForSessions := wgMultiClient
+	if wgPool.Count() > 0 {
+		wgClientForSessions = wgPool.Client()
+	}
+	hlsManager := hls.NewManager(hls.TempDir(), wgClientForSessions, cfg, log)
+	if wgClientForSessions != nil {
 		hlsManager.WGProxyFunc = func(streamURL string) string {
-			proxy, err := sessionMgr.WGProxy("default", wgMultiClient, cfg, log)
+			proxy, err := sessionMgr.WGProxy("default", wgClientForSessions, cfg, log)
 			if err != nil {
 				log.Error().Err(err).Msg("failed to create wg proxy for hls")
 				return streamURL

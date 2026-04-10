@@ -97,6 +97,28 @@ func (p *WGProxy) Port() int {
 	return p.port
 }
 
+func (p *WGProxy) client() *http.Client {
+	return &http.Client{
+		Transport: &proxyTransport{proxyURL: fmt.Sprintf("http://127.0.0.1:%d", p.port)},
+	}
+}
+
+type proxyTransport struct {
+	proxyURL string
+}
+
+func (t *proxyTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	targetURL := req.URL.String()
+	proxyReq, err := http.NewRequestWithContext(req.Context(), req.Method, t.proxyURL+"/?url="+url.QueryEscape(targetURL), req.Body)
+	if err != nil {
+		return nil, err
+	}
+	for k, v := range req.Header {
+		proxyReq.Header[k] = v
+	}
+	return http.DefaultClient.Do(proxyReq)
+}
+
 func (p *WGProxy) Stop() {
 	p.server.Shutdown(context.Background())
 	p.log.Info().Msg("wireguard proxy stopped")
