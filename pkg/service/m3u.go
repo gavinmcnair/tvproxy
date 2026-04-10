@@ -68,60 +68,6 @@ func (s *M3UService) Log() *zerolog.Logger { return &s.log }
 
 func (s *M3UService) SetXtreamCache(c *xtream.Cache) { s.xtreamCache = c }
 
-func (s *M3UService) ResumeSeriesSync(ctx context.Context) {
-	s.log.Info().Msg("resume series sync: starting")
-	if s.xtreamCache == nil {
-		s.log.Info().Msg("resume series sync: no xtream cache, skipping")
-		return
-	}
-	accounts, err := s.m3uAccountStore.List(ctx)
-	if err != nil {
-		s.log.Warn().Err(err).Msg("resume series sync: failed to list accounts")
-		return
-	}
-	for _, acct := range accounts {
-		if acct.Type != "xtream" || !acct.IsEnabled {
-			continue
-		}
-		s.log.Info().Str("account", acct.Name).Msg("checking series sync status")
-		xtreamTimeout := s.config.Settings.Network.XtreamAPITimeout
-		if xtreamTimeout <= 0 {
-			xtreamTimeout = 30 * time.Second
-		}
-		client := xtream.NewClient(acct.URL, acct.Username, acct.Password, s.config.UserAgent, s.config.BypassHeader, s.config.BypassSecret, xtreamTimeout, s.transportForAccount(&acct))
-
-		fetchCtx, fetchCancel := context.WithTimeout(ctx, 60*time.Second)
-		seriesList, err := client.GetSeries(fetchCtx)
-		fetchCancel()
-		if err != nil {
-			s.log.Warn().Err(err).Str("account", acct.Name).Msg("failed to fetch series list for sync resume")
-			continue
-		}
-
-		seriesWithEpisodes := make(map[string]bool)
-		existing, _ := s.streamStore.ListByAccountID(ctx, acct.ID)
-		for _, st := range existing {
-			if st.VODType == "series" && st.VODEpisode > 0 {
-				seriesWithEpisodes[st.VODSeries] = true
-			}
-		}
-
-		needSync := 0
-		for _, sr := range seriesList {
-			cleanName, _ := extractLanguage(sr.Name)
-			if !seriesWithEpisodes[cleanName] {
-				needSync++
-			}
-		}
-
-		if needSync > 0 {
-			s.log.Info().Str("account", acct.Name).Int("pending", needSync).Msg("resuming series sync")
-			a := acct
-			go s.syncXtreamSeries(&a, seriesList)
-		}
-	}
-}
-
 func (s *M3UService) CreateAccount(ctx context.Context, account *models.M3UAccount) error {
 	if err := s.m3uAccountStore.Create(ctx, account); err != nil {
 		return fmt.Errorf("creating m3u account: %w", err)
@@ -359,7 +305,6 @@ func (s *M3UService) refreshXtreamAccount(ctx context.Context, account *models.M
 	if s.xtreamCache != nil {
 		s.xtreamCache.Save()
 		s.logoService.QueuePrefetch(s.xtreamCache.PosterURLs())
-		go s.syncXtreamSeries(account, seriesList)
 	}
 	return s.upsertAndFinalize(ctx, account, streams, keepIDs)
 }
@@ -486,13 +431,6 @@ func (s *M3UService) upsertAndFinalize(ctx context.Context, account *models.M3UA
 		return fmt.Errorf("upserting streams: %w", err)
 	}
 
-	existing, _ := s.streamStore.ListByAccountID(ctx, account.ID)
-	for _, st := range existing {
-		if st.VODType == "series" && st.VODEpisode > 0 {
-			keepIDs = append(keepIDs, st.ID)
-		}
-	}
-
 	deletedIDs, err := s.streamStore.DeleteStaleByAccountID(ctx, account.ID, keepIDs)
 	if err != nil {
 		return fmt.Errorf("deleting stale streams: %w", err)
@@ -524,128 +462,6 @@ func (s *M3UService) upsertAndFinalize(ctx context.Context, account *models.M3UA
 	return nil
 }
 
-func (s *M3UService) syncXtreamSeries(account *models.M3UAccount, seriesList []xtream.Series) {
-	xtreamTimeout := s.config.Settings.Network.XtreamAPITimeout
-	client := xtream.NewClient(account.URL, account.Username, account.Password, s.config.UserAgent, s.config.BypassHeader, s.config.BypassSecret, xtreamTimeout, s.transportForAccount(account))
-
-	s.log.Info().Int("series", len(seriesList)).Msg("starting background xtream series sync")
-
-	ctx := context.Background()
-
-	seriesWithEpisodes := make(map[string]bool)
-	existing, _ := s.streamStore.ListByAccountID(ctx, account.ID)
-	for _, st := range existing {
-		if st.VODType == "series" && st.VODEpisode > 0 {
-			seriesWithEpisodes[st.VODSeries] = true
-		}
-	}
-
-	synced := 0
-	for _, sr := range seriesList {
-		if sm := s.xtreamCache.GetSeries(sr.SeriesID); sm != nil && len(sm.Seasons) > 0 {
-			cleanName, _ := extractLanguage(sr.Name)
-			if seriesWithEpisodes[cleanName] {
-				synced++
-				continue
-			}
-		}
-
-		info, err := client.GetSeriesInfo(ctx, sr.SeriesID)
-		if err != nil {
-			continue
-		}
-
-		sm := s.xtreamCache.GetSeries(sr.SeriesID)
-		if sm == nil {
-			continue
-		}
-		for _, rawSeason := range info.RawSeasons {
-			sm.Seasons = append(sm.Seasons, xtream.SeasonMeta{
-				SeasonNumber: rawSeason.SeasonNumber,
-				Name:         rawSeason.Name,
-				AirDate:      rawSeason.AirDate,
-				EpisodeCount: rawSeason.EpisodeCount,
-				CoverURL:     rawSeason.Cover,
-			})
-		}
-		s.xtreamCache.SetSeries(sr.SeriesID, sm)
-
-		cleanName, lang := extractLanguage(sr.Name)
-		if lang == "" {
-			lang = extractLangFromCategory(sr.CategoryName)
-		}
-
-		var episodeStreams []models.Stream
-		for seasonNum, episodes := range info.Seasons {
-			var season int
-			fmt.Sscanf(seasonNum, "%d", &season)
-			for _, ep := range episodes {
-				var epID int
-				fmt.Sscanf(ep.ID, "%d", &epID)
-				if epID == 0 {
-					continue
-				}
-				epSeason := season
-				if ep.Info.Season > 0 {
-					epSeason = ep.Info.Season
-				}
-				streamURL := client.GetSeriesStreamURL(epID, ep.ContainerExt)
-				hash := computeContentHash(streamURL)
-				id := deterministicStreamID(hash)
-
-				episodeStreams = append(episodeStreams, models.Stream{
-					ID:           id,
-					M3UAccountID: account.ID,
-					Name:         ep.Title,
-					URL:          streamURL,
-					Group:        sr.CategoryName,
-					Logo:         sr.Cover,
-					ContentHash:  hash,
-					VODType:      "series",
-					VODSeries:    cleanName,
-					VODSeason:    epSeason,
-					VODEpisode:   ep.EpisodeNum,
-					VODDuration:  float64(ep.Info.DurationSecs),
-					CacheType:    "xtream",
-					CacheKey:     epID,
-					Language:     lang,
-					UseWireGuard: account.UseWireGuard,
-					IsActive:     true,
-				})
-
-				s.xtreamCache.SetEpisode(epID, &xtream.EpisodeMeta{
-					ID:         epID,
-					EpisodeNum: ep.EpisodeNum,
-					Season:     epSeason,
-					Title:      ep.Title,
-					Duration:   ep.Info.DurationSecs,
-					Container:  ep.ContainerExt,
-					CoverURL:   ep.Info.MovieImage,
-				})
-			}
-		}
-
-		if len(episodeStreams) > 0 {
-			s.streamStore.BulkUpsert(ctx, episodeStreams)
-			placeholderHash := computeContentHash(fmt.Sprintf("xtream-series-%d", sr.SeriesID))
-			placeholderID := deterministicStreamID(placeholderHash)
-			s.streamStore.Delete(ctx, placeholderID)
-		}
-
-		synced++
-		if synced%200 == 0 {
-			s.xtreamCache.Save()
-			s.streamStore.Save()
-			s.log.Info().Int("synced", synced).Int("total", len(seriesList)).Msg("xtream series sync progress")
-		}
-		time.Sleep(100 * time.Millisecond)
-	}
-
-	s.xtreamCache.Save()
-	s.streamStore.Save()
-	s.logoService.QueuePrefetch(s.xtreamCache.PosterURLs())
-	s.log.Info().Int("synced", synced).Msg("xtream series sync complete")
-}
 
 func (s *M3UService) CleanupOrphanedStreams(ctx context.Context) {
 	accounts, err := s.m3uAccountStore.List(ctx)

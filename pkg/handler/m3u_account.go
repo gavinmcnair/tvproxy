@@ -39,8 +39,9 @@ func (h *M3UAccountHandler) Create(w http.ResponseWriter, r *http.Request) {
 		Password        string `json:"password"`
 		MaxStreams      int    `json:"max_streams"`
 		IsEnabled       bool   `json:"is_enabled"`
-		UseWireGuard    bool   `json:"use_wireguard"`
-		SourceProfileID string `json:"source_profile_id"`
+		UseWireGuard      bool   `json:"use_wireguard"`
+		UseXtreamMetadata bool   `json:"use_xtream_metadata"`
+		SourceProfileID   string `json:"source_profile_id"`
 		EnrollmentToken string `json:"enrollment_token"`
 		RefreshInterval int    `json:"refresh_interval"`
 	}
@@ -62,8 +63,9 @@ func (h *M3UAccountHandler) Create(w http.ResponseWriter, r *http.Request) {
 		Password:        req.Password,
 		MaxStreams:      req.MaxStreams,
 		IsEnabled:       req.IsEnabled,
-		UseWireGuard:    req.UseWireGuard,
-		SourceProfileID: req.SourceProfileID,
+		UseWireGuard:      req.UseWireGuard,
+		UseXtreamMetadata: req.UseXtreamMetadata,
+		SourceProfileID:   req.SourceProfileID,
 		RefreshInterval: req.RefreshInterval,
 	}
 
@@ -116,8 +118,9 @@ func (h *M3UAccountHandler) Update(w http.ResponseWriter, r *http.Request) {
 		Password        string `json:"password"`
 		MaxStreams      int    `json:"max_streams"`
 		IsEnabled       bool   `json:"is_enabled"`
-		UseWireGuard    bool   `json:"use_wireguard"`
-		SourceProfileID string `json:"source_profile_id"`
+		UseWireGuard      bool   `json:"use_wireguard"`
+		UseXtreamMetadata bool   `json:"use_xtream_metadata"`
+		SourceProfileID   string `json:"source_profile_id"`
 		EnrollmentToken string `json:"enrollment_token"`
 		RefreshInterval int    `json:"refresh_interval"`
 	}
@@ -140,6 +143,7 @@ func (h *M3UAccountHandler) Update(w http.ResponseWriter, r *http.Request) {
 	account.MaxStreams = req.MaxStreams
 	account.IsEnabled = req.IsEnabled
 	account.UseWireGuard = req.UseWireGuard
+	account.UseXtreamMetadata = req.UseXtreamMetadata
 	account.SourceProfileID = req.SourceProfileID
 	account.RefreshInterval = req.RefreshInterval
 

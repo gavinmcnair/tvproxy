@@ -4539,6 +4539,7 @@
         { key: 'password', label: 'Password', type: 'password', placeholder: 'Xtream password', showWhen: form => form.type === 'xtream' },
         { key: 'max_streams', label: 'Max Concurrent Streams', type: 'number', default: 1 },
         { key: 'use_wireguard', label: 'Route via WireGuard', type: 'checkbox' },
+        { key: 'use_xtream_metadata', label: 'Use Xtream for metadata', type: 'checkbox', default: false, help: 'Fetch detailed metadata from the Xtream API (slow, may trigger rate limits). Leave off to use TMDB instead.', showWhen: form => form.type === 'xtream' },
         { key: 'source_profile_id', label: 'Source Input Profile', type: 'async-select',
           loadOptions: () => api.get('/api/source-profiles'),
           valueKey: 'id', displayKey: 'name', allowEmpty: true, emptyLabel: 'None' },

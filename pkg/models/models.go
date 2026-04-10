@@ -26,8 +26,9 @@ type M3UAccount struct {
 	StreamCount     int        `json:"stream_count"`
 	RefreshInterval int        `json:"refresh_interval"`
 	LastError       string     `json:"last_error"`
-	UseWireGuard    bool       `json:"use_wireguard"`
-	SourceProfileID string     `json:"source_profile_id,omitempty"`
+	UseWireGuard      bool       `json:"use_wireguard"`
+	UseXtreamMetadata bool       `json:"use_xtream_metadata"`
+	SourceProfileID   string     `json:"source_profile_id,omitempty"`
 	TLSEnrolled     bool       `json:"tls_enrolled"`
 	ETag            string     `json:"etag,omitempty"`
 	CreatedAt       time.Time  `json:"created_at"`
