@@ -140,11 +140,11 @@ func resolveOutputCodec(probe *ProbeResult, videoCodec string) string {
 func hwInitFlags(hwaccel, outputCodec string) []string {
 	switch hwaccel {
 	case "qsv":
-		return []string{"-init_hw_device", "vaapi=va:/dev/dri/renderD128", "-init_hw_device", "qsv=qs@va", "-hwaccel", "qsv", "-hwaccel_output_format", "qsv"}
+		return []string{"-hwaccel", "qsv", "-hwaccel_device", "/dev/dri/renderD128", "-hwaccel_output_format", "qsv"}
 	case "nvenc":
 		return []string{"-hwaccel", "cuda", "-hwaccel_output_format", "cuda"}
 	case "vaapi":
-		return []string{"-init_hw_device", "vaapi=va:/dev/dri/renderD128", "-filter_hw_device", "va"}
+		return []string{"-hwaccel", "vaapi", "-hwaccel_device", "/dev/dri/renderD128", "-hwaccel_output_format", "vaapi"}
 	}
 	return nil
 }

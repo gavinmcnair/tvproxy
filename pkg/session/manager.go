@@ -175,9 +175,9 @@ func (m *Manager) buildDualOutputArgs(hlsDir, mp4Path string, pipeInput bool, op
 	if videoCodec != "copy" && hwaccel != "" && hwaccel != "none" && hwaccel != "default" {
 		switch hwaccel {
 		case "vaapi":
-			args = append(args, "-init_hw_device", "vaapi=va:/dev/dri/renderD128", "-filter_hw_device", "va")
+			args = append(args, "-hwaccel", "vaapi", "-hwaccel_device", "/dev/dri/renderD128", "-hwaccel_output_format", "vaapi")
 		case "qsv":
-			args = append(args, "-init_hw_device", "vaapi=va:/dev/dri/renderD128", "-init_hw_device", "qsv=qs@va", "-hwaccel", "qsv", "-hwaccel_output_format", "qsv")
+			args = append(args, "-hwaccel", "qsv", "-hwaccel_device", "/dev/dri/renderD128", "-hwaccel_output_format", "qsv")
 		case "nvenc", "cuda":
 			args = append(args, "-hwaccel", "cuda", "-hwaccel_output_format", "cuda")
 		case "videotoolbox":
@@ -214,7 +214,14 @@ func (m *Manager) buildDualOutputArgs(hlsDir, mp4Path string, pipeInput bool, op
 	}
 	args = append(args, "-c:v", venc)
 	if opts.SourceDeinterlace && venc != "copy" {
-		args = append(args, "-vf", "yadif")
+		switch hwaccel {
+		case "vaapi":
+			args = append(args, "-vf", "deinterlace_vaapi")
+		case "qsv":
+			args = append(args, "-vf", "vpp_qsv=deinterlace=2")
+		default:
+			args = append(args, "-vf", "yadif")
+		}
 	}
 	if opts.SourceFPSMode != "" && venc != "copy" {
 		args = append(args, "-fps_mode", opts.SourceFPSMode)

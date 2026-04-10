@@ -135,22 +135,22 @@ func TestBuild(t *testing.T) {
 		{
 			name: "QSV h264 RTSP",
 			opts: BuildOptions{StreamURL: "rtsp://example.com/stream", HWAccel: "qsv", VideoCodec: "h264", Container: "mpegts"},
-			want: "-hide_banner -loglevel warning -nostdin -init_hw_device vaapi=va:/dev/dri/renderD128 -init_hw_device qsv=qs@va -hwaccel qsv -hwaccel_output_format qsv -rtsp_transport tcp -analyzeduration 3000000 -probesize 2000000 -max_delay 500000 -err_detect ignore_err -fflags +genpts+discardcorrupt -i {input} -map 0:v:0? -map 0:a:0? -max_muxing_queue_size 4096 -c:v h264_qsv -preset veryslow -global_quality 20 -g 50 -keyint_min 50 -c:a aac -ac 2 -b:a 192k -af aresample=async=1000:first_pts=0 -output_ts_offset 0 -f mpegts pipe:1",
+			want: "-hide_banner -loglevel warning -nostdin -hwaccel qsv -hwaccel_device /dev/dri/renderD128 -hwaccel_output_format qsv -rtsp_transport tcp -analyzeduration 3000000 -probesize 2000000 -max_delay 500000 -err_detect ignore_err -fflags +genpts+discardcorrupt -i {input} -map 0:v:0? -map 0:a:0? -max_muxing_queue_size 4096 -c:v h264_qsv -preset veryslow -global_quality 20 -g 50 -keyint_min 50 -c:a aac -ac 2 -b:a 192k -af aresample=async=1000:first_pts=0 -output_ts_offset 0 -f mpegts pipe:1",
 		},
 		{
 			name: "QSV h264 HTTP",
 			opts: BuildOptions{StreamURL: "http://example.com/stream", HWAccel: "qsv", VideoCodec: "h264", Container: "mpegts"},
-			want: "-hide_banner -loglevel warning -nostdin -init_hw_device vaapi=va:/dev/dri/renderD128 -init_hw_device qsv=qs@va -hwaccel qsv -hwaccel_output_format qsv -analyzeduration 1000000 -probesize 1000000 -err_detect ignore_err -fflags +genpts+discardcorrupt -i {input} -map 0:v:0? -map 0:a:0? -max_muxing_queue_size 4096 -c:v h264_qsv -preset veryslow -global_quality 20 -g 50 -keyint_min 50 -c:a aac -ac 2 -b:a 192k -output_ts_offset 0 -f mpegts pipe:1",
+			want: "-hide_banner -loglevel warning -nostdin -hwaccel qsv -hwaccel_device /dev/dri/renderD128 -hwaccel_output_format qsv -analyzeduration 1000000 -probesize 1000000 -err_detect ignore_err -fflags +genpts+discardcorrupt -i {input} -map 0:v:0? -map 0:a:0? -max_muxing_queue_size 4096 -c:v h264_qsv -preset veryslow -global_quality 20 -g 50 -keyint_min 50 -c:a aac -ac 2 -b:a 192k -output_ts_offset 0 -f mpegts pipe:1",
 		},
 		{
 			name: "QSV h265 RTSP",
 			opts: BuildOptions{StreamURL: "rtsp://example.com/stream", HWAccel: "qsv", VideoCodec: "h265", Container: "mpegts"},
-			want: "-hide_banner -loglevel warning -nostdin -init_hw_device vaapi=va:/dev/dri/renderD128 -init_hw_device qsv=qs@va -hwaccel qsv -hwaccel_output_format qsv -rtsp_transport tcp -analyzeduration 3000000 -probesize 2000000 -max_delay 500000 -err_detect ignore_err -fflags +genpts+discardcorrupt -i {input} -map 0:v:0? -map 0:a:0? -max_muxing_queue_size 4096 -c:v hevc_qsv -preset veryslow -global_quality 22 -g 50 -keyint_min 50 -c:a aac -ac 2 -b:a 192k -af aresample=async=1000:first_pts=0 -output_ts_offset 0 -f mpegts pipe:1",
+			want: "-hide_banner -loglevel warning -nostdin -hwaccel qsv -hwaccel_device /dev/dri/renderD128 -hwaccel_output_format qsv -rtsp_transport tcp -analyzeduration 3000000 -probesize 2000000 -max_delay 500000 -err_detect ignore_err -fflags +genpts+discardcorrupt -i {input} -map 0:v:0? -map 0:a:0? -max_muxing_queue_size 4096 -c:v hevc_qsv -preset veryslow -global_quality 22 -g 50 -keyint_min 50 -c:a aac -ac 2 -b:a 192k -af aresample=async=1000:first_pts=0 -output_ts_offset 0 -f mpegts pipe:1",
 		},
 		{
 			name: "QSV av1 matroska RTSP",
 			opts: BuildOptions{StreamURL: "rtsp://example.com/stream", HWAccel: "qsv", VideoCodec: "av1", Container: "matroska"},
-			want: "-hide_banner -loglevel warning -nostdin -init_hw_device vaapi=va:/dev/dri/renderD128 -init_hw_device qsv=qs@va -hwaccel qsv -hwaccel_output_format qsv -rtsp_transport tcp -analyzeduration 3000000 -probesize 2000000 -max_delay 500000 -err_detect ignore_err -fflags +genpts+discardcorrupt -i {input} -map 0:v:0? -map 0:a:0? -max_muxing_queue_size 4096 -c:v av1_qsv -preset veryslow -global_quality 25 -g 50 -keyint_min 50 -c:a aac -ac 2 -b:a 192k -af aresample=async=1000:first_pts=0 -output_ts_offset 0 -f matroska pipe:1",
+			want: "-hide_banner -loglevel warning -nostdin -hwaccel qsv -hwaccel_device /dev/dri/renderD128 -hwaccel_output_format qsv -rtsp_transport tcp -analyzeduration 3000000 -probesize 2000000 -max_delay 500000 -err_detect ignore_err -fflags +genpts+discardcorrupt -i {input} -map 0:v:0? -map 0:a:0? -max_muxing_queue_size 4096 -c:v av1_qsv -preset veryslow -global_quality 25 -g 50 -keyint_min 50 -c:a aac -ac 2 -b:a 192k -af aresample=async=1000:first_pts=0 -output_ts_offset 0 -f matroska pipe:1",
 		},
 		{
 			name: "NVENC h264 RTSP",
@@ -170,17 +170,17 @@ func TestBuild(t *testing.T) {
 		{
 			name: "VAAPI h264 HTTP with hwupload filter",
 			opts: BuildOptions{StreamURL: "http://example.com/stream", HWAccel: "vaapi", VideoCodec: "h264", Container: "mpegts"},
-			want: "-hide_banner -loglevel warning -nostdin -init_hw_device vaapi=va:/dev/dri/renderD128 -filter_hw_device va -analyzeduration 1000000 -probesize 1000000 -err_detect ignore_err -fflags +genpts+discardcorrupt -i {input} -map 0:v:0? -map 0:a:0? -max_muxing_queue_size 4096 -vf format=nv12,hwupload -c:v h264_vaapi -g 50 -keyint_min 50 -c:a aac -ac 2 -b:a 192k -output_ts_offset 0 -f mpegts pipe:1",
+			want: "-hide_banner -loglevel warning -nostdin -hwaccel vaapi -hwaccel_device /dev/dri/renderD128 -hwaccel_output_format vaapi -analyzeduration 1000000 -probesize 1000000 -err_detect ignore_err -fflags +genpts+discardcorrupt -i {input} -map 0:v:0? -map 0:a:0? -max_muxing_queue_size 4096 -c:v h264_vaapi -g 50 -keyint_min 50 -c:a aac -ac 2 -b:a 192k -output_ts_offset 0 -f mpegts pipe:1",
 		},
 		{
 			name: "VAAPI h265 HTTP with hwupload filter",
 			opts: BuildOptions{StreamURL: "http://example.com/stream", HWAccel: "vaapi", VideoCodec: "h265", Container: "mpegts"},
-			want: "-hide_banner -loglevel warning -nostdin -init_hw_device vaapi=va:/dev/dri/renderD128 -filter_hw_device va -analyzeduration 1000000 -probesize 1000000 -err_detect ignore_err -fflags +genpts+discardcorrupt -i {input} -map 0:v:0? -map 0:a:0? -max_muxing_queue_size 4096 -vf format=nv12,hwupload -c:v hevc_vaapi -g 50 -keyint_min 50 -c:a aac -ac 2 -b:a 192k -output_ts_offset 0 -f mpegts pipe:1",
+			want: "-hide_banner -loglevel warning -nostdin -hwaccel vaapi -hwaccel_device /dev/dri/renderD128 -hwaccel_output_format vaapi -analyzeduration 1000000 -probesize 1000000 -err_detect ignore_err -fflags +genpts+discardcorrupt -i {input} -map 0:v:0? -map 0:a:0? -max_muxing_queue_size 4096 -c:v hevc_vaapi -g 50 -keyint_min 50 -c:a aac -ac 2 -b:a 192k -output_ts_offset 0 -f mpegts pipe:1",
 		},
 		{
 			name: "VAAPI av1 matroska uses software decode with hwupload filter",
 			opts: BuildOptions{StreamURL: "rtsp://example.com/stream", HWAccel: "vaapi", VideoCodec: "av1", Container: "matroska"},
-			want: "-hide_banner -loglevel warning -nostdin -init_hw_device vaapi=va:/dev/dri/renderD128 -filter_hw_device va -rtsp_transport tcp -analyzeduration 3000000 -probesize 2000000 -max_delay 500000 -err_detect ignore_err -fflags +genpts+discardcorrupt -i {input} -map 0:v:0? -map 0:a:0? -max_muxing_queue_size 4096 -vf format=nv12,hwupload -c:v av1_vaapi -global_quality 25 -rc_mode ICQ -g 50 -keyint_min 50 -c:a aac -ac 2 -b:a 192k -af aresample=async=1000:first_pts=0 -output_ts_offset 0 -f matroska pipe:1",
+			want: "-hide_banner -loglevel warning -nostdin -hwaccel vaapi -hwaccel_device /dev/dri/renderD128 -hwaccel_output_format vaapi -rtsp_transport tcp -analyzeduration 3000000 -probesize 2000000 -max_delay 500000 -err_detect ignore_err -fflags +genpts+discardcorrupt -i {input} -map 0:v:0? -map 0:a:0? -max_muxing_queue_size 4096 -c:v av1_vaapi -global_quality 25 -rc_mode ICQ -g 50 -keyint_min 50 -c:a aac -ac 2 -b:a 192k -af aresample=async=1000:first_pts=0 -output_ts_offset 0 -f matroska pipe:1",
 		},
 		{
 			name: "VideoToolbox h264 RTSP software decode hardware encode",
@@ -200,12 +200,12 @@ func TestBuild(t *testing.T) {
 		{
 			name: "VAAPI h264 auto-detect interlaced adds yadif before hwupload",
 			opts: BuildOptions{StreamURL: "http://example.com/stream", HWAccel: "vaapi", Probe: probeH264Interlaced, VideoCodec: "copy", Container: "mpegts"},
-			want: "-hide_banner -loglevel warning -nostdin -init_hw_device vaapi=va:/dev/dri/renderD128 -filter_hw_device va -analyzeduration 1000000 -probesize 1000000 -err_detect ignore_err -fflags +genpts+discardcorrupt -i {input} -map 0:v:0? -map 0:a:0? -max_muxing_queue_size 4096 -vf yadif,format=nv12,hwupload -c:v h264_vaapi -g 50 -keyint_min 50 -c:a copy -output_ts_offset 0 -f mpegts pipe:1",
+			want: "-hide_banner -loglevel warning -nostdin -hwaccel vaapi -hwaccel_device /dev/dri/renderD128 -hwaccel_output_format vaapi -analyzeduration 1000000 -probesize 1000000 -err_detect ignore_err -fflags +genpts+discardcorrupt -i {input} -map 0:v:0? -map 0:a:0? -max_muxing_queue_size 4096 -vf deinterlace_vaapi -c:v h264_vaapi -g 50 -keyint_min 50 -c:a copy -output_ts_offset 0 -f mpegts pipe:1",
 		},
 		{
 			name: "QSV hevc auto-detect interlaced uses vpp_qsv",
 			opts: BuildOptions{StreamURL: "http://example.com/stream", HWAccel: "qsv", Probe: probeHevcInterlaced, VideoCodec: "copy", Container: "mpegts"},
-			want: "-hide_banner -loglevel warning -nostdin -init_hw_device vaapi=va:/dev/dri/renderD128 -init_hw_device qsv=qs@va -hwaccel qsv -hwaccel_output_format qsv -analyzeduration 1000000 -probesize 1000000 -err_detect ignore_err -fflags +genpts+discardcorrupt -i {input} -map 0:v:0? -map 0:a:0? -max_muxing_queue_size 4096 -vf vpp_qsv=deinterlace_mode=advanced -c:v hevc_qsv -preset veryslow -global_quality 22 -g 50 -keyint_min 50 -c:a copy -output_ts_offset 0 -f mpegts pipe:1",
+			want: "-hide_banner -loglevel warning -nostdin -hwaccel qsv -hwaccel_device /dev/dri/renderD128 -hwaccel_output_format qsv -analyzeduration 1000000 -probesize 1000000 -err_detect ignore_err -fflags +genpts+discardcorrupt -i {input} -map 0:v:0? -map 0:a:0? -max_muxing_queue_size 4096 -vf vpp_qsv=deinterlace=2 -c:v hevc_qsv -preset veryslow -global_quality 22 -g 50 -keyint_min 50 -c:a copy -output_ts_offset 0 -f mpegts pipe:1",
 		},
 		{
 			name: "NVENC h264 auto-detect interlaced uses yadif_cuda",

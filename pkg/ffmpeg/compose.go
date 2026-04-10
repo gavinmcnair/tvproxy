@@ -116,17 +116,13 @@ func buildVFChain(hwaccel, videoCodec string, deinterlace bool) []string {
 
 	var filters []string
 
-	needsHWUpload := hwaccel == "vaapi"
-
 	switch {
+	case hwaccel == "vaapi" && deinterlace:
+		filters = append(filters, "deinterlace_vaapi")
 	case hwaccel == "qsv" && deinterlace:
-		filters = append(filters, "vpp_qsv=deinterlace_mode=advanced")
+		filters = append(filters, "vpp_qsv=deinterlace=2")
 	case hwaccel == "nvenc" && deinterlace:
 		filters = append(filters, "yadif_cuda")
-	case needsHWUpload && deinterlace:
-		filters = append(filters, "yadif", "format=nv12", "hwupload")
-	case needsHWUpload:
-		filters = append(filters, "format=nv12", "hwupload")
 	case deinterlace:
 		filters = append(filters, "yadif")
 	}

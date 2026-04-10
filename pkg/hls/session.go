@@ -154,15 +154,9 @@ func (s *Session) buildFFmpegArgs(startNumber int, startTimeTicks int64, pipeHTT
 	if hwaccel != "" && hwaccel != "none" && hwaccel != "default" {
 		switch hwaccel {
 		case "vaapi":
-			args = append(args,
-				"-init_hw_device", "vaapi=va:/dev/dri/renderD128",
-				"-filter_hw_device", "va",
-			)
+			args = append(args, "-hwaccel", "vaapi", "-hwaccel_device", "/dev/dri/renderD128", "-hwaccel_output_format", "vaapi")
 		case "qsv":
-			args = append(args,
-				"-init_hw_device", "qsv=qsv:hw",
-				"-filter_hw_device", "qsv",
-			)
+			args = append(args, "-hwaccel", "qsv", "-hwaccel_device", "/dev/dri/renderD128", "-hwaccel_output_format", "qsv")
 		case "cuda", "nvenc":
 			args = append(args, "-hwaccel", "cuda", "-hwaccel_output_format", "cuda")
 		case "videotoolbox":
@@ -231,7 +225,14 @@ func (s *Session) buildFFmpegArgs(startNumber int, startTimeTicks int64, pipeHTT
 	}
 
 	if s.Profile.Deinterlace && videoCodec != "copy" {
-		args = append(args, "-vf", "yadif")
+		switch hwaccel {
+		case "vaapi":
+			args = append(args, "-vf", "deinterlace_vaapi")
+		case "qsv":
+			args = append(args, "-vf", "vpp_qsv=deinterlace=2")
+		default:
+			args = append(args, "-vf", "yadif")
+		}
 	}
 
 	args = append(args, "-c:a", audioCodec)
