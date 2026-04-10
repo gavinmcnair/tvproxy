@@ -160,7 +160,8 @@ func (c *Cache) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	filename = c.fetch(r.Context(), logoURL, hash)
 	if filename == "" {
-		http.Redirect(w, r, logoURL, http.StatusTemporaryRedirect)
+		w.Header().Set("Cache-Control", "public, max-age=3600")
+		http.Error(w, "image not available", http.StatusNotFound)
 		return
 	}
 
